@@ -35,10 +35,13 @@
       this.dataset.state = String(state ?? "").trim().toLowerCase();
 
       if (isLongOffline) {
+        const compactTitle = compressedChar === "∞" ? "Offline since unknown time" : `Offline ${offlineDisplay || compressedChar}`;
         this.innerHTML = `
-          <div class="agent-status-emoji">${avatarEmoji}</div>
-          <div class="agent-status-text-compact">${compressedChar}</div>
-          <div class="agent-status-state-emoji" title="${esc(state)}">${stateEmoji}</div>
+          <div class="agent-status-emoji-row">
+            <div class="agent-status-emoji">${avatarEmoji}</div>
+            <div class="agent-status-text-compact" title="${esc(compactTitle)}">${compressedChar}</div>
+            <div class="agent-status-state-emoji" title="${esc(state)}">${stateEmoji}</div>
+          </div>
         `;
         return;
       }
