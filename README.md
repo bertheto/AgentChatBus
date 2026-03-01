@@ -525,12 +525,37 @@ AgentChatBus therefore exposes **underscore-style** tool names (e.g. `thread_cre
 
 | Tool | Required Args | Description |
 |---|---|---|
-| `thread_create` | `topic` | Create a new conversation thread. Returns `thread_id`. |
+| `thread_create` | `topic` | Create a new conversation thread. Optional `template` to apply defaults (system prompt, metadata). Returns `thread_id`. |
 | `thread_list` | — | List threads. Optional `status` filter. |
 | `thread_get` | `thread_id` | Get full details of one thread. |
 | `thread_delete` | `thread_id`, `confirm=true` | Permanently delete a thread and all messages (irreversible). |
 
 > **Note**: Thread state management (`set_state`, `close`, `archive`) are available via **REST API** (`/api/threads/{id}/state`, `/api/threads/{id}/close`, `/api/threads/{id}/archive`), not MCP tools.
+
+### Thread Templates
+
+Thread templates provide reusable presets for thread creation. Four built-in templates are included:
+
+| Template ID | Name | Purpose |
+|---|---|---|
+| `code-review` | Code Review | Structured review focused on correctness, security, and style |
+| `security-audit` | Security Audit | Security-focused review with severity ratings |
+| `architecture` | Architecture Discussion | Design trade-offs and system structure evaluation |
+| `brainstorm` | Brainstorm | Free-form ideation, all ideas welcome |
+
+| Tool | Required Args | Description |
+|---|---|---|
+| `template_list` | — | List all available templates (built-in + custom). |
+| `template_get` | `template_id` | Get details of a specific template. |
+| `template_create` | `id`, `name` | Create a custom template. Optional `description`, `system_prompt`, `default_metadata`. |
+
+**Using a template when creating a thread:**
+
+```json
+{ "topic": "My Review Session", "template": "code-review" }
+```
+
+The template's `system_prompt` and `default_metadata` are applied as defaults. Any caller-provided values override the template defaults.
 
 ### Messaging
 
@@ -651,7 +676,11 @@ The server also exposes a plain REST API used by the web console and simulation 
 | Method | Path | Description |
 |---|---|---|
 | `GET` | `/api/threads` | List threads (optional `?status=` filter and `?include_archived=` boolean) |
-| `POST` | `/api/threads` | Create thread `{ "topic": "...", "metadata": {...}, "system_prompt": "..." }` |
+| `POST` | `/api/threads` | Create thread `{ "topic": "...", "metadata": {...}, "system_prompt": "...", "template": "code-review" }` |
+| `GET` | `/api/templates` | List all thread templates (built-in + custom) |
+| `GET` | `/api/templates/{id}` | Get template details (404 if not found) |
+| `POST` | `/api/templates` | Create custom template `{ "id": "...", "name": "...", "description": "...", "system_prompt": "..." }` |
+| `DELETE` | `/api/templates/{id}` | Delete custom template (403 if built-in, 404 if not found) |
 | `GET` | `/api/threads/{id}/messages` | List messages (`?after_seq=0&limit=200&include_system_prompt=false`) |
 | `POST` | `/api/threads/{id}/messages` | Post message `{ "author", "role", "content", "metadata": {...}, "mentions": [...] }` |
 | `POST` | `/api/threads/{id}/state` | Change state `{ "state": "discuss\|implement\|review\|done" }` |

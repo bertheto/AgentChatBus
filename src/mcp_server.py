@@ -98,7 +98,8 @@ async def list_tools() -> list[types.Tool]:
                 "properties": {
                     "topic":         {"type": "string", "description": "Short description of the thread's purpose."},
                     "metadata":      {"type": "object", "description": "Optional arbitrary key-value metadata."},
-                    "system_prompt": {"type": "string", "description": "Optional system prompt defining collaboration rules for this thread."},
+                    "system_prompt": {"type": "string", "description": "Optional system prompt defining collaboration rules for this thread. Overrides template default."},
+                    "template":      {"type": "string", "description": "Template ID to apply defaults (system_prompt, metadata). Caller-provided values take precedence."},
                 },
                 "required": ["topic"],
             },
@@ -250,6 +251,39 @@ async def list_tools() -> list[types.Tool]:
                     },
                 },
                 "required": ["thread_id", "after_seq"],
+            },
+        ),
+
+        # ── Thread Templates (UP-18) ──────────────────────────────────────────
+        types.Tool(
+            name="template_list",
+            description="List all available thread templates (built-in + custom).",
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        types.Tool(
+            name="template_get",
+            description="Get details of a specific thread template by ID.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "template_id": {"type": "string", "description": "Template ID to retrieve."},
+                },
+                "required": ["template_id"],
+            },
+        ),
+        types.Tool(
+            name="template_create",
+            description="Create a custom thread template. Built-in templates cannot be overwritten.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "id":               {"type": "string", "description": "Unique slug ID for the template (e.g. 'my-review')."},
+                    "name":             {"type": "string", "description": "Human-readable display name."},
+                    "description":      {"type": "string", "description": "Short description of when to use this template."},
+                    "system_prompt":    {"type": "string", "description": "Default system prompt applied when creating a thread with this template."},
+                    "default_metadata": {"type": "object", "description": "Default metadata applied when creating a thread with this template."},
+                },
+                "required": ["id", "name"],
             },
         ),
 

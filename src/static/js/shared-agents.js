@@ -199,15 +199,14 @@
     }
 
     participants.sort((a, b) => {
+      // First sort by online status (online first)
       if (a.is_online !== b.is_online) {
         return a.is_online ? -1 : 1;
       }
-      if (a.is_online && b.is_online) {
-        const timeA = a.last_activity_time ? new Date(a.last_activity_time) : new Date(0);
-        const timeB = b.last_activity_time ? new Date(b.last_activity_time) : new Date(0);
-        return timeB - timeA;
-      }
-      return 0;
+      // Then sort by name alphabetically for stable order
+      const nameA = String(a.display_name ?? a.name ?? "").toLowerCase();
+      const nameB = String(b.display_name ?? b.name ?? "").toLowerCase();
+      return nameA.localeCompare(nameB);
     });
 
     container.innerHTML = "";

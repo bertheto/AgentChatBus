@@ -17,6 +17,7 @@
 
   <!-- ---- Top bar -------------------------------------------------------------- -->
   <div id="topbar">
+    <button id="mobile-menu-btn" type="button" aria-label="Toggle sidebar">☰</button>
     <div class="logo"><img src="/static/bus.png" alt="Bus" />AgentChatBus</div>
     <div id="footer-link">
       <a href="https://github.com/Killea/AgentChatBus" target="_blank" rel="noopener noreferrer">GitHub
@@ -37,6 +38,8 @@
 
   <!-- ---- Layout ---------------------------------------------------------------- -->
   <div id="layout">
+    <!-- Sidebar overlay for mobile -->
+    <div id="sidebar-overlay"></div>
 
     <!-- Sidebar -->
     <div id="sidebar">
@@ -121,6 +124,38 @@
     const EMPTY_STATE_TEMPLATE = '<acb-empty-state></acb-empty-state>';
 
     // ==============================================================================================
+    // Mobile Sidebar Toggle
+    // ==============================================================================================
+    function toggleMobileSidebar() {
+      const sidebar = document.getElementById('sidebar');
+      const overlay = document.getElementById('sidebar-overlay');
+      sidebar.classList.toggle('open');
+      overlay.classList.toggle('visible');
+    }
+
+    function closeMobileSidebar() {
+      const sidebar = document.getElementById('sidebar');
+      const overlay = document.getElementById('sidebar-overlay');
+      sidebar.classList.remove('open');
+      overlay.classList.remove('visible');
+    }
+
+    // Setup mobile menu button and overlay
+    document.getElementById('mobile-menu-btn').addEventListener('click', (e) => {
+      e.stopPropagation();
+      toggleMobileSidebar();
+    });
+
+    document.getElementById('sidebar-overlay').addEventListener('click', closeMobileSidebar);
+
+    // Close sidebar when selecting a thread on mobile
+    function onThreadSelectMobile() {
+      if (window.innerWidth <= 768) {
+        closeMobileSidebar();
+      }
+    }
+
+    // ==============================================================================================
     // Bootstrap
     // ==============================================================================================
     (async function init() {
@@ -170,6 +205,16 @@
     window.addEventListener('resize', () => {
       hideThreadContextMenu();
       hideAgentTooltip();
+      // Close mobile sidebar if window resized to desktop size
+      if (window.innerWidth > 768) {
+        closeMobileSidebar();
+      }
+    });
+
+    // Handle orientation change on mobile
+    window.addEventListener('orientationchange', () => {
+      closeMobileSidebar();
+      hideThreadContextMenu();
     });
 
     (function setupUnifiedInfoTooltip() {
@@ -460,6 +505,9 @@ Note: Thread name is the topic label. Thread ID is the unique identifier.`;
     }
 
     async function selectThread(id, topic, status) {
+      // Close mobile sidebar when selecting thread
+      closeMobileSidebar();
+      
       return window.AcbChat.selectThread({
         id, topic, status,
         setActiveThread: (id, status) => { activeThreadId = id; activeThreadStatus = status; },
@@ -892,7 +940,7 @@ Note: Thread name is the topic label. Thread ID is the unique identifier.`;
     // Modal
     // ==============================================================================================
     function openModal() {
-      return window.AcbModals.openThreadModal();
+      return window.AcbModals.openThreadModal(api);
     }
 
     function closeModal(e) {

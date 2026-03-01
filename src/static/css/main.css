@@ -1411,6 +1411,46 @@ body[data-theme="light"] .skills-badge {
   justify-content: flex-end;
 }
 
+/* UP-18: Template selector in thread creation modal */
+.template-selector-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 16px;
+}
+
+.template-selector-label {
+  font-size: 11px;
+  color: var(--text-3);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+#modal-template {
+  width: 100%;
+  background: var(--bg-input);
+  border: 1px solid var(--border-light);
+  color: var(--text-1);
+  border-radius: 10px;
+  padding: 8px 12px;
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+#modal-template:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.template-description {
+  font-size: 11px;
+  color: var(--text-3);
+  font-style: italic;
+  min-height: 14px;
+}
+
 .btn-secondary {
   background: var(--bg-hover);
   color: var(--text-2);
@@ -1659,4 +1699,249 @@ acb-confirm-dialog .confirm-actions {
 
 .agent-tip-actions button:hover {
   border-color: var(--accent);
+}
+
+/* ====================================================================================
+   Mobile Responsive Design
+==================================================================================== */
+
+/* Hide hamburger menu on desktop */
+#mobile-menu-btn {
+  display: none;
+}
+
+/* Mobile styles (max-width: 768px) */
+@media screen and (max-width: 768px) {
+  /* Show hamburger menu */
+  #mobile-menu-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    background: transparent;
+    border: 1px solid var(--border-light);
+    border-radius: 8px;
+    color: var(--text-1);
+    font-size: 20px;
+    cursor: pointer;
+    margin-right: 8px;
+    flex-shrink: 0;
+  }
+
+  #mobile-menu-btn:hover {
+    background: var(--bg-hover);
+  }
+
+  /* Topbar adjustments */
+  #topbar {
+    padding: 8px 12px;
+    gap: 8px;
+  }
+
+  #topbar .logo {
+    font-size: 14px;
+  }
+
+  #topbar .logo img {
+    width: 20px;
+    height: 20px;
+  }
+
+  #footer-link {
+    display: none;
+  }
+
+  #topbar .sep {
+    display: none;
+  }
+
+  #status-dot {
+    width: 8px;
+    height: 8px;
+  }
+
+  .status-label {
+    font-size: 11px;
+  }
+
+  /* Hide some buttons on mobile */
+  #btn-theme-toggle,
+  #btn-settings {
+    display: none;
+  }
+
+  #btn-new-thread {
+    padding: 6px 10px;
+    font-size: 12px;
+  }
+
+  /* Sidebar as drawer */
+  #sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 280px;
+    height: 100vh;
+    z-index: 1000;
+    transform: translateX(-100%);
+    transition: transform 0.3s ease;
+    box-shadow: var(--shadow);
+  }
+
+  #sidebar.open {
+    transform: translateX(0);
+  }
+
+  /* Overlay when sidebar is open */
+  #sidebar-overlay {
+    display: block;
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 999;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.3s ease;
+  }
+
+  #sidebar-overlay.visible {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  /* Main area full width */
+  #main {
+    width: 100%;
+  }
+
+  /* Thread header */
+  acb-thread-header {
+    padding: 8px 12px;
+  }
+
+  acb-thread-header .thread-title {
+    font-size: 14px;
+  }
+
+  /* Messages area */
+  #messages {
+    padding: 8px;
+  }
+
+  .msg-row {
+    padding: 10px 8px;
+    margin-bottom: 8px;
+  }
+
+  .msg-avatar {
+    width: 32px;
+    height: 32px;
+    font-size: 14px;
+  }
+
+  .msg-author-label {
+    font-size: 12px;
+  }
+
+  .msg-time-label {
+    font-size: 10px;
+  }
+
+  .bubble-v2 {
+    padding: 10px 12px;
+    font-size: 13px;
+    line-height: 1.5;
+  }
+
+  /* Compose area */
+  acb-compose-shell {
+    padding: 8px;
+  }
+
+  acb-compose-shell textarea {
+    font-size: 14px;
+    padding: 10px;
+    min-height: 44px;
+  }
+
+  acb-compose-shell button {
+    min-height: 44px;
+    min-width: 44px;
+  }
+
+  /* Agent status bar */
+  #agent-status-bar {
+    padding: 6px 8px;
+  }
+
+  #agent-status-list {
+    gap: 4px;
+  }
+
+  /* Context menu full width on mobile */
+  #thread-context-menu {
+    left: 10px !important;
+    right: 10px !important;
+    width: auto !important;
+    max-width: calc(100vw - 20px);
+  }
+
+  /* Submenu positioning for mobile */
+  .ctx-submenu {
+    left: 0;
+    top: 100%;
+    width: 100%;
+  }
+
+  /* Thread items */
+  .thread-item {
+    padding: 10px 12px;
+  }
+
+  .thread-item .title {
+    font-size: 13px;
+  }
+
+  /* Modal adjustments */
+  acb-modal-shell dialog {
+    width: 95vw;
+    padding: 16px;
+    margin: 10px auto;
+  }
+
+  /* Increase touch targets */
+  button,
+  .ctx-item,
+  .stab,
+  .thread-item {
+    min-height: 44px;
+  }
+
+  /* Code blocks */
+  .code-block pre {
+    font-size: 12px;
+  }
+
+  .code-copy {
+    min-height: 36px;
+    min-width: 36px;
+  }
+}
+
+/* Touch device optimizations */
+@media (pointer: coarse) {
+  .thread-item,
+  .ctx-item,
+  button {
+    min-height: 44px;
+  }
+
+  .msg-avatar {
+    width: 36px;
+    height: 36px;
+  }
 }

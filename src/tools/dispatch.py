@@ -189,9 +189,64 @@ async def handle_bus_get_config(db, arguments: dict[str, Any]) -> list[types.Tex
     }))]
 
 async def handle_thread_create(db, arguments: dict[str, Any]) -> list[types.TextContent]:
-    result = await crud.thread_create(db, arguments["topic"], arguments.get("metadata"), arguments.get("system_prompt"))
+    try:
+        result = await crud.thread_create(
+            db,
+            arguments["topic"],
+            arguments.get("metadata"),
+            arguments.get("system_prompt"),
+            template=arguments.get("template"),
+        )
+    except ValueError as e:
+        return [types.TextContent(type="text", text=json.dumps({"error": str(e)}))]
     return [types.TextContent(type="text", text=json.dumps({
-        "thread_id": result.id, "topic": result.topic, "status": result.status, "system_prompt": result.system_prompt,
+        "thread_id": result.id, "topic": result.topic, "status": result.status,
+        "system_prompt": result.system_prompt, "template_id": result.template_id,
+    }))]
+
+
+async def handle_template_list(db, arguments: dict[str, Any]) -> list[types.TextContent]:
+    templates = await crud.template_list(db)
+    return [types.TextContent(type="text", text=json.dumps([
+        {
+            "id": t.id, "name": t.name, "description": t.description,
+            "is_builtin": t.is_builtin,
+            "created_at": t.created_at.isoformat(),
+        }
+        for t in templates
+    ]))]
+
+
+async def handle_template_get(db, arguments: dict[str, Any]) -> list[types.TextContent]:
+    t = await crud.template_get(db, arguments["template_id"])
+    if t is None:
+        return [types.TextContent(type="text", text=json.dumps({"error": "Template not found"}))]
+    default_metadata = None
+    if t.default_metadata:
+        parsed = _safe_json_loads(t.default_metadata)
+        default_metadata = parsed if parsed is not None else t.default_metadata
+    return [types.TextContent(type="text", text=json.dumps({
+        "id": t.id, "name": t.name, "description": t.description,
+        "system_prompt": t.system_prompt, "default_metadata": default_metadata,
+        "is_builtin": t.is_builtin, "created_at": t.created_at.isoformat(),
+    }))]
+
+
+async def handle_template_create(db, arguments: dict[str, Any]) -> list[types.TextContent]:
+    try:
+        t = await crud.template_create(
+            db,
+            id=arguments["id"],
+            name=arguments["name"],
+            description=arguments.get("description"),
+            system_prompt=arguments.get("system_prompt"),
+            default_metadata=arguments.get("default_metadata"),
+        )
+    except ValueError as e:
+        return [types.TextContent(type="text", text=json.dumps({"error": str(e)}))]
+    return [types.TextContent(type="text", text=json.dumps({
+        "id": t.id, "name": t.name, "description": t.description,
+        "is_builtin": t.is_builtin, "created_at": t.created_at.isoformat(),
     }))]
 
 async def handle_thread_list(db, arguments: dict[str, Any]) -> list[types.TextContent]:
@@ -304,7 +359,7 @@ async def handle_msg_wait(db, arguments: dict[str, Any]) -> list[types.Content]:
 
     logger.info(f"[msg_wait] explicit: agent_id={explicit_agent_id}, connection: agent_id={connection_agent_id}, final_agent_id={agent_id}, for_agent={for_agent}")
 
-    # Heartbeat interval: refresh every 20 seconds to stay online.
+    # Refresh every 20 seconds to stay online during long-poll waits.
     HEARTBEAT_INTERVAL = 20.0
 
     async def _refresh_heartbeat() -> None:
@@ -491,6 +546,9 @@ TOOLS_DISPATCH = {
     "agent_list": handle_agent_list,
     "agent_update": handle_agent_update,
     "agent_set_typing": handle_agent_set_typing,
+    "template_list": handle_template_list,
+    "template_get": handle_template_get,
+    "template_create": handle_template_create,
 }
 
 async def dispatch_tool(db, name: str, arguments: dict[str, Any]) -> list[types.Content]:
