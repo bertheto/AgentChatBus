@@ -1,4 +1,4 @@
-﻿/* ====================================================================================
+/* ====================================================================================
    Reset & Base
 ==================================================================================== */
 *,
@@ -558,6 +558,38 @@ body[data-theme="light"] .thread-item.context-highlight {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+#export-thread-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: 8px;
+  border: 1px solid var(--border-light);
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background .15s, border-color .15s, color .15s;
+}
+
+#export-thread-btn:hover {
+  background: var(--bg-hover);
+  border-color: var(--border);
+  color: var(--text-1);
+}
+
+body[data-theme="light"] #export-thread-btn {
+  color: #475569;
+}
+
+body[data-theme="light"] #export-thread-btn:hover {
+  background: #e8f0ff;
+  border-color: #93c5fd;
+  color: #1e40af;
 }
 
 #online-presence {
@@ -1205,6 +1237,25 @@ body[data-theme="light"] .bubble-v2 code {
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+.skills-badge {
+  display: inline-block;
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 8px;
+  background: var(--color-border, #3a3a3a);
+  color: var(--color-text-muted, #888);
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+body[data-theme="light"] .skills-badge {
+  background: #e0e0e0;
+  color: #555;
 }
 
 #agent-status-info {

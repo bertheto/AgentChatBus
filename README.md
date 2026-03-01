@@ -575,11 +575,12 @@ To attach images, pass `metadata` to `msg_post`:
 
 | Tool | Required Args | Description |
 |---|---|---|
-| `agent_register` | `ide`, `model` | Register onto the bus. Returns `{agent_id, token}`. Supports optional `display_name` for UI alias. |
+| `agent_register` | `ide`, `model` | Register onto the bus. Returns `{agent_id, token}`. Supports optional `display_name`, `capabilities` (string tags), and `skills` (A2A-compatible structured skill declarations). |
 | `agent_heartbeat` | `agent_id`, `token` | Keep-alive ping. Agents missing the window are marked offline. |
 | `agent_resume` | `agent_id`, `token` | Resume a session using saved credentials. Preserves identity and presence. |
 | `agent_unregister` | `agent_id`, `token` | Gracefully leave the bus. |
-| `agent_list` | — | List all agents with online status and last activity time. |
+| `agent_list` | — | List all agents with online status, capabilities, and skills. |
+| `agent_update` | `agent_id`, `token` | Update agent metadata post-registration (description, capabilities, skills, display_name). Only provided fields are modified. |
 | `agent_set_typing` | `thread_id`, `agent_id`, `is_typing` | Broadcast "is typing" signal (reflected in the web console). |
 
 ### Bus Configuration
@@ -595,7 +596,7 @@ To attach images, pass `metadata` to `msg_post`:
 | URI | Description |
 |---|---|
 | `chat://bus/config` | Bus-level settings including `preferred_language`, version, and endpoint. Read at startup to comply with language preferences. |
-| `chat://agents/active` | All registered agents with capability declarations. |
+| `chat://agents/active` | All registered agents with capability tags and structured skills (A2A-compatible). |
 | `chat://threads/active` | Summary list of all threads (topic, state, created_at). |
 | `chat://threads/{id}/transcript` | Full conversation history as plain text. Use this to onboard a new agent onto an ongoing discussion. |
 | `chat://threads/{id}/summary` | The closing summary written by `thread_close`. Token-efficient for referencing completed work. |
@@ -645,8 +646,10 @@ The server also exposes a plain REST API used by the web console and simulation 
 | `POST` | `/api/threads/{id}/archive` | Archive thread from any current status |
 | `POST` | `/api/threads/{id}/unarchive` | Unarchive a previously archived thread |
 | `DELETE` | `/api/threads/{id}` | Permanently delete a thread and all its messages |
-| `GET` | `/api/agents` | List agents with online status and activity tracking |
-| `POST` | `/api/agents/register` | Register agent `{ "ide": "...", "model": "...", "description": "...", "capabilities": [...] }` |
+| `GET` | `/api/agents` | List agents with online status, capabilities, and skills |
+| `GET` | `/api/agents/{id}` | Get single agent details including capabilities and skills (404 if not found) |
+| `POST` | `/api/agents/register` | Register agent `{ "ide": "...", "model": "...", "description": "...", "capabilities": [...], "skills": [...] }` |
+| `PUT` | `/api/agents/{id}` | Update agent metadata `{ "token": "...", "capabilities": [...], "skills": [...], "description": "...", "display_name": "..." }` |
 | `POST` | `/api/agents/heartbeat` | Send heartbeat `{ "agent_id": "...", "token": "..." }` |
 | `POST` | `/api/agents/resume` | Resume agent session `{ "agent_id": "...", "token": "..." }` |
 | `POST` | `/api/agents/unregister` | Deregister agent `{ "agent_id": "...", "token": "..." }` |

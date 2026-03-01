@@ -332,17 +332,21 @@ async def handle_agent_register(db, arguments: dict[str, Any]) -> list[types.Tex
         description=arguments.get("description", ""),
         capabilities=arguments.get("capabilities"),
         display_name=arguments.get("display_name"),
+        skills=arguments.get("skills"),
     )
     src.mcp_server._current_agent_id.set(agent.id)
     src.mcp_server._current_agent_token.set(agent.token)
     src.mcp_server.set_connection_agent(agent.id, agent.token)
     logger.info(f"[agent_register] Set context and connection registry: agent_id={agent.id}")
-    return [types.TextContent(type="text", text=json.dumps({
+    import json as _json
+    return [types.TextContent(type="text", text=_json.dumps({
         "agent_id": agent.id,
         "name": agent.name,
         "display_name": agent.display_name,
         "alias_source": agent.alias_source,
         "token": agent.token,
+        "capabilities": _json.loads(agent.capabilities) if agent.capabilities else [],
+        "skills": _json.loads(agent.skills) if agent.skills else [],
         "last_activity": agent.last_activity,
         "last_activity_time": agent.last_activity_time.isoformat() if agent.last_activity_time else None,
     }))]
@@ -386,11 +390,39 @@ async def handle_agent_list(db, arguments: dict[str, Any]) -> list[types.TextCon
         {"agent_id": a.id, "name": a.name, "ide": a.ide, "model": a.model,
          "display_name": a.display_name, "alias_source": a.alias_source,
          "description": a.description, "is_online": a.is_online,
+         "capabilities": json.loads(a.capabilities) if a.capabilities else [],
+         "skills": json.loads(a.skills) if a.skills else [],
          "last_heartbeat": a.last_heartbeat.isoformat(),
          "last_activity": a.last_activity,
          "last_activity_time": a.last_activity_time.isoformat() if a.last_activity_time else None}
         for a in agents
     ]))]
+
+
+async def handle_agent_update(db, arguments: dict[str, Any]) -> list[types.TextContent]:
+    try:
+        agent = await crud.agent_update(
+            db,
+            agent_id=arguments["agent_id"],
+            token=arguments["token"],
+            description=arguments.get("description"),
+            capabilities=arguments.get("capabilities"),
+            skills=arguments.get("skills"),
+            display_name=arguments.get("display_name"),
+        )
+    except ValueError as e:
+        return [types.TextContent(type="text", text=json.dumps({"ok": False, "error": str(e)}))]
+    return [types.TextContent(type="text", text=json.dumps({
+        "ok": True,
+        "agent_id": agent.id,
+        "name": agent.name,
+        "display_name": agent.display_name,
+        "description": agent.description,
+        "capabilities": json.loads(agent.capabilities) if agent.capabilities else [],
+        "skills": json.loads(agent.skills) if agent.skills else [],
+        "last_activity": agent.last_activity,
+        "last_activity_time": agent.last_activity_time.isoformat() if agent.last_activity_time else None,
+    }))]
 
 async def handle_agent_set_typing(db, arguments: dict[str, Any]) -> list[types.TextContent]:
     db2 = await get_db()
@@ -420,6 +452,7 @@ TOOLS_DISPATCH = {
     "agent_resume": handle_agent_resume,
     "agent_unregister": handle_agent_unregister,
     "agent_list": handle_agent_list,
+    "agent_update": handle_agent_update,
     "agent_set_typing": handle_agent_set_typing,
 }
 

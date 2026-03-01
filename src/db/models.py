@@ -40,7 +40,7 @@ class AgentInfo:
     ide: str               # e.g. "Cursor", "Claude Desktop", "CLI"
     model: str             # e.g. "GPT-4", "claude-3-5-sonnet-20241022"
     description: str
-    capabilities: Optional[str]   # JSON list of capability tags
+    capabilities: Optional[str]   # JSON list of capability tags e.g. '["code", "review"]'
     registered_at: datetime
     last_heartbeat: datetime
     is_online: bool               # derived: last_heartbeat within timeout window
@@ -49,6 +49,7 @@ class AgentInfo:
     alias_source: Optional[str] = None    # 'auto' or 'user'
     last_activity: Optional[str] = None    # activity type: 'registered', 'heartbeat', 'msg_wait', 'msg_post', etc.
     last_activity_time: Optional[datetime] = None  # when the last activity occurred
+    skills: Optional[str] = None          # JSON list of A2A-compatible skill objects (UP-15)
 
 
 @dataclass
