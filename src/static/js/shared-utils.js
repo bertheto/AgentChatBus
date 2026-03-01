@@ -217,6 +217,14 @@
     return color;
   }
 
+  function shouldGroupWithPrevious(prevAuthorKey, prevTimestamp, currentAuthorKey, currentTimestamp, isSystem, isHuman) {
+    if (isSystem || isHuman) return false;
+    if (!prevAuthorKey || prevAuthorKey !== currentAuthorKey) return false;
+    if (!prevTimestamp || !currentTimestamp) return false;
+    const deltaMs = new Date(currentTimestamp) - new Date(prevTimestamp);
+    return deltaMs < 5 * 60 * 1000;
+  }
+
   window.AcbUtils = {
     escapeHtml,
     esc,
@@ -226,5 +234,6 @@
     copyTextWithFallback,
     authorColor,
     getAgentAvatarEmoji,
+    shouldGroupWithPrevious,
   };
 })();
