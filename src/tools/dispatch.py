@@ -189,9 +189,64 @@ async def handle_bus_get_config(db, arguments: dict[str, Any]) -> list[types.Tex
     }))]
 
 async def handle_thread_create(db, arguments: dict[str, Any]) -> list[types.TextContent]:
-    result = await crud.thread_create(db, arguments["topic"], arguments.get("metadata"), arguments.get("system_prompt"))
+    try:
+        result = await crud.thread_create(
+            db,
+            arguments["topic"],
+            arguments.get("metadata"),
+            arguments.get("system_prompt"),
+            template=arguments.get("template"),
+        )
+    except ValueError as e:
+        return [types.TextContent(type="text", text=json.dumps({"error": str(e)}))]
     return [types.TextContent(type="text", text=json.dumps({
-        "thread_id": result.id, "topic": result.topic, "status": result.status, "system_prompt": result.system_prompt,
+        "thread_id": result.id, "topic": result.topic, "status": result.status,
+        "system_prompt": result.system_prompt, "template_id": result.template_id,
+    }))]
+
+
+async def handle_template_list(db, arguments: dict[str, Any]) -> list[types.TextContent]:
+    templates = await crud.template_list(db)
+    return [types.TextContent(type="text", text=json.dumps([
+        {
+            "id": t.id, "name": t.name, "description": t.description,
+            "is_builtin": t.is_builtin,
+            "created_at": t.created_at.isoformat(),
+        }
+        for t in templates
+    ]))]
+
+
+async def handle_template_get(db, arguments: dict[str, Any]) -> list[types.TextContent]:
+    t = await crud.template_get(db, arguments["template_id"])
+    if t is None:
+        return [types.TextContent(type="text", text=json.dumps({"error": "Template not found"}))]
+    default_metadata = None
+    if t.default_metadata:
+        parsed = _safe_json_loads(t.default_metadata)
+        default_metadata = parsed if parsed is not None else t.default_metadata
+    return [types.TextContent(type="text", text=json.dumps({
+        "id": t.id, "name": t.name, "description": t.description,
+        "system_prompt": t.system_prompt, "default_metadata": default_metadata,
+        "is_builtin": t.is_builtin, "created_at": t.created_at.isoformat(),
+    }))]
+
+
+async def handle_template_create(db, arguments: dict[str, Any]) -> list[types.TextContent]:
+    try:
+        t = await crud.template_create(
+            db,
+            id=arguments["id"],
+            name=arguments["name"],
+            description=arguments.get("description"),
+            system_prompt=arguments.get("system_prompt"),
+            default_metadata=arguments.get("default_metadata"),
+        )
+    except ValueError as e:
+        return [types.TextContent(type="text", text=json.dumps({"error": str(e)}))]
+    return [types.TextContent(type="text", text=json.dumps({
+        "id": t.id, "name": t.name, "description": t.description,
+        "is_builtin": t.is_builtin, "created_at": t.created_at.isoformat(),
     }))]
 
 async def handle_thread_list(db, arguments: dict[str, Any]) -> list[types.TextContent]:
@@ -250,9 +305,14 @@ async def handle_msg_post(db, arguments: dict[str, Any]) -> list[types.TextConte
             "pattern": e.pattern_name,
         }))]
 
-    return [types.TextContent(type="text", text=json.dumps({
-        "msg_id": msg.id, "seq": msg.seq,
-    }))]
+    meta = _safe_json_loads(msg.metadata)
+    result: dict[str, Any] = {"msg_id": msg.id, "seq": msg.seq}
+    if isinstance(meta, dict):
+        if meta.get("handoff_target"):
+            result["handoff_target"] = meta["handoff_target"]
+        if meta.get("stop_reason"):
+            result["stop_reason"] = meta["stop_reason"]
+    return [types.TextContent(type="text", text=json.dumps(result))]
 
 async def handle_msg_list(db, arguments: dict[str, Any]) -> list[types.Content]:
     msgs = await crud.msg_list(
@@ -276,19 +336,39 @@ async def handle_msg_list(db, arguments: dict[str, Any]) -> list[types.Content]:
         for m in msgs
     ]))]
 
+def _metadata_targets(msg: Any, agent_id: str) -> bool:
+    """Return True if the message metadata.handoff_target matches agent_id."""
+    meta = _safe_json_loads(msg.metadata)
+    if isinstance(meta, dict):
+        return meta.get("handoff_target") == agent_id
+    return False
+
+
 async def handle_msg_wait(db, arguments: dict[str, Any]) -> list[types.Content]:
     thread_id = arguments["thread_id"]
     after_seq = arguments["after_seq"]
     timeout_s = arguments.get("timeout_ms", MSG_WAIT_TIMEOUT * 1000) / 1000.0
-    
+    for_agent = arguments.get("for_agent")
+
     explicit_agent_id = arguments.get("agent_id")
     explicit_token = arguments.get("token")
     connection_agent_id, connection_token = src.mcp_server.get_connection_agent()
-    
+
     agent_id = explicit_agent_id or connection_agent_id
     token = explicit_token or connection_token
-    
-    logger.info(f"[msg_wait] explicit: agent_id={explicit_agent_id}, connection: agent_id={connection_agent_id}, final_agent_id={agent_id}")
+
+    logger.info(f"[msg_wait] explicit: agent_id={explicit_agent_id}, connection: agent_id={connection_agent_id}, final_agent_id={agent_id}, for_agent={for_agent}")
+
+    # Refresh every 20 seconds to stay online during long-poll waits.
+    HEARTBEAT_INTERVAL = 20.0
+
+    async def _refresh_heartbeat() -> None:
+        if agent_id and token:
+            try:
+                await crud.agent_msg_wait(db, agent_id, token)
+                logger.debug(f"[msg_wait] heartbeat refreshed for agent_id={agent_id}")
+            except Exception as e:
+                logger.warning(f"[msg_wait] Failed to refresh heartbeat for {agent_id}: {e}")
 
     if agent_id and token:
         try:
@@ -300,10 +380,22 @@ async def handle_msg_wait(db, arguments: dict[str, Any]) -> list[types.Content]:
         logger.warning(f"[msg_wait] No credentials available: agent_id={agent_id}, token={'***' if token else None}")
 
     async def _poll():
+        last_heartbeat = asyncio.get_event_loop().time()
         while True:
             msgs = await crud.msg_list(db, thread_id, after_seq=after_seq, include_system_prompt=False)
             if msgs:
-                return msgs
+                if for_agent:
+                    filtered = [m for m in msgs if _metadata_targets(m, for_agent)]
+                    if filtered:
+                        return filtered
+                else:
+                    return msgs
+
+            now = asyncio.get_event_loop().time()
+            if now - last_heartbeat >= HEARTBEAT_INTERVAL:
+                await _refresh_heartbeat()
+                last_heartbeat = now
+
             await asyncio.sleep(0.5)
 
     try:
@@ -454,6 +546,9 @@ TOOLS_DISPATCH = {
     "agent_list": handle_agent_list,
     "agent_update": handle_agent_update,
     "agent_set_typing": handle_agent_set_typing,
+    "template_list": handle_template_list,
+    "template_get": handle_template_get,
+    "template_create": handle_template_create,
 }
 
 async def dispatch_tool(db, name: str, arguments: dict[str, Any]) -> list[types.Content]:

@@ -71,6 +71,13 @@ def get_connection_agent() -> tuple[str | None, str | None]:
         return agent_info["agent_id"], agent_info["token"]
     return None, None
 
+
+def clear_connection_agent(session_id: str) -> None:
+    """Clear agent identity for a session (call on SSE disconnect)."""
+    if session_id in _connection_agents:
+        agent_info = _connection_agents.pop(session_id)
+        logger.info(f"[clear_connection_agent] removed session {session_id[:8]}: agent_id={agent_info.get('agent_id')}")
+
 # Create the MCP server instance
 server = Server("AgentChatBus")
 
@@ -91,7 +98,8 @@ async def list_tools() -> list[types.Tool]:
                 "properties": {
                     "topic":         {"type": "string", "description": "Short description of the thread's purpose."},
                     "metadata":      {"type": "object", "description": "Optional arbitrary key-value metadata."},
-                    "system_prompt": {"type": "string", "description": "Optional system prompt defining collaboration rules for this thread."},
+                    "system_prompt": {"type": "string", "description": "Optional system prompt defining collaboration rules for this thread. Overrides template default."},
+                    "template":      {"type": "string", "description": "Template ID to apply defaults (system_prompt, metadata). Caller-provided values take precedence."},
                 },
                 "required": ["topic"],
             },
@@ -158,7 +166,26 @@ async def list_tools() -> list[types.Tool]:
                         "items": {"type": "string"},
                         "description": "List of agent IDs to mention in this message."
                     },
-                    "metadata":  {"type": "object"},
+                    "metadata":  {
+                        "type": "object",
+                        "description": "Structured message metadata for orchestration and routing.",
+                        "properties": {
+                            "handoff_target": {
+                                "type": "string",
+                                "description": "Agent ID that should handle this message next (triggers msg.handoff SSE event).",
+                            },
+                            "stop_reason": {
+                                "type": "string",
+                                "enum": ["convergence", "timeout", "error", "complete", "impasse"],
+                                "description": "Why the posting agent is ending its turn (triggers msg.stop SSE event).",
+                            },
+                            "attachments": {
+                                "type": "array",
+                                "items": {"type": "object"},
+                                "description": "File or image attachments.",
+                            },
+                        },
+                    },
                 },
                 "required": ["thread_id", "author", "content"],
             },
@@ -218,8 +245,45 @@ async def list_tools() -> list[types.Tool]:
                     },
                     "agent_id":    {"type": "string", "description": "Optional: your agent ID for activity tracking."},
                     "token":       {"type": "string", "description": "Optional: your agent token for verification."},
+                    "for_agent":   {
+                        "type": "string",
+                        "description": "Only return messages where metadata.handoff_target matches this agent ID. Useful for directed handoff routing.",
+                    },
                 },
                 "required": ["thread_id", "after_seq"],
+            },
+        ),
+
+        # ── Thread Templates (UP-18) ──────────────────────────────────────────
+        types.Tool(
+            name="template_list",
+            description="List all available thread templates (built-in + custom).",
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        types.Tool(
+            name="template_get",
+            description="Get details of a specific thread template by ID.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "template_id": {"type": "string", "description": "Template ID to retrieve."},
+                },
+                "required": ["template_id"],
+            },
+        ),
+        types.Tool(
+            name="template_create",
+            description="Create a custom thread template. Built-in templates cannot be overwritten.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "id":               {"type": "string", "description": "Unique slug ID for the template (e.g. 'my-review')."},
+                    "name":             {"type": "string", "description": "Human-readable display name."},
+                    "description":      {"type": "string", "description": "Short description of when to use this template."},
+                    "system_prompt":    {"type": "string", "description": "Default system prompt applied when creating a thread with this template."},
+                    "default_metadata": {"type": "object", "description": "Default metadata applied when creating a thread with this template."},
+                },
+                "required": ["id", "name"],
             },
         ),
 

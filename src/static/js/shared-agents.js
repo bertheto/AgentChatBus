@@ -155,41 +155,58 @@
       const msgArea = document.getElementById("messages");
       if (msgArea) {
         const rows = msgArea.querySelectorAll("[data-author-id]");
+        // Use agent's real UUID as key for deduplication
+        const agentUuidMap = new Map();  // UUID -> agent object
+        
         rows.forEach((row) => {
           const authorId = row.getAttribute("data-author-id");
-          if (authorId && authorId !== "system" && authorId !== "human" && !participantIdMap.has(authorId)) {
-            const agent = allAgents.find((a) => a.id === authorId || a.agent_id === authorId);
+          if (authorId && authorId !== "system" && authorId !== "human") {
+            // Try to find agent by id (UUID), author_id, or name/display_name
+            // Also try partial match for name/display_name (e.g., "iFlow CLI" matches "iFlow CLI (glm-5)")
+            const agent = allAgents.find((a) => 
+              a.id === authorId || 
+              a.agent_id === authorId ||
+              a.name === authorId ||
+              a.display_name === authorId ||
+              a.author_id === authorId ||
+              (a.name && a.name.includes(authorId)) ||
+              (a.display_name && a.display_name.includes(authorId))
+            );
             if (agent) {
-              participantIdMap.set(authorId, agent);
+              // Dedupe by agent's real UUID
+              if (!agentUuidMap.has(agent.id)) {
+                agentUuidMap.set(agent.id, agent);
+              }
             } else {
-              participantIdMap.set(authorId, {
-                id: authorId,
-                display_name: authorId,
-                name: authorId,
-                is_online: false,
-              });
+              // Fallback: use authorId as pseudo-UUID
+              if (!agentUuidMap.has(authorId)) {
+                agentUuidMap.set(authorId, {
+                  id: authorId,
+                  display_name: authorId,
+                  name: authorId,
+                  is_online: false,
+                });
+              }
             }
           }
         });
+        // When a thread is selected, only show participants for that thread
+        participants = Array.from(agentUuidMap.values());
       }
-
-      // When a thread is selected, only show participants for that thread
-      participants = Array.from(participantIdMap.values());
     } else {
       // When no thread is selected, show only online agents
       participants = allAgents.filter((a) => a.is_online);
     }
 
     participants.sort((a, b) => {
+      // First sort by online status (online first)
       if (a.is_online !== b.is_online) {
         return a.is_online ? -1 : 1;
       }
-      if (a.is_online && b.is_online) {
-        const timeA = a.last_activity_time ? new Date(a.last_activity_time) : new Date(0);
-        const timeB = b.last_activity_time ? new Date(b.last_activity_time) : new Date(0);
-        return timeB - timeA;
-      }
-      return 0;
+      // Then sort by name alphabetically for stable order
+      const nameA = String(a.display_name ?? a.name ?? "").toLowerCase();
+      const nameB = String(b.display_name ?? b.name ?? "").toLowerCase();
+      return nameA.localeCompare(nameB);
     });
 
     container.innerHTML = "";

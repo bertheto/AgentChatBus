@@ -13,10 +13,24 @@ class Thread:
     topic: str
     status: str          # discuss | implement | review | done | closed | archived
     created_at: datetime
-    closed_at: Optional[datetime]
-    summary: Optional[str]
-    metadata: Optional[str]  # JSON string for arbitrary extra data
+    updated_at: Optional[datetime] = None  # last activity time, used for sorting
+    closed_at: Optional[datetime] = None
+    summary: Optional[str] = None
+    metadata: Optional[str] = None  # JSON string for arbitrary extra data
     system_prompt: Optional[str] = None
+    template_id: Optional[str] = None   # Template used at creation (UP-18)
+
+
+@dataclass
+class ThreadTemplate:
+    """A reusable preset for thread creation (UP-18)."""
+    id: str
+    name: str
+    description: Optional[str]
+    system_prompt: Optional[str]
+    default_metadata: Optional[str]  # JSON string
+    created_at: datetime
+    is_builtin: bool
 
 
 @dataclass

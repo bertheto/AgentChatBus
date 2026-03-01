@@ -139,7 +139,7 @@ class _SseCompletedResponse:
 @app.get("/mcp/sse")
 async def mcp_sse_endpoint(request: Request):
     """MCP SSE endpoint consumed by MCP clients (Claude Desktop, Cursor, ΓÇª)."""
-    from src.mcp_server import init_session_id
+    from src.mcp_server import init_session_id, clear_connection_agent
     
     # Initialize unique session ID for this SSE connection
     session_id = init_session_id()
@@ -161,6 +161,9 @@ async def mcp_sse_endpoint(request: Request):
         # Most are normal disconnects (anyio.ClosedResourceError, CancelledErrorΓÇª).
         # Log at DEBUG to avoid polluting the terminal.
         logger.debug("MCP SSE session ended: %s: %s", type(exc).__name__, exc)
+    finally:
+        # Ensure per-connection agent mapping is cleaned when SSE disconnects.
+        clear_connection_agent(session_id)
     return _SseCompletedResponse()
 
 
@@ -370,6 +373,15 @@ class ThreadCreate(BaseModel):
     topic: str
     metadata: dict | None = None
     system_prompt: str | None = None
+    template: str | None = None   # Template ID for defaults (UP-18)
+
+
+class TemplateCreate(BaseModel):
+    id: str
+    name: str
+    description: str | None = None
+    system_prompt: str | None = None
+    default_metadata: dict | None = None
 
 class MessageCreate(BaseModel):
     model_config = ConfigDict(
@@ -389,18 +401,94 @@ class MessageCreate(BaseModel):
     metadata: dict | None = None
     images: list[dict] | None = None  # [{url: str, name: str}, ...]
 
+@app.get("/api/templates")
+async def api_list_templates():
+    try:
+        db = await asyncio.wait_for(get_db(), timeout=DB_TIMEOUT)
+        templates = await asyncio.wait_for(crud.template_list(db), timeout=DB_TIMEOUT)
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=503, detail="Database operation timeout")
+    return [
+        {
+            "id": t.id, "name": t.name, "description": t.description,
+            "is_builtin": t.is_builtin, "created_at": t.created_at.isoformat(),
+        }
+        for t in templates
+    ]
+
+
+@app.get("/api/templates/{template_id}")
+async def api_get_template(template_id: str):
+    try:
+        db = await asyncio.wait_for(get_db(), timeout=DB_TIMEOUT)
+        t = await asyncio.wait_for(crud.template_get(db, template_id), timeout=DB_TIMEOUT)
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=503, detail="Database operation timeout")
+    if t is None:
+        raise HTTPException(status_code=404, detail="Template not found")
+    default_metadata = None
+    if t.default_metadata:
+        try:
+            default_metadata = json.loads(t.default_metadata)
+        except (TypeError, ValueError):
+            default_metadata = t.default_metadata
+    return {
+        "id": t.id, "name": t.name, "description": t.description,
+        "system_prompt": t.system_prompt, "default_metadata": default_metadata,
+        "is_builtin": t.is_builtin, "created_at": t.created_at.isoformat(),
+    }
+
+
+@app.post("/api/templates", status_code=201)
+async def api_create_template(body: TemplateCreate):
+    try:
+        db = await asyncio.wait_for(get_db(), timeout=DB_TIMEOUT)
+        t = await asyncio.wait_for(
+            crud.template_create(
+                db,
+                id=body.id,
+                name=body.name,
+                description=body.description,
+                system_prompt=body.system_prompt,
+                default_metadata=body.default_metadata,
+            ),
+            timeout=DB_TIMEOUT,
+        )
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=503, detail="Database operation timeout")
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    return {"id": t.id, "name": t.name, "description": t.description, "is_builtin": t.is_builtin}
+
+
+@app.delete("/api/templates/{template_id}", status_code=204)
+async def api_delete_template(template_id: str):
+    try:
+        db = await asyncio.wait_for(get_db(), timeout=DB_TIMEOUT)
+        await asyncio.wait_for(crud.template_delete(db, template_id), timeout=DB_TIMEOUT)
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=503, detail="Database operation timeout")
+    except ValueError as e:
+        err = str(e)
+        if "not found" in err.lower():
+            raise HTTPException(status_code=404, detail=err)
+        raise HTTPException(status_code=403, detail=err)
+
+
 @app.post("/api/threads", status_code=201)
 async def api_create_thread(body: ThreadCreate):
     try:
         db = await asyncio.wait_for(get_db(), timeout=DB_TIMEOUT)
         t = await asyncio.wait_for(
-            crud.thread_create(db, body.topic, body.metadata, body.system_prompt),
+            crud.thread_create(db, body.topic, body.metadata, body.system_prompt, template=body.template),
             timeout=DB_TIMEOUT
         )
     except asyncio.TimeoutError:
         raise HTTPException(status_code=503, detail="Database operation timeout")
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
     return {"id": t.id, "topic": t.topic, "status": t.status, "system_prompt": t.system_prompt,
-            "created_at": t.created_at.isoformat()}
+            "template_id": t.template_id, "created_at": t.created_at.isoformat()}
 
 @app.post("/api/threads/{thread_id}/messages", status_code=201)
 async def api_post_message(thread_id: str, body: MessageCreate):
