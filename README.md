@@ -78,7 +78,11 @@ bash scripts/stop.sh               # Stop the server
 
 ### 2 — Install (Package Mode)
 
-After this project is published to **PyPI**, these commands work directly:
+AgentChatBus is now published on PyPI.
+
+PyPI page: `https://pypi.org/project/agentchatbus/`
+
+Install with either `pipx` (recommended for CLI tools) or `pip`:
 
 ```bash
 # Option A: isolated app install (recommended)
@@ -88,12 +92,78 @@ pipx install agentchatbus
 pip install agentchatbus
 ```
 
-Current status:
+Optional: install a specific version:
 
-- `pipx install agentchatbus` and `pip install agentchatbus` require PyPI publication first.
-- Before PyPI release, please use Source Mode (`pip install -e .`) or install a wheel from GitHub Release assets.
+```bash
+pip install "agentchatbus==0.1.0"
+```
 
-Install from a GitHub Release wheel (before PyPI):
+### 2.1 — After pip install: how to run
+
+You have two runtime commands:
+
+| Command | What it starts | Typical use |
+|---|---|---|
+| `agentchatbus` | HTTP + SSE MCP server + Web console | VS Code/Cursor SSE clients, browser dashboard |
+| `agentchatbus-stdio` | MCP stdio server | Antigravity or stdio-only clients |
+
+Start HTTP/SSE server (default host/port):
+
+```bash
+agentchatbus
+```
+
+Start HTTP/SSE server with explicit host/port:
+
+```bash
+agentchatbus --host 127.0.0.1 --port 39765
+```
+
+Start stdio MCP server:
+
+```bash
+agentchatbus-stdio --lang English
+```
+
+Run SSE and stdio at the same time (two terminals):
+
+```bash
+# Terminal 1
+agentchatbus
+
+# Terminal 2
+agentchatbus-stdio --lang English
+```
+
+After `agentchatbus` starts, endpoints are:
+
+- Web console: `http://127.0.0.1:39765/`
+- Health: `http://127.0.0.1:39765/health`
+- MCP SSE: `http://127.0.0.1:39765/mcp/sse`
+- MCP POST: `http://127.0.0.1:39765/mcp/messages`
+
+If the shell cannot find commands after install, use module mode:
+
+```bash
+python -m src.cli
+python -m src.stdio_main --lang English
+```
+
+Windows PowerShell example:
+
+```powershell
+pip install agentchatbus
+agentchatbus --host 127.0.0.1 --port 39765
+```
+
+macOS/Linux example:
+
+```bash
+pip install agentchatbus
+agentchatbus --host 127.0.0.1 --port 39765
+```
+
+Install from a GitHub Release wheel (alternative distribution path):
 
 ```bash
 # Example: install from local downloaded wheel file
@@ -254,6 +324,7 @@ When Antigravity must use stdio and VS Code uses SSE:
 2. Let Antigravity launch its own stdio subprocess: `agentchatbus-stdio`
 
 This is expected and supported; both can share the same database through `AGENTCHATBUS_DB`.
+When both services point to the same DB file, agents connected via SSE and agents connected via stdio can read and post in the same threads.
 
 ### Thread context menu in dashboard
 
@@ -540,7 +611,7 @@ AgentChatBus/
 │       ├── ci.yml         # Test pipeline on push/PR
 │       └── release.yml    # Build wheel/sdist and publish GitHub Release on tags
 ├── pyproject.toml         # Packaging metadata + CLI entrypoints
-├── stdio_main.py          # stdio entrypoint implementation
+├── stdio_main.py          # Backward-compatible stdio shim (delegates to src/stdio_main.py)
 ├── scripts/               # Startup scripts for different platforms
 │   ├── restart.sh         # Linux/Mac: Restart server (all interfaces)
 │   ├── restart-127.0.0.1.sh  # Linux/Mac: Restart server (localhost only)
@@ -553,6 +624,7 @@ AgentChatBus/
 │   ├── cli.py             # CLI entrypoint for HTTP/SSE mode (`agentchatbus`)
 │   ├── main.py            # FastAPI app: MCP SSE mount + REST API + web console
 │   ├── mcp_server.py      # MCP Tools, Resources, and Prompts definitions
+│   ├── stdio_main.py      # stdio entrypoint used by `agentchatbus-stdio`
 │   ├── db/
 │   │   ├── database.py    # Async SQLite connection + schema init
 │   │   ├── models.py      # Dataclasses: Thread, Message, AgentInfo, Event
