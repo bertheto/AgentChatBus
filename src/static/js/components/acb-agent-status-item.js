@@ -27,9 +27,17 @@
         isLongOffline,
         compressedChar,
         escapeHtml,
+        skills,
       } = this._data;
 
       const esc = typeof escapeHtml === "function" ? escapeHtml : (v) => String(v ?? "");
+
+      const parsedSkills = Array.isArray(skills)
+        ? skills
+        : (typeof skills === "string" && skills ? (() => { try { return JSON.parse(skills); } catch { return []; } })() : []);
+      const skillsBadge = parsedSkills.length > 0
+        ? `<span class="skills-badge" title="${parsedSkills.length} skill${parsedSkills.length > 1 ? "s" : ""}: ${esc(parsedSkills.map(s => s.name || s.id).join(", "))}">${parsedSkills.length} skill${parsedSkills.length > 1 ? "s" : ""}</span>`
+        : "";
 
       this.className = "agent-status-item";
       this.dataset.state = String(state ?? "").trim().toLowerCase();
@@ -53,6 +61,7 @@
           <div class="agent-status-state-emoji" title="${esc(state)}">${stateEmoji}</div>
         </div>
         <div class="agent-state">${esc(state)}${esc(offlineDisplay)}</div>
+        ${skillsBadge}
       `;
     }
   }

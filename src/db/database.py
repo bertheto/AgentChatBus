@@ -6,6 +6,7 @@ import aiosqlite
 import asyncio
 import logging
 import threading
+import sqlite3
 from pathlib import Path
 from typing import AsyncIterator
 from contextlib import asynccontextmanager
@@ -23,8 +24,101 @@ _initializing = False
 SCHEMA_VERSION = 1
 
 
+def _is_duplicate_column_error(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return "duplicate column" in msg or "duplicate column name" in msg
+
+
+async def _add_column_if_missing(
+    db: aiosqlite.Connection,
+    table: str,
+    col: str,
+    typedef: str,
+) -> None:
+    """Add a column via ALTER TABLE.
+
+    SQLite doesn't support IF NOT EXISTS for ADD COLUMN, so we rely on catching
+    the duplicate-column error. Anything else is a real migration failure.
+    """
+    try:
+        await db.execute(f"ALTER TABLE {table} ADD COLUMN {col} {typedef}")
+        await db.commit()
+        logger.info(f"Migration: added column '{table}.{col}'")
+    except sqlite3.OperationalError as e:
+        if _is_duplicate_column_error(e):
+            logger.debug(f"Migration skip: column '{table}.{col}' already exists")
+        else:
+            logger.exception(f"Migration failed while adding column '{table}.{col}'")
+            raise
+    except Exception:
+        logger.exception(f"Unexpected migration error while adding column '{table}.{col}'")
+        raise
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+# ── Built-in thread templates (UP-18) ────────────────────────────────────────
+# All templates are 100% generic — no project-specific references.
+_BUILTIN_TEMPLATES = [
+    (
+        "code-review",
+        "Code Review",
+        "Structured code review focused on correctness, style, security, and performance.",
+        "You are participating in a structured code review. Focus on: correctness, "
+        "readability, security vulnerabilities, performance concerns, and adherence to "
+        "best practices. Be specific in your feedback — cite exact lines or patterns. "
+        "Distinguish blocking issues from suggestions.",
+        None,
+    ),
+    (
+        "security-audit",
+        "Security Audit",
+        "Security-focused review identifying vulnerabilities and risks.",
+        "You are conducting a security audit. Focus on: injection risks, "
+        "authentication/authorization flaws, data exposure, dependency vulnerabilities, "
+        "and insecure defaults. Rate findings by severity (critical/high/medium/low). "
+        "Propose concrete mitigations.",
+        None,
+    ),
+    (
+        "architecture",
+        "Architecture Discussion",
+        "Evaluate design decisions, trade-offs, and system structure.",
+        "You are in an architecture discussion. Evaluate design trade-offs, scalability, "
+        "maintainability, and separation of concerns. Consider both short-term pragmatism "
+        "and long-term extensibility. Present alternatives when disagreeing.",
+        None,
+    ),
+    (
+        "brainstorm",
+        "Brainstorm",
+        "Free-form ideation session. All ideas welcome, defer judgment.",
+        "You are in a brainstorming session. Generate diverse ideas without premature "
+        "criticism. Build on others' suggestions. Quantity over quality at this stage. "
+        "Flag ideas worth deeper exploration.",
+        None,
+    ),
+]
+
+
+async def _seed_builtin_templates(db: aiosqlite.Connection) -> None:
+    """Seed built-in templates if they don't already exist. Idempotent."""
+    for tid, name, description, system_prompt, default_metadata in _BUILTIN_TEMPLATES:
+        try:
+            await db.execute(
+                """
+                INSERT OR IGNORE INTO thread_templates
+                    (id, name, description, system_prompt, default_metadata, created_at, is_builtin)
+                VALUES (?, ?, ?, ?, ?, ?, 1)
+                """,
+                (tid, name, description, system_prompt, default_metadata, _now()),
+            )
+        except Exception as e:
+            logger.warning(f"Failed to seed template '{tid}': {e}")
+    await db.commit()
+    logger.debug(f"Built-in templates seeded ({len(_BUILTIN_TEMPLATES)} templates).")
 
 
 async def get_db() -> aiosqlite.Connection:
@@ -91,6 +185,7 @@ async def init_schema(db: aiosqlite.Connection) -> None:
             topic       TEXT NOT NULL,
             status      TEXT NOT NULL DEFAULT 'discuss',
             created_at  TEXT NOT NULL,
+            updated_at  TEXT,
             closed_at   TEXT,
             summary     TEXT,
             metadata    TEXT,
@@ -156,6 +251,20 @@ async def init_schema(db: aiosqlite.Connection) -> None:
             payload     TEXT NOT NULL,
             created_at  TEXT NOT NULL
         );
+
+        -- ----------------------------------------------------------------
+        -- Thread templates: reusable presets for thread creation (UP-18)
+        -- is_builtin = 1 for shipped templates, 0 for user-created.
+        -- ----------------------------------------------------------------
+        CREATE TABLE IF NOT EXISTS thread_templates (
+            id               TEXT PRIMARY KEY,
+            name             TEXT NOT NULL,
+            description      TEXT,
+            system_prompt    TEXT,
+            default_metadata TEXT,
+            created_at       TEXT NOT NULL,
+            is_builtin       INTEGER NOT NULL DEFAULT 0
+        );
     """)
     await db.commit()
 
@@ -203,57 +312,86 @@ async def init_schema(db: aiosqlite.Connection) -> None:
         ("ide",   "TEXT NOT NULL DEFAULT ''"),
         ("model", "TEXT NOT NULL DEFAULT ''"),
     ]:
-        try:
-            await db.execute(f"ALTER TABLE agents ADD COLUMN {col} {typedef}")
-            await db.commit()
-            logger.info(f"Migration: added column 'agents.{col}'")
-        except Exception:
-            pass  # Column already exists — safe to ignore
+        await _add_column_if_missing(db, "agents", col, typedef)
             
     for col, typedef in [
         ("author_id", "TEXT"),
         ("author_name", "TEXT"),
     ]:
-        try:
-            await db.execute(f"ALTER TABLE messages ADD COLUMN {col} {typedef}")
-            await db.commit()
-            logger.info(f"Migration: added column 'messages.{col}'")
-        except Exception:
-            pass
+        await _add_column_if_missing(db, "messages", col, typedef)
 
     for col, typedef in [
         ("system_prompt", "TEXT"),
     ]:
-        try:
-            await db.execute(f"ALTER TABLE threads ADD COLUMN {col} {typedef}")
-            await db.commit()
-            logger.info(f"Migration: added column 'threads.{col}'")
-        except Exception:
-            pass
+        await _add_column_if_missing(db, "threads", col, typedef)
+
+    # Migration: Add updated_at for thread activity tracking
+    try:
+        await db.execute("ALTER TABLE threads ADD COLUMN updated_at TEXT")
+        await db.commit()
+        logger.info("Migration: added column 'threads.updated_at'")
+        # Backfill: set updated_at = created_at for existing threads
+        await db.execute("UPDATE threads SET updated_at = created_at WHERE updated_at IS NULL")
+        await db.commit()
+        logger.info("Migration: backfilled updated_at from created_at for existing threads")
+    except sqlite3.OperationalError as e:
+        if _is_duplicate_column_error(e):
+            logger.debug("Migration: 'threads.updated_at' already exists, skipping")
+        else:
+            logger.error(f"Migration failed for 'threads.updated_at': {e}")
+            raise
+    except Exception as e:
+        logger.error(f"Unexpected migration error for 'threads.updated_at': {e}")
+        raise
 
     # Migration: Add display_name and alias_source for agent alias support
     for col, typedef in [
         ("display_name", "TEXT"),
         ("alias_source", "TEXT CHECK (alias_source IN ('auto', 'user'))"),
     ]:
-        try:
-            await db.execute(f"ALTER TABLE agents ADD COLUMN {col} {typedef}")
-            await db.commit()
-            logger.info(f"Migration: added column 'agents.{col}'")
-        except Exception:
-            pass
+        await _add_column_if_missing(db, "agents", col, typedef)
 
     # Migration: Add last_activity and last_activity_time for agent status tracking
     for col, typedef in [
         ("last_activity", "TEXT"),
         ("last_activity_time", "TEXT"),
     ]:
-        try:
-            await db.execute(f"ALTER TABLE agents ADD COLUMN {col} {typedef}")
-            await db.commit()
-            logger.info(f"Migration: added column 'agents.{col}'")
-        except Exception:
-            pass
+        await _add_column_if_missing(db, "agents", col, typedef)
+
+    # Migration: Add skills for A2A-compatible agent capability declarations (UP-15)
+    try:
+        await db.execute("ALTER TABLE agents ADD COLUMN skills TEXT")
+        await db.commit()
+        logger.info("Migration: added column 'agents.skills'")
+    except Exception:
+        pass  # Column already exists — safe to ignore
+
+    # Migration: Add template_id to threads for template tracking (UP-18)
+    try:
+        await db.execute("ALTER TABLE threads ADD COLUMN template_id TEXT")
+        await db.commit()
+        logger.info("Migration: added column 'threads.template_id'")
+    except Exception:
+        pass  # Column already exists — safe to ignore
+
+    # Seed built-in thread templates (UP-18) — idempotent via INSERT OR IGNORE
+    await _seed_builtin_templates(db)
+
+    # Migration: Add skills for A2A-compatible agent capability declarations (UP-15)
+    try:
+        await db.execute("ALTER TABLE agents ADD COLUMN skills TEXT")
+        await db.commit()
+        logger.info("Migration: added column 'agents.skills'")
+    except Exception:
+        pass  # Column already exists -- safe to ignore
+
+    # Migration: Add skills for A2A-compatible agent capability declarations (UP-15)
+    try:
+        await db.execute("ALTER TABLE agents ADD COLUMN skills TEXT")
+        await db.commit()
+        logger.info("Migration: added column 'agents.skills'")
+    except Exception:
+        pass  # Column already exists — safe to ignore
 
     # Record current schema version
     await db.execute(
