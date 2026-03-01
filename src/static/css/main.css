@@ -1539,6 +1539,47 @@ body[data-theme="light"] .ctx-divider {
   background: rgba(239, 68, 68, .12);
 }
 
+/* Context menu submenu */
+.ctx-submenu-container {
+  position: relative;
+}
+
+.ctx-submenu-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.ctx-submenu-arrow {
+  font-size: 10px;
+  margin-left: 8px;
+  color: var(--text-3);
+  transition: transform 0.15s ease;
+}
+
+.ctx-submenu {
+  position: absolute;
+  left: 100%;
+  top: 0;
+  min-width: 150px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+  padding: 6px;
+  display: none;
+  z-index: 1210;
+}
+
+.ctx-submenu-container:hover > .ctx-submenu,
+.ctx-submenu-container:focus-within > .ctx-submenu {
+  display: block;
+}
+
+.ctx-submenu-container:hover > .ctx-submenu-trigger .ctx-submenu-arrow {
+  transform: rotate(90deg);
+}
+
 /* ── Confirm dialog ───────────────────── */
 acb-confirm-dialog dialog {
   background: var(--bg-card);
