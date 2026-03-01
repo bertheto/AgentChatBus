@@ -255,6 +255,14 @@ async def init_schema(db: aiosqlite.Connection) -> None:
         except Exception:
             pass
 
+    # Migration: Add skills for A2A-compatible agent capability declarations (UP-15)
+    try:
+        await db.execute("ALTER TABLE agents ADD COLUMN skills TEXT")
+        await db.commit()
+        logger.info("Migration: added column 'agents.skills'")
+    except Exception:
+        pass  # Column already exists -- safe to ignore
+
     # Record current schema version
     await db.execute(
         "INSERT OR REPLACE INTO schema_version (version, applied_at) VALUES (?, ?)",
