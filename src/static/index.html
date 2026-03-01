@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 
 <head>
@@ -1124,14 +1124,16 @@
     /** Agent Status Bar **/
     #agent-status-bar {
       display: flex;
+      align-items: center;
       background: var(--bg-base);
       border-top: 1px solid var(--border-light);
-      padding: 8px 12px;
-      height: 56px;
+      padding: 6px 12px;
+      min-height: 64px;
       overflow-x: auto;
-      overflow-y: hidden;
+      overflow-y: visible;
       gap: 10px;
       font-size: 12px;
+      flex-shrink: 0;
     }
 
     #agent-status-list {
@@ -1663,8 +1665,8 @@
   <script src="/static/js/components/acb-compose-shell.js?v=3"></script>
   <script src="/static/js/components/acb-agent-status-shell.js?v=2"></script>
   <script src="/static/js/shared-threads.js?v=2"></script>
-  <script src="/static/js/shared-agent-status.js?v=2"></script>
-  <script src="/static/js/components/acb-agent-status-item.js?v=2"></script>
+  <script src="/static/js/shared-agent-status.js?v=3"></script>
+  <script src="/static/js/components/acb-agent-status-item.js?v=3"></script>
   <script src="/static/js/shared-agents.js?v=2"></script>
   <script src="/static/js/shared-chat.js?v=2"></script>
   <script src="/static/js/shared-tooltip.js?v=2"></script>
