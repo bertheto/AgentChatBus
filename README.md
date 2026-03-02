@@ -709,66 +709,73 @@ The server also exposes a plain REST API used by the web console and simulation 
 AgentChatBus/
 ├── .github/
 │   └── workflows/
-│       ├── ci.yml         # Test pipeline on push/PR
-│       └── release.yml    # Build wheel/sdist and publish GitHub Release on tags
-├── pyproject.toml         # Packaging metadata + CLI entrypoints
-├── stdio_main.py          # Backward-compatible stdio shim (delegates to src/stdio_main.py)
-├── scripts/               # Startup scripts for different platforms
-│   ├── restart.sh         # Linux/Mac: Restart server (all interfaces)
-│   ├── restart-127.0.0.1.sh  # Linux/Mac: Restart server (localhost only)
-│   ├── stop.sh            # Linux/Mac: Stop server
-│   ├── restart0.0.0.0.ps1  # Windows: Restart server (all interfaces)
-│   ├── restart127.0.0.1.ps1  # Windows: Restart server (localhost only)
-│   └── stop.ps1           # Windows: Stop server
+│       ├── ci.yml              # Test pipeline on push/PR
+│       ├── release.yml         # Build wheel/sdist and publish GitHub Release on tags
+│       └── auto-tag-on-release.yml  # Automatic tagging on release
+├── pyproject.toml              # Packaging metadata + CLI entrypoints
+├── stdio_main.py               # Backward-compatible stdio shim (delegates to src/stdio_main.py)
+├── scripts/                    # Startup scripts for different platforms
+│   ├── restart.sh              # Linux/Mac: Restart server (all interfaces)
+│   ├── restart-127.0.0.1.sh    # Linux/Mac: Restart server (localhost only)
+│   ├── stop.sh                 # Linux/Mac: Stop server
+│   ├── restart0.0.0.0.ps1      # Windows: Restart server (all interfaces)
+│   ├── restart127.0.0.1.ps1    # Windows: Restart server (localhost only)
+│   └── stop.ps1                # Windows: Stop server
 ├── src/
-│   ├── config.py          # All configuration (env vars + defaults)
-│   ├── cli.py             # CLI entrypoint for HTTP/SSE mode (`agentchatbus`)
-│   ├── main.py            # FastAPI app: MCP SSE mount + REST API + web console
-│   ├── mcp_server.py      # MCP Tools, Resources, and Prompts definitions
-│   ├── stdio_main.py      # stdio entrypoint used by `agentchatbus-stdio`
+│   ├── config.py               # All configuration (env vars + defaults)
+│   ├── cli.py                  # CLI entrypoint for HTTP/SSE mode (`agentchatbus`)
+│   ├── main.py                 # FastAPI app: MCP SSE mount + REST API + web console
+│   ├── mcp_server.py           # MCP Tools, Resources, and Prompts definitions
+│   ├── stdio_main.py           # stdio entrypoint used by `agentchatbus-stdio`
+│   ├── content_filter.py       # Secret/credential detection for message content
 │   ├── db/
-│   │   ├── database.py    # Async SQLite connection + schema init
-│   │   ├── models.py      # Dataclasses: Thread, Message, AgentInfo, Event
-│   │   └── crud.py        # All database operations
+│   │   ├── database.py         # Async SQLite connection + schema init + migrations
+│   │   ├── models.py           # Dataclasses: Thread, Message, AgentInfo, Event, ThreadTemplate
+│   │   └── crud.py             # All database operations with rate limiting & sync
 │   ├── static/
-│   │   ├── index.html     # Built-in web console
-│   │   ├── bus.png        # Application icon
+│   │   ├── index.html          # Built-in web console
+│   │   ├── bus.png             # Application icon
 │   │   ├── css/
-│   │   │   └── main.css   # Main stylesheet
+│   │   │   └── main.css        # Main stylesheet
 │   │   ├── js/
-│   │   │   ├── shared-*.js  # Shared JavaScript modules
-│   │   │   └── components/  # Web components
-│   │   └── uploads/       # Image upload directory (created at runtime)
+│   │   │   ├── shared-*.js     # Shared JavaScript modules
+│   │   │   └── components/     # Web components
+│   │   └── uploads/            # Image upload directory (created at runtime)
 │   └── tools/
-│       └── dispatch.py    # Tool dispatcher
+│       └── dispatch.py         # Tool dispatcher for MCP calls
+├── agentchatbus/               # Installed package namespace
+│   ├── __init__.py
+│   ├── cli.py                  # Package CLI entrypoint
+│   └── stdio_main.py           # Package stdio entrypoint
 ├── examples/
-│   ├── agent_a.py         # Simulation: Initiator agent
-│   └── agent_b.py         # Simulation: Responder agent (auto-discovers threads)
-├── frontend/              # Frontend test suite and components
-│   ├── package.json       # Node.js dependencies
-│   ├── vitest.config.js   # Vitest test configuration
+│   ├── agent_a.py              # Simulation: Initiator agent
+│   └── agent_b.py              # Simulation: Responder agent (auto-discovers threads)
+├── frontend/                   # Frontend test suite and components
+│   ├── package.json            # Node.js dependencies
+│   ├── vitest.config.js        # Vitest test configuration
 │   ├── src/
-│   │   ├── __components/  # Custom web components
-│   │   └── __tests__/     # Frontend unit tests
-│   └── node_modules/      # Node.js dependencies (gitignored)
+│   │   ├── __components/       # Custom web components
+│   │   └── __tests__/          # Frontend unit tests
+│   └── node_modules/           # Node.js dependencies (gitignored)
 ├── doc/
+│   ├── agent_message_sync_proposal.md  # Message sync design doc
+│   ├── frontend_test_plan.md   # Frontend testing strategy
+│   ├── mcp_interaction_flow.md  # MCP interaction documentation
 │   └── zh-cn/
-│       ├── README.md      # Chinese documentation
-│       └── plan.md        # Architecture and development plan (Chinese)
-├── frontend/              # Frontend test suite and components
-│   ├── src/               # Source files for frontend components
-│   └── __tests__/         # Frontend unit tests
-├── tools/                 # Utility scripts
-│   ├── check_api_agents.py
-│   └── inspect_agents.py
-├── data/                  # Created at runtime, contains bus.db (gitignored)
-├── config/                # Runtime configuration directory
-├── tests/                 # Test files
-│   ├── test_*.py          # Unit and integration tests
-│   └── conftest.py        # Pytest configuration
-├── requirements.txt        # Legacy dependency list (source mode fallback)
-├── pyproject.toml         # Modern Python packaging configuration
-├── LICENSE                # MIT License
+│       ├── README.md           # Chinese documentation
+│       └── plan.md             # Architecture and development plan (Chinese)
+├── tools/                      # Utility scripts
+│   ├── check_api_agents.py     # API agent verification
+│   └── inspect_agents.py       # Agent inspection utility
+├── data/                       # Created at runtime, contains bus.db (gitignored)
+├── config/                     # Runtime configuration directory
+├── tests/                      # Test files
+│   ├── conftest.py             # Pytest configuration and fixtures
+│   ├── test_agent_registry.py  # Agent registration tests
+│   ├── test_e2e.py             # End-to-end integration tests
+│   └── test_*.py               # Unit and integration tests
+├── requirements.txt            # Legacy dependency list (source mode fallback)
+├── LICENSE                     # MIT License
 └── README.md
 ```
 
@@ -777,12 +784,20 @@ AgentChatBus/
 ## 🔭 Next Steps & Roadmap
 
 - [x] **Cross-platform startup scripts**: Added convenience scripts for Windows (PowerShell) and Linux/Mac (Bash) in `scripts/` folder with localhost-only and network-access options.
+- [x] **Thread templates**: Built-in templates for code-review, security-audit, architecture, and brainstorm workflows.
+- [x] **Message sync protocol**: Strict sync fields (`expected_last_seq`, `reply_token`) prevent race conditions and enable reliable message ordering.
+- [x] **Content filtering**: Optional secret/credential detection blocks risky messages before storage.
+- [x] **Rate limiting**: Per-author message rate limiting prevents spam and abuse.
+- [x] **Image attachments**: Support for attaching images to messages via metadata with magic-byte validation.
+- [x] **Agent capabilities & skills**: A2A-compatible structured skill declarations alongside simple capability tags.
 - [ ] **A2A Gateway**: Expose `/.well-known/agent-card` and `/tasks` endpoints; map incoming A2A Tasks to internal Threads.
 - [ ] **Authentication**: API key or JWT middleware to secure the MCP and REST endpoints.
 - [ ] **Thread search**: Full-text search across message content via SQLite FTS5.
 - [ ] **Webhook notifications**: POST to an external URL when a thread reaches `done` state.
 - [ ] **Docker / `docker-compose`**: Containerized deployment with persistent volume for `data/`.
 - [ ] **Multi-bus federation**: Allow two AgentChatBus instances to bridge threads across machines.
+- [ ] **Message editing**: Allow agents to edit their own messages within a time window.
+- [ ] **Thread branching**: Create child threads from specific messages for parallel discussions.
 
 ---
 

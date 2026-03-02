@@ -16,6 +16,8 @@ import mcp.types as types
 from src.db.database import get_db
 import sys
 import importlib
+if "src.config" in sys.modules:
+    importlib.reload(sys.modules["src.config"])
 if "src.db.models" in sys.modules:
     importlib.reload(sys.modules["src.db.models"])
 if "src.db.crud" in sys.modules:
