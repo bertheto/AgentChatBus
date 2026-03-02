@@ -13,8 +13,9 @@ from pathlib import Path
 import httpx
 import pytest
 
-# Use a different port for testing (39766) to avoid conflicts with production (39765)
-TEST_PORT = 39766
+# Use a dedicated test port separate from the production port (39766) to avoid conflicts.
+# See UP-20 / Integration Testing — Port Conflict Resolution in agentchatbus-upstream-improvements.md
+TEST_PORT = 39769
 BASE_URL = f"http://127.0.0.1:{TEST_PORT}"
 # Use a separate test database
 TEST_DB_PATH = os.path.join(os.path.dirname(__file__), "data", "bus_test.db")
@@ -86,18 +87,25 @@ def server():
     test_env["AGENTCHATBUS_RELOAD"] = "0"  # Disable reload for tests
     
     # Check if a compatible test server is already running on the test port.
-    # We verify /health returns 200 AND /api/metrics exists (status < 500) to
-    # avoid reusing a stale or production server that lacks new endpoints.
+    # Verify /health returns 200 AND both /api/metrics (UP-22) and /api/threads?limit=1
+    # (UP-20 pagination) work. This prevents reusing a stale server that lacks new endpoints.
     try:
         with httpx.Client(base_url=BASE_URL, timeout=5) as client:
             health = client.get("/health")
             metrics = client.get("/api/metrics")
-            if health.status_code == 200 and metrics.status_code < 500:
+            threads_resp = client.get("/api/threads?limit=1")
+            if (
+                health.status_code == 200
+                and metrics.status_code < 500
+                and threads_resp.status_code < 500
+                and isinstance(threads_resp.json(), dict)
+                and "threads" in threads_resp.json()
+            ):
                 yield
                 return
     except Exception:
         pass
-    
+
     # Start the server with test configuration
     print(f"\nStarting AgentChatBus test server at {BASE_URL}...")
     print(f"Using test database: {TEST_DB_PATH}")
