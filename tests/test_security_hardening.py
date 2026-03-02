@@ -54,25 +54,35 @@ def test_messages_limit_cap(thread_id_for_hardening: str):
 # ─── QW-03: settings auth (only enforced when env var set) ───────────────────
 
 def test_settings_update_no_token_when_env_not_set():
-    """Without ADMIN_TOKEN env var configured, settings endpoint is open (backward compat)."""
+    """Settings endpoint behavior depends on whether ADMIN_TOKEN env var is configured.
+
+    - If AGENTCHATBUS_ADMIN_TOKEN is NOT set: endpoint is open (200)
+    - If AGENTCHATBUS_ADMIN_TOKEN is set: token is required; missing token is rejected (401)
+    """
     admin_token = os.getenv("AGENTCHATBUS_ADMIN_TOKEN")
-    if admin_token:
-        pytest.skip("AGENTCHATBUS_ADMIN_TOKEN is set in env — tested by test_settings_update_invalid_token instead")
     with _build_client() as client:
         _require_server_or_skip(client)
         r = client.put("/api/settings", json={})
-        assert r.status_code == 200
+        if admin_token:
+            assert r.status_code == 401, f"Expected 401, got {r.status_code}: {r.text}"
+        else:
+            assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text}"
 
 
 def test_settings_update_invalid_token():
-    """When ADMIN_TOKEN env is set, wrong token returns 401."""
+    """Wrong token behavior depends on whether ADMIN_TOKEN env var is configured.
+
+    - If AGENTCHATBUS_ADMIN_TOKEN is set: wrong token returns 401
+    - If AGENTCHATBUS_ADMIN_TOKEN is NOT set: endpoint is open (200), even with an arbitrary header
+    """
     admin_token = os.getenv("AGENTCHATBUS_ADMIN_TOKEN")
-    if not admin_token:
-        pytest.skip("AGENTCHATBUS_ADMIN_TOKEN not set — protection not active")
     with _build_client() as client:
         _require_server_or_skip(client)
         r = client.put("/api/settings", json={}, headers={"X-Admin-Token": "wrong-token"})
-        assert r.status_code == 401
+        if admin_token:
+            assert r.status_code == 401, f"Expected 401, got {r.status_code}: {r.text}"
+        else:
+            assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text}"
 
 
 # ─── QW-05b: stop_reason validation ──────────────────────────────────────────
