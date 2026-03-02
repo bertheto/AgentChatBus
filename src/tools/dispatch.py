@@ -216,10 +216,10 @@ async def handle_thread_create(db, arguments: dict[str, Any]) -> list[types.Text
     if agent_id:
         await crud._set_agent_activity(db, agent_id, "thread_create", touch_heartbeat=True)
 
-        # Auto coordinator disabled means no automatic admin assignment.
+        # Auto administrator disabled means no automatic admin assignment.
         settings = await crud.thread_settings_get_or_create(db, result.id)
-        if settings.auto_coordinator_enabled:
-            # 设置创建者为 Thread 管理员
+        if settings.auto_administrator_enabled:
+            # Set creator as Thread administrator
             agent_info = await crud.agent_get(db, agent_id)
             if agent_info:
                 await crud.thread_settings_set_creator_admin(db, result.id, agent_id, agent_info.name)
@@ -330,11 +330,15 @@ async def handle_thread_get(db, arguments: dict[str, Any]) -> list[types.TextCon
     }))]
 
 async def handle_msg_post(db, arguments: dict[str, Any]) -> list[types.TextContent]:
+    thread_id = arguments["thread_id"]
+    
+    # Get agent_id from connection context for wait state management
+    connection_agent_id, _ = src.mcp_server.get_connection_agent()
 
     try:
         msg = await crud.msg_post(
             db,
-            thread_id=arguments["thread_id"],
+            thread_id=thread_id,
             author=arguments["author"],
             content=arguments["content"],
             expected_last_seq=arguments.get("expected_last_seq"),
@@ -343,6 +347,11 @@ async def handle_msg_post(db, arguments: dict[str, Any]) -> list[types.TextConte
             metadata=arguments.get("metadata"),
             priority=arguments.get("priority", "normal"),
         )
+        
+        # Agent posted a message - exit wait state for this thread
+        if connection_agent_id:
+            from src.main import agent_exit_wait
+            agent_exit_wait(thread_id, connection_agent_id)
     except MissingSyncFieldsError as e:
         return [types.TextContent(type="text", text=json.dumps({
             "error": "MISSING_SYNC_FIELDS",
@@ -485,6 +494,7 @@ async def handle_msg_wait(db, arguments: dict[str, Any]) -> list[types.Content]:
     thread_id = arguments["thread_id"]
     after_seq = arguments["after_seq"]
     timeout_s = arguments.get("timeout_ms", MSG_WAIT_TIMEOUT * 1000) / 1000.0
+    timeout_ms = arguments.get("timeout_ms", MSG_WAIT_TIMEOUT * 1000)
     for_agent = arguments.get("for_agent")
 
     explicit_agent_id = arguments.get("agent_id")
@@ -495,6 +505,11 @@ async def handle_msg_wait(db, arguments: dict[str, Any]) -> list[types.Content]:
     token = explicit_token or connection_token
 
     logger.info(f"[msg_wait] explicit: agent_id={explicit_agent_id}, connection: agent_id={connection_agent_id}, final_agent_id={agent_id}, for_agent={for_agent}")
+
+    # Track agent entering msg_wait state for coordination timeout detection
+    if agent_id:
+        from src.main import agent_enter_wait
+        agent_enter_wait(thread_id, agent_id, timeout_ms)
 
     # Refresh every 20 seconds to stay online during long-poll waits.
     HEARTBEAT_INTERVAL = 20.0
@@ -521,6 +536,10 @@ async def handle_msg_wait(db, arguments: dict[str, Any]) -> list[types.Content]:
         while True:
             msgs = await crud.msg_list(db, thread_id, after_seq=after_seq, include_system_prompt=False)
             if msgs:
+                # Agent received messages - exit wait state
+                if agent_id:
+                    from src.main import agent_exit_wait
+                    agent_exit_wait(thread_id, agent_id)
                 if for_agent:
                     filtered = [m for m in msgs if _metadata_targets(m, for_agent)]
                     if filtered:
@@ -542,15 +561,72 @@ async def handle_msg_wait(db, arguments: dict[str, Any]) -> list[types.Content]:
 
     token_payload = await crud.issue_reply_token(db, thread_id=thread_id, agent_id=agent_id)
     
-    # 检查是否为管理员并在超时时添加提示
+    # Timeout guidance prompts: avoid perceived stalls when no new messages arrive.
     coordination_prompt = None
     if not msgs and agent_id:  # 超时且没有新消息
         settings = await crud.thread_settings_get_or_create(db, thread_id)
-        if settings and (settings.creator_admin_id == agent_id or settings.auto_assigned_admin_id == agent_id):
+
+        # Prefer single-agent guidance when the current session is effectively alone.
+        # This prevents agents from looping msg_wait with no actionable feedback.
+        try:
+            agents = await crud.agent_list(db)
+            online_agents = [a for a in agents if a.is_online]
+            online_count = len(online_agents)
+            current_agent_online = any(a.id == agent_id for a in online_agents)
+        except Exception:
+            online_count = 0
+            current_agent_online = False
+
+        # Safety guard: if no agents are online (or current caller is not online),
+        # do not emit administrator/coordinator prompts.
+        if current_agent_online and online_count <= 1:
+            # Single-agent timeout: make the current agent the acting admin and
+            # return an explicit coordination instruction instead of silent waiting.
+            is_current_admin = (
+                settings.creator_admin_id == agent_id
+                or settings.auto_assigned_admin_id == agent_id
+            )
+
+            admin_label = agent_id
+            try:
+                agent_info = await crud.agent_get(db, agent_id)
+                if agent_info and agent_info.name:
+                    admin_label = agent_info.name
+            except Exception:
+                pass
+
+            if not is_current_admin:
+                try:
+                    await crud.thread_settings_assign_admin(db, thread_id, agent_id, admin_label)
+                    settings = await crud.thread_settings_get_or_create(db, thread_id)
+                    is_current_admin = (
+                        settings.creator_admin_id == agent_id
+                        or settings.auto_assigned_admin_id == agent_id
+                    )
+                except Exception as e:
+                    logger.warning(
+                        f"[msg_wait] Failed to assign single online agent as admin for thread {thread_id}: {e}"
+                    )
+
             coordination_prompt = {
-                "type": "admin_timeout_notice",
-                "message": f"Coordination timeout: No activity detected for {int(timeout_s)} seconds. As the Thread administrator, please issue instructions to continue the discussion."
+                "type": "single_agent_admin_notice",
+                "message": (
+                    f"No new messages for {int(timeout_s)} seconds. "
+                    f"Other agents may be offline and only you remain active. "
+                    f"You are now the thread administrator ({admin_label}); "
+                    f"please coordinate by posting a status summary, proposing next steps, "
+                    f"and assigning follow-up actions."
+                ),
             }
+        elif current_agent_online and online_count > 1:
+            if settings and (settings.creator_admin_id == agent_id or settings.auto_assigned_admin_id == agent_id):
+                coordination_prompt = {
+                    "type": "admin_timeout_notice",
+                    "message": (
+                        f"Coordination timeout: No activity detected for {int(timeout_s)} seconds. "
+                        f"As the Thread administrator, please issue instructions to continue the discussion."
+                    ),
+                }
     
     envelope = {
         "messages": [
@@ -584,6 +660,11 @@ async def handle_msg_wait(db, arguments: dict[str, Any]) -> list[types.Content]:
             "reply_token": token_payload["reply_token"],
             "reply_window": token_payload["reply_window"],
         })))
+        if coordination_prompt:
+            blocks.append(types.TextContent(type="text", text=json.dumps({
+                "type": "coordination_prompt",
+                **coordination_prompt,
+            })))
         for m in msgs:
             blocks.extend(_message_to_blocks(m))
         return blocks

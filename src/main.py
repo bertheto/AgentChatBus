@@ -48,6 +48,39 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger("agentchatbus")
+
+# ── Agent msg_wait State Tracking ─────────────────────────────────────────
+# Tracks when each agent enters msg_wait state for each thread.
+# Used to detect when all agents in a thread are waiting (coordination timeout).
+# Structure: {thread_id: {agent_id: {"entered_at": datetime, "timeout_ms": int}}}
+_thread_agent_wait_states: dict[str, dict[str, dict]] = {}
+
+def agent_enter_wait(thread_id: str, agent_id: str, timeout_ms: int = 300000) -> None:
+    """Record that an agent has entered msg_wait state for a thread."""
+    if thread_id not in _thread_agent_wait_states:
+        _thread_agent_wait_states[thread_id] = {}
+    _thread_agent_wait_states[thread_id][agent_id] = {
+        "entered_at": datetime.now(timezone.utc),
+        "timeout_ms": timeout_ms,
+    }
+    logger.debug(f"[agent_enter_wait] agent_id={agent_id} entered wait for thread={thread_id}")
+
+def agent_exit_wait(thread_id: str, agent_id: str) -> None:
+    """Remove agent from wait state (e.g., when they post a message)."""
+    if thread_id in _thread_agent_wait_states:
+        _thread_agent_wait_states[thread_id].pop(agent_id, None)
+        if not _thread_agent_wait_states[thread_id]:
+            del _thread_agent_wait_states[thread_id]
+        logger.debug(f"[agent_exit_wait] agent_id={agent_id} exited wait for thread={thread_id}")
+
+def get_thread_wait_state(thread_id: str) -> dict[str, dict]:
+    """Get all agents currently in msg_wait state for a thread."""
+    return _thread_agent_wait_states.get(thread_id, {})
+
+def clear_thread_wait_state(thread_id: str) -> None:
+    """Clear all wait states for a thread (e.g., after admin notification)."""
+    _thread_agent_wait_states.pop(thread_id, None)
+
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 # Database operation timeout (seconds)
@@ -88,110 +121,163 @@ async def _thread_timeout_loop() -> None:
 
 
 async def _admin_coordinator_loop() -> None:
-    """Background task: periodically check for thread coordination timeouts and assign admins."""
-    logger.info("Admin coordinator loop enabled: checking for coordination timeouts every 10s")
+    """Background task: check for msg_wait coordination timeouts and notify/assign admins.
+    
+    New logic (2026-03-02):
+    - Detect when all online agents in a thread are in msg_wait state for >= 60 seconds
+    - Notify the administrator to coordinate
+    - If no administrator exists, randomly assign one from online agents
+    - If only one agent remains, include "other agents offline" notice
+    """
+    logger.info("Admin coordinator loop enabled: checking for msg_wait coordination timeouts every 10s")
     while True:
         try:
             await asyncio.sleep(10)
             db = await get_db()
             
-            # Get all threads with timed out coordination
-            timeout_settings = await asyncio.wait_for(
-                crud.thread_settings_get_timeouts(db),
-                timeout=DB_TIMEOUT,
-            )
+            # Get all agents for online status check
+            all_agents = await asyncio.wait_for(crud.agent_list(db), timeout=DB_TIMEOUT)
+            online_agents = [a for a in all_agents if a.is_online]
+            online_agent_ids = {a.id for a in online_agents}
             
-            for ts in timeout_settings:
-                # Calculate elapsed time
-                elapsed = (datetime.now(timezone.utc) - ts.last_activity_time.replace(tzinfo=timezone.utc)).total_seconds()
+            # Check each thread that has agents in wait state
+            for thread_id, wait_states in list(_thread_agent_wait_states.items()):
+                if not wait_states:
+                    continue
                 
-                if elapsed >= ts.timeout_seconds:
-                    # Time to assign an admin
-                    try:
-                        # Get online agents for this thread
-                        agents = await asyncio.wait_for(
-                            crud.agent_list(db),
-                            timeout=DB_TIMEOUT,
-                        )
-                        online_agents = [a for a in agents if a.is_online]
-                        
-                        # Priority: creator_admin > auto_assigned_admin > random selection
-                        selected_agent = None
-                        assignment_type = "auto_selection"
-                        
-                        # 1. Check if creator_admin is online
-                        if ts.creator_admin_id:
-                            creator_online = next(
-                                (a for a in online_agents if a.id == ts.creator_admin_id), None
+                # Get thread settings
+                ts = await asyncio.wait_for(
+                    crud.thread_settings_get_or_create(db, thread_id),
+                    timeout=DB_TIMEOUT,
+                )
+                
+                # Skip if auto_administrator is disabled
+                if not ts.auto_administrator_enabled:
+                    continue
+                
+                # Filter wait states to only include online agents
+                online_wait_states = {
+                    agent_id: state for agent_id, state in wait_states.items()
+                    if agent_id in online_agent_ids
+                }
+                
+                if not online_wait_states:
+                    continue
+
+                # Build thread participant set from message history, then intersect online agents.
+                # If history is empty (new thread), fall back to current waiters.
+                async with db.execute(
+                    """
+                    SELECT DISTINCT author_id
+                    FROM messages
+                    WHERE thread_id = ? AND author_id IS NOT NULL AND author_id != ''
+                    """,
+                    (thread_id,),
+                ) as cur:
+                    participant_rows = await cur.fetchall()
+                thread_participant_ids = {
+                    row["author_id"]
+                    for row in participant_rows
+                    if row["author_id"] in online_agent_ids
+                }
+                if not thread_participant_ids:
+                    thread_participant_ids = set(online_wait_states.keys())
+
+                participating_online_agents = [
+                    a for a in online_agents if a.id in thread_participant_ids
+                ]
+                if not participating_online_agents:
+                    continue
+                
+                # Trigger only when all online participants of THIS thread are waiting.
+                if not thread_participant_ids.issubset(set(online_wait_states.keys())):
+                    continue
+                
+                # All online agents are in wait state - check timing
+                # Use the most recent entry time (last agent to enter wait)
+                latest_enter = max(
+                    online_wait_states[agent_id]["entered_at"]
+                    for agent_id in thread_participant_ids
+                )
+                elapsed = (datetime.now(timezone.utc) - latest_enter).total_seconds()
+                
+                if elapsed < ts.timeout_seconds:
+                    continue
+                
+                # Timeout reached - need to notify/assign admin
+                logger.info(f"Thread {thread_id}: all {len(online_wait_states)} online agents in msg_wait for {elapsed:.0f}s")
+                
+                try:
+                    # Determine the administrator
+                    admin_id = ts.creator_admin_id or ts.auto_assigned_admin_id
+                    admin_agent = None
+                    participant_count = len(participating_online_agents)
+                    # Coordination prompts are only meaningful when at least two online
+                    # participants are involved in the thread.
+                    if participant_count < 2:
+                        continue
+                    
+                    if admin_id and admin_id in thread_participant_ids:
+                        admin_agent = next((a for a in participating_online_agents if a.id == admin_id), None)
+                    
+                    if not admin_agent:
+                        # No admin or admin offline - assign randomly from online thread participants.
+                        if participating_online_agents:
+                            admin_agent = random.choice(participating_online_agents)
+                            admin_id = admin_agent.id
+                            
+                            # Update database
+                            await asyncio.wait_for(
+                                crud.thread_settings_assign_admin(
+                                    db, thread_id, admin_agent.id, admin_agent.name
+                                ),
+                                timeout=DB_TIMEOUT,
                             )
-                            if creator_online:
-                                selected_agent = creator_online
-                                assignment_type = "creator_admin"
-                                logger.info(f"Creator admin {selected_agent.name} is online for thread {ts.thread_id}")
-                        
-                        # 2. If no creator or creator offline, check auto_assigned_admin
-                        if not selected_agent and ts.auto_assigned_admin_id:
-                            auto_admin_online = next(
-                                (a for a in online_agents if a.id == ts.auto_assigned_admin_id), None
-                            )
-                            if auto_admin_online:
-                                selected_agent = auto_admin_online
-                                assignment_type = "existing_auto_admin"
-                        
-                        # 3. If still no admin, select randomly from online agents
-                        if not selected_agent:
-                            if online_agents:
-                                selected_agent = random.choice(online_agents)
-                                assignment_type = "random_online"
-                            elif agents:
-                                selected_agent = random.choice(agents)
-                                assignment_type = "random_any"
-                            else:
-                                logger.warning(f"No agents available to assign as admin for thread {ts.thread_id}")
-                                continue
-                        
-                        # Assign admin and send system message
-                        await asyncio.wait_for(
-                            crud.thread_settings_assign_admin(
-                                db,
-                                ts.thread_id,
-                                selected_agent.id,
-                                selected_agent.name,
-                            ),
-                            timeout=DB_TIMEOUT,
-                        )
-                        
-                        # Create system directive message
-                        system_msg_content = (
-                            f"You have been automatically selected as the coordinator for Thread {ts.thread_id}. "
-                            f"Please begin coordination: (1) Take a poll asking other agents about their current status; "
-                            f"(2) Provide a summary of completed items and next steps; "
-                            f"(3) Assign concrete tasks if discussion stalls. "
-                            f"You can modify the timeout setting if needed."
-                        )
-                        metadata = {
-                            "thread_id": ts.thread_id,
-                            "assigned_at": datetime.now(timezone.utc).isoformat(),
-                            "assignment_type": assignment_type,
-                            "timeout_remaining_seconds": ts.timeout_seconds,
-                        }
-                        
-                        # Post system message
-                        await asyncio.wait_for(
-                            crud._msg_create_system(
-                                db,
-                                thread_id=ts.thread_id,
-                                content=system_msg_content,
-                                metadata=metadata,
-                            ),
-                            timeout=DB_TIMEOUT,
-                        )
-                        
-                        logger.info(f"Assigned admin {selected_agent.name} ({selected_agent.id}) to thread {ts.thread_id} via {assignment_type}")
-                    except asyncio.TimeoutError:
-                        logger.error(f"Timeout while assigning admin for thread {ts.thread_id}")
-                    except Exception as e:
-                        logger.error(f"Error assigning admin for thread {ts.thread_id}: {e}")
+                            logger.info(f"Assigned admin {admin_agent.name} to thread {thread_id} (random selection)")
+                    
+                    if not admin_agent:
+                        logger.warning(f"No online agents to notify for thread {thread_id}")
+                        continue
+                    
+                    # Build explicit administrator-directed notification.
+                    admin_label = admin_agent.display_name or admin_agent.name or admin_agent.id
+                    system_msg_content = (
+                        f"Coordination timeout: all online participants have been in msg_wait state for {int(elapsed)} seconds. "
+                        f"Administrator {admin_label} (id: {admin_agent.id}) should now lead coordination: "
+                        f"collect status updates, summarize progress, and assign next actions."
+                    )
+                    
+                    metadata = {
+                        "thread_id": thread_id,
+                        "admin_id": admin_agent.id,
+                        "admin_name": admin_agent.name,
+                        "timeout_seconds": int(elapsed),
+                        "online_agents_count": participant_count,
+                        "is_single_agent": False,
+                        "triggered_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                    
+                    # Post system message
+                    await asyncio.wait_for(
+                        crud._msg_create_system(
+                            db,
+                            thread_id=thread_id,
+                            content=system_msg_content,
+                            metadata=metadata,
+                        ),
+                        timeout=DB_TIMEOUT,
+                    )
+                    
+                    # Clear wait states for this thread to avoid repeated notifications
+                    clear_thread_wait_state(thread_id)
+                    
+                    logger.info(f"Sent coordination timeout notice to admin {admin_agent.name} for thread {thread_id}")
+                    
+                except asyncio.TimeoutError:
+                    logger.error(f"Timeout processing coordination for thread {thread_id}")
+                except Exception as e:
+                    logger.error(f"Error processing coordination for thread {thread_id}: {e}")
+                    
         except asyncio.CancelledError:
             break
         except Exception as exc:
@@ -1333,7 +1419,8 @@ async def api_get_thread_settings(thread_id: str):
     
     return {
         "thread_id": settings.thread_id,
-        "auto_coordinator_enabled": settings.auto_coordinator_enabled,
+        "auto_administrator_enabled": settings.auto_administrator_enabled,
+        "auto_coordinator_enabled": settings.auto_administrator_enabled,  # Backward compatibility
         "timeout_seconds": settings.timeout_seconds,
         "last_activity_time": settings.last_activity_time.isoformat(),
         "auto_assigned_admin_id": settings.auto_assigned_admin_id,
@@ -1345,7 +1432,8 @@ async def api_get_thread_settings(thread_id: str):
 
 
 class ThreadSettingsUpdate(BaseModel):
-    auto_coordinator_enabled: bool | None = None
+    auto_administrator_enabled: bool | None = None
+    auto_coordinator_enabled: bool | None = None  # Backward compatibility alias
     timeout_seconds: int | None = None
     model_config = ConfigDict(extra="ignore")
 
@@ -1363,11 +1451,14 @@ async def api_update_thread_settings(thread_id: str, body: ThreadSettingsUpdate)
         raise HTTPException(status_code=404, detail="Thread not found")
     
     try:
+        # Support both new and legacy field names
+        auto_admin_value = body.auto_administrator_enabled if body.auto_administrator_enabled is not None else body.auto_coordinator_enabled
+        
         settings = await asyncio.wait_for(
             crud.thread_settings_update(
                 db,
                 thread_id,
-                auto_coordinator_enabled=body.auto_coordinator_enabled,
+                auto_administrator_enabled=auto_admin_value,
                 timeout_seconds=body.timeout_seconds,
             ),
             timeout=DB_TIMEOUT,
@@ -1379,7 +1470,8 @@ async def api_update_thread_settings(thread_id: str, body: ThreadSettingsUpdate)
     
     return {
         "thread_id": settings.thread_id,
-        "auto_coordinator_enabled": settings.auto_coordinator_enabled,
+        "auto_administrator_enabled": settings.auto_administrator_enabled,
+        "auto_coordinator_enabled": settings.auto_administrator_enabled,  # Backward compatibility
         "timeout_seconds": settings.timeout_seconds,
         "last_activity_time": settings.last_activity_time.isoformat(),
         "auto_assigned_admin_id": settings.auto_assigned_admin_id,

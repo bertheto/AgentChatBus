@@ -722,7 +722,11 @@ Note: Thread name is the topic label. Thread ID is the unique identifier.`;
       if (m.role === 'system' && m.author === 'system') {
         const pill = document.createElement('div');
         pill.className = 'msg-sys-event';
-        pill.textContent = m.content;
+        const sentAt = fmtTime(m.created_at);
+        pill.textContent = sentAt ? `${sentAt}  ${m.content}` : m.content;
+        if (m.created_at) {
+          pill.title = `sent at ${m.created_at}`;
+        }
         box.appendChild(pill);
         return;
       }

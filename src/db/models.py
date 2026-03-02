@@ -96,7 +96,7 @@ class ThreadSettings:
     """Settings for thread-level coordination and automation."""
     id: int
     thread_id: str
-    auto_coordinator_enabled: bool = False
+    auto_administrator_enabled: bool = False  # Renamed from auto_coordinator_enabled
     timeout_seconds: int = 60               # 10-300 seconds
     last_activity_time: datetime = field(default_factory=lambda: datetime.now())
     auto_assigned_admin_id: Optional[str] = None
@@ -107,3 +107,12 @@ class ThreadSettings:
     creator_assignment_time: Optional[datetime] = None
     created_at: datetime = field(default_factory=lambda: datetime.now())
     updated_at: datetime = field(default_factory=lambda: datetime.now())
+    
+    # Backward compatibility alias
+    @property
+    def auto_coordinator_enabled(self) -> bool:
+        return self.auto_administrator_enabled
+
+    @auto_coordinator_enabled.setter
+    def auto_coordinator_enabled(self, value: bool) -> None:
+        self.auto_administrator_enabled = bool(value)

@@ -185,7 +185,8 @@
     try {
       const res = await api(`/api/threads/${threadId}/settings`);
       if (res) {
-        document.getElementById("ts-auto-coordinator").checked = res.auto_coordinator_enabled ?? false;
+        document.getElementById("ts-auto-coordinator").checked =
+          res.auto_administrator_enabled ?? res.auto_coordinator_enabled ?? false;
         document.getElementById("ts-timeout-seconds").value = res.timeout_seconds || 60;
       }
     } catch (err) {
@@ -199,10 +200,10 @@
         // Show current admin (creator or auto-assigned)
         const currentAdminEl = document.getElementById("ts-current-admin");
         if (adminRes.admin_name) {
-          const typeLabel = adminRes.admin_type === "creator" ? " (Creator)" : " (Auto)";
+          const typeLabel = adminRes.admin_type === "creator" ? "（创建者）" : "（自动）";
           currentAdminEl.textContent = adminRes.admin_name + typeLabel;
         } else {
-          currentAdminEl.textContent = "None assigned";
+          currentAdminEl.textContent = "未分配";
         }
       }
     } catch (err) {
@@ -216,7 +217,7 @@
       if (settingsRes && settingsRes.creator_admin_name) {
         creatorAdminEl.textContent = settingsRes.creator_admin_name;
       } else {
-        creatorAdminEl.textContent = "None";
+        creatorAdminEl.textContent = "无";
       }
     } catch (err) {
       console.error("Error loading creator admin:", err);
@@ -235,22 +236,33 @@
       return;
     }
 
-    const autoCoordinator = document.getElementById("ts-auto-coordinator").checked;
+    const autoAdministratorEnabled = document.getElementById("ts-auto-coordinator").checked;
     const timeoutSeconds = parseInt(document.getElementById("ts-timeout-seconds").value, 10);
 
     // Validation
     if (isNaN(timeoutSeconds) || timeoutSeconds < 10 || timeoutSeconds > 300) {
-      alert("Timeout must be between 10 and 300 seconds");
+      alert("超时时间必须在 10 到 300 秒之间");
       return;
     }
 
     const msg = document.getElementById("thread-settings-message");
+    const cancelBtn = document.getElementById("ts-btn-cancel");
+    const saveBtn = document.getElementById("ts-btn-save");
+
+    const setSubmittingState = (submitting) => {
+      if (cancelBtn) cancelBtn.disabled = submitting;
+      if (saveBtn) saveBtn.disabled = submitting;
+    };
+    let keepDisabledUntilClose = false;
 
     try {
+      setSubmittingState(true);
+
       const res = await api(`/api/threads/${threadId}/settings`, {
         method: "POST",
         body: JSON.stringify({
-          auto_coordinator_enabled: autoCoordinator,
+          auto_administrator_enabled: autoAdministratorEnabled,
+          auto_coordinator_enabled: autoAdministratorEnabled,
           timeout_seconds: timeoutSeconds,
         }),
       });
@@ -270,12 +282,19 @@
       msg.textContent = "Settings saved successfully!";
       msg.style.display = "block";
       msg.style.color = "var(--green)";
-      setTimeout(() => closeThreadSettingsModal(), 1500);
+      keepDisabledUntilClose = true;
+      setTimeout(() => {
+        setSubmittingState(false);
+        closeThreadSettingsModal();
+      }, 1500);
     } catch (err) {
       console.error("Error saving thread settings:", err);
       msg.textContent = "Error saving settings";
       msg.style.display = "block";
       msg.style.color = "var(--red, #f05555)";
+    } finally {
+      if (keepDisabledUntilClose) return;
+      setSubmittingState(false);
     }
   }
 
@@ -292,13 +311,20 @@
   };
 
   // Global wrappers for onclick handlers
+  function _resolveApi() {
+    if (window.AcbApi && typeof window.AcbApi.api === "function") {
+      return window.AcbApi.api;
+    }
+    throw new Error("API layer is not ready: window.AcbApi.api is unavailable");
+  }
+
   window.openThreadSettingsModal = function() {
-    const api = window.sharedApi || console.error;
+    const api = _resolveApi();
     openThreadSettingsModal(api);
   };
   window.closeThreadSettingsModal = closeThreadSettingsModal;
   window.submitThreadSettings = function() {
-    const api = window.sharedApi || console.error;
+    const api = _resolveApi();
     submitThreadSettings(api);
   };
 })();

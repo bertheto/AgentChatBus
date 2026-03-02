@@ -418,7 +418,7 @@ async def thread_settings_get_or_create(
         return ThreadSettings(
             id=row["id"],
             thread_id=row["thread_id"],
-            auto_coordinator_enabled=bool(row["auto_coordinator_enabled"]),
+            auto_administrator_enabled=bool(row["auto_administrator_enabled"]),
             timeout_seconds=row["timeout_seconds"],
             last_activity_time=_parse_dt(row["last_activity_time"]),
             auto_assigned_admin_id=row["auto_assigned_admin_id"],
@@ -436,10 +436,10 @@ async def thread_settings_get_or_create(
     await db.execute(
         """
         INSERT INTO thread_settings 
-        (thread_id, auto_coordinator_enabled, timeout_seconds, last_activity_time, created_at, updated_at)
+        (thread_id, auto_administrator_enabled, timeout_seconds, last_activity_time, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?, ?)
         """,
-        (thread_id, False, 60, now, now, now),
+        (thread_id, True, 60, now, now, now),
     )
     await db.commit()
     
@@ -453,7 +453,7 @@ async def thread_settings_get_or_create(
     return ThreadSettings(
         id=row["id"],
         thread_id=row["thread_id"],
-        auto_coordinator_enabled=bool(row["auto_coordinator_enabled"]),
+        auto_administrator_enabled=bool(row["auto_administrator_enabled"]),
         timeout_seconds=row["timeout_seconds"],
         last_activity_time=_parse_dt(row["last_activity_time"]),
         auto_assigned_admin_id=row["auto_assigned_admin_id"],
@@ -470,10 +470,15 @@ async def thread_settings_get_or_create(
 async def thread_settings_update(
     db: aiosqlite.Connection,
     thread_id: str,
+    auto_administrator_enabled: Optional[bool] = None,
     auto_coordinator_enabled: Optional[bool] = None,
     timeout_seconds: Optional[int] = None,
 ) -> ThreadSettings:
     """Update thread settings for coordination and timeouts."""
+    # Backward compatibility: accept legacy field name.
+    if auto_administrator_enabled is None and auto_coordinator_enabled is not None:
+        auto_administrator_enabled = auto_coordinator_enabled
+
     # Validate timeout_seconds if provided
     if timeout_seconds is not None:
         if timeout_seconds < 10 or timeout_seconds > 300:
@@ -483,9 +488,9 @@ async def thread_settings_update(
     updates = []
     values = []
     
-    if auto_coordinator_enabled is not None:
-        updates.append("auto_coordinator_enabled = ?")
-        values.append(1 if auto_coordinator_enabled else 0)
+    if auto_administrator_enabled is not None:
+        updates.append("auto_administrator_enabled = ?")
+        values.append(1 if auto_administrator_enabled else 0)
     
     if timeout_seconds is not None:
         updates.append("timeout_seconds = ?")
@@ -543,7 +548,7 @@ async def thread_settings_assign_admin(
             admin_assignment_time = ?,
             updated_at = ?
         WHERE thread_id = ?
-          AND auto_coordinator_enabled = 1
+          AND auto_administrator_enabled = 1
         """,
         (admin_id, admin_name, now, now, thread_id),
     )
@@ -571,7 +576,7 @@ async def thread_settings_set_creator_admin(
             creator_assignment_time = ?,
             updated_at = ?
         WHERE thread_id = ?
-          AND auto_coordinator_enabled = 1
+          AND auto_administrator_enabled = 1
         """,
         (creator_id, creator_name, now, now, thread_id),
     )
@@ -591,7 +596,7 @@ async def thread_settings_get_timeouts(
     async with db.execute(
         """
         SELECT * FROM thread_settings 
-        WHERE auto_coordinator_enabled = 1
+        WHERE auto_administrator_enabled = 1
         AND auto_assigned_admin_id IS NULL
         AND (strftime('%s', ?) - strftime('%s', last_activity_time)) >= timeout_seconds
         """,
@@ -604,7 +609,7 @@ async def thread_settings_get_timeouts(
         result.append(ThreadSettings(
             id=row["id"],
             thread_id=row["thread_id"],
-            auto_coordinator_enabled=bool(row["auto_coordinator_enabled"]),
+            auto_administrator_enabled=bool(row["auto_administrator_enabled"]),
             timeout_seconds=row["timeout_seconds"],
             last_activity_time=_parse_dt(row["last_activity_time"]),
             auto_assigned_admin_id=row["auto_assigned_admin_id"],

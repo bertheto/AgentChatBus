@@ -55,6 +55,14 @@ async def _add_column_if_missing(
         raise
 
 
+async def _table_has_column(db: aiosqlite.Connection, table: str, column: str) -> bool:
+    """Return True when `table` has `column` (case-insensitive)."""
+    async with db.execute(f"PRAGMA table_info({table})") as cur:
+        rows = await cur.fetchall()
+    wanted = column.lower()
+    return any(str(r[1]).lower() == wanted for r in rows)
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -290,7 +298,7 @@ async def init_schema(db: aiosqlite.Connection) -> None:
         CREATE TABLE IF NOT EXISTS thread_settings (
             id                          INTEGER PRIMARY KEY AUTOINCREMENT,
             thread_id                   TEXT UNIQUE NOT NULL REFERENCES threads(id),
-            auto_coordinator_enabled    INTEGER NOT NULL DEFAULT 0,
+            auto_administrator_enabled  INTEGER NOT NULL DEFAULT 1,  -- Renamed from auto_coordinator_enabled
             timeout_seconds             INTEGER NOT NULL DEFAULT 60 CHECK (timeout_seconds >= 10 AND timeout_seconds <= 300),
             last_activity_time          TEXT NOT NULL,
             auto_assigned_admin_id      TEXT,
@@ -444,6 +452,36 @@ async def init_schema(db: aiosqlite.Connection) -> None:
         ("creator_assignment_time", "TEXT"),
     ]:
         await _add_column_if_missing(db, "thread_settings", col, typedef)
+
+    # Migration: rename thread_settings.auto_coordinator_enabled -> auto_administrator_enabled
+    # for existing DBs created before the terminology update.
+    has_new_admin_col = await _table_has_column(db, "thread_settings", "auto_administrator_enabled")
+    has_legacy_coord_col = await _table_has_column(db, "thread_settings", "auto_coordinator_enabled")
+    if not has_new_admin_col and has_legacy_coord_col:
+        await _add_column_if_missing(
+            db,
+            "thread_settings",
+            "auto_administrator_enabled",
+            "INTEGER NOT NULL DEFAULT 0",
+        )
+        try:
+            await db.execute(
+                """
+                UPDATE thread_settings
+                SET auto_administrator_enabled = auto_coordinator_enabled
+                """
+            )
+            await db.commit()
+            logger.info(
+                "Migration: copied thread_settings.auto_coordinator_enabled values "
+                "to auto_administrator_enabled"
+            )
+        except Exception as e:
+            logger.error(
+                "Migration failed while copying auto_coordinator_enabled -> "
+                f"auto_administrator_enabled: {e}"
+            )
+            raise
 
     # Migration: Add priority column to messages (UP-16)
     await _add_column_if_missing(db, "messages", "priority", "TEXT NOT NULL DEFAULT 'normal'")

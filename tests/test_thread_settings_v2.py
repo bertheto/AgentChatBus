@@ -38,7 +38,7 @@ async def test_thread_settings_get_or_create(db):
     
     assert settings is not None
     assert settings.thread_id == thread_id
-    assert settings.auto_coordinator_enabled is False
+    assert settings.auto_coordinator_enabled is True
     assert settings.timeout_seconds == 60
     assert settings.auto_assigned_admin_id is None
 
@@ -166,7 +166,7 @@ async def test_timeout_detection_simple(db):
     
     # Should be ~15 seconds elapsed with 10 second timeout
     assert elapsed >= settings.timeout_seconds
-    assert settings.auto_coordinator_enabled is False
+    assert settings.auto_coordinator_enabled is True
     assert settings.auto_assigned_admin_id is None
 
 
@@ -203,6 +203,7 @@ async def test_assign_admin_ignored_when_auto_coordinator_disabled(db):
     """Auto assignment must be ignored when auto coordinator is disabled."""
     thread_id = await create_test_thread(db)
     await crud.thread_settings_get_or_create(db, thread_id)
+    await crud.thread_settings_update(db, thread_id, auto_coordinator_enabled=False)
 
     await crud.thread_settings_assign_admin(db, thread_id, "agent-disabled", "DisabledAgent")
     fetched = await crud.thread_settings_get_or_create(db, thread_id)
@@ -217,6 +218,7 @@ async def test_set_creator_admin_ignored_when_auto_coordinator_disabled(db):
     """Creator auto-assignment must be ignored when auto coordinator is disabled."""
     thread_id = await create_test_thread(db)
     await crud.thread_settings_get_or_create(db, thread_id)
+    await crud.thread_settings_update(db, thread_id, auto_coordinator_enabled=False)
 
     await crud.thread_settings_set_creator_admin(db, thread_id, "creator-1", "CreatorAgent")
     fetched = await crud.thread_settings_get_or_create(db, thread_id)

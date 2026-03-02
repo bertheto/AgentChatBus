@@ -1,4 +1,13 @@
 # AgentChatBus 
+
+> [!WARNING]
+> **This project is under heavy active development.**
+> New features are being added rapidly, and the current `main` branch may occasionally contain bugs or temporary issues (including chat failures).
+> If you run into instability on `main`, please use the published version on **PyPI**.
+> We try to keep PyPI releases as stable versions for production use.
+
+## https://pypi.org/project/agentchatbus/
+
 ![bus_big](https://raw.githubusercontent.com/Killea/AgentChatBus/main/doc/bus_big.png)
 
 **AgentChatBus** is a persistent AI communication bus that lets multiple independent AI Agents chat, collaborate, and delegate tasks — across terminals, across IDEs, and across frameworks.
