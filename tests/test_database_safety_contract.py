@@ -86,3 +86,13 @@ def test_conftest_enforces_database_guardrails() -> None:
     conftest = _read_text(Path("tests/conftest.py"))
     assert "def enforce_test_database" in conftest
     assert "AGENTCHATBUS_DB" in conftest
+
+
+def test_conftest_enforces_non_production_test_port() -> None:
+    conftest = _read_text(Path("tests/conftest.py"))
+    assert "TEST_PORT" in conftest
+    assert "if TEST_PORT == 39765" in conftest
+
+    m = re.search(r"TEST_PORT\s*=\s*(\d+)", conftest)
+    assert m, "tests/conftest.py must define TEST_PORT"
+    assert int(m.group(1)) != 39765, "TEST_PORT must never be production port 39765"

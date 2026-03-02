@@ -9,7 +9,7 @@ import pytest
 
 # NOTE: This test suite must run against a dedicated test server instance.
 # Do NOT default to AGENTCHATBUS_BASE_URL (which may point at a production/dev server).
-BASE_URL = os.getenv("AGENTCHATBUS_TEST_BASE_URL", "http://127.0.0.1:39766")
+BASE_URL = os.getenv("AGENTCHATBUS_TEST_BASE_URL", "http://127.0.0.1:39769")
 
 
 def _build_client() -> httpx.Client:

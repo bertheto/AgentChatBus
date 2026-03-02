@@ -10,8 +10,8 @@ import httpx
 import pytest
 import uuid
 
-# Use the same test port as conftest.py (39766) to connect to test server
-BASE_URL = os.getenv("AGENTCHATBUS_TEST_BASE_URL", "http://127.0.0.1:39766")
+# Use the same test port as conftest.py (39769) to connect to test server.
+BASE_URL = os.getenv("AGENTCHATBUS_TEST_BASE_URL", "http://127.0.0.1:39769")
 
 
 def _build_client() -> httpx.Client:

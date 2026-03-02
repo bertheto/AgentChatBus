@@ -9,11 +9,12 @@ import signal
 import sys
 import time
 import subprocess
+import ast
 from pathlib import Path
 import httpx
 import pytest
 
-# Use a dedicated test port separate from the production port (39766) to avoid conflicts.
+# Use a dedicated test port separate from the production port (39765) to avoid conflicts.
 # See UP-20 / Integration Testing — Port Conflict Resolution in agentchatbus-upstream-improvements.md
 TEST_PORT = 39769
 BASE_URL = f"http://127.0.0.1:{TEST_PORT}"
@@ -21,11 +22,73 @@ BASE_URL = f"http://127.0.0.1:{TEST_PORT}"
 TEST_DB_PATH = os.path.join(os.path.dirname(__file__), "data", "bus_test.db")
 _SERVER_PROCESS = None
 
+if TEST_PORT == 39765:
+    raise RuntimeError("TEST_PORT must never be the production port 39765.")
+
 # Hard guardrails: tests must never accidentally use a production DB.
 # Set defaults early so modules that read config at import time see test values.
-os.environ.setdefault("AGENTCHATBUS_PORT", str(TEST_PORT))
+# Set test port explicitly for this pytest process so imports never see production port.
+os.environ["AGENTCHATBUS_PORT"] = str(TEST_PORT)
 os.environ.setdefault("AGENTCHATBUS_TEST_BASE_URL", BASE_URL)
 os.environ.setdefault("AGENTCHATBUS_DB", TEST_DB_PATH)
+
+
+def _enforce_no_popen_pipe_in_conftest() -> None:
+    """Hard guardrail: never use subprocess.PIPE for the test server.
+
+    Why:
+    - If the server is started with stdout/stderr=PIPE and the test runner does
+      not continuously drain those pipes, the child process can block once the
+      OS pipe buffer fills.
+    - That manifests as intermittent hangs (pytest appears stuck) or
+      httpx.ReadTimeouts when tests send HTTP requests to the server.
+
+    This check intentionally fails fast if someone reintroduces PIPE in this
+    fixture.
+    """
+
+    try:
+        source = Path(__file__).read_text(encoding="utf-8")
+    except Exception:
+        return
+
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return
+
+    def _is_subprocess_pipe(node: ast.AST) -> bool:
+        # Matches: subprocess.PIPE
+        return (
+            isinstance(node, ast.Attribute)
+            and isinstance(node.value, ast.Name)
+            and node.value.id == "subprocess"
+            and node.attr == "PIPE"
+        )
+
+    for n in ast.walk(tree):
+        if not isinstance(n, ast.Call):
+            continue
+
+        # Match subprocess.Popen(...)
+        is_popen = (
+            isinstance(n.func, ast.Attribute)
+            and isinstance(n.func.value, ast.Name)
+            and n.func.value.id == "subprocess"
+            and n.func.attr == "Popen"
+        )
+        if not is_popen:
+            continue
+
+        for kw in n.keywords:
+            if kw.arg in {"stdout", "stderr"} and kw.value is not None and _is_subprocess_pipe(kw.value):
+                raise RuntimeError(
+                    "tests/conftest.py must not start the test server with subprocess.PIPE "
+                    "(stdout/stderr). This can deadlock and cause intermittent pytest hangs."
+                )
+
+
+_enforce_no_popen_pipe_in_conftest()
 
 # Script-style checks that are intended to run manually against a dedicated server
 # should not be collected by pytest's normal test discovery.
@@ -79,6 +142,8 @@ def enforce_test_database() -> None:
 def server():
     """Start the AgentChatBus server for the test session with test-specific config."""
     global _SERVER_PROCESS
+    started_here = False
+    server_ready = False
     
     # Set environment variables for test server
     test_env = os.environ.copy()
@@ -111,66 +176,75 @@ def server():
                 and react_check.status_code == 404
                 and "Message" in str(react_detail)
             ):
-                yield
-                return
+                server_ready = True
     except Exception:
         pass
 
-    # Start the server with test configuration
-    print(f"\nStarting AgentChatBus test server at {BASE_URL}...")
-    print(f"Using test database: {TEST_DB_PATH}")
-    _SERVER_PROCESS = subprocess.Popen(
-        [sys.executable, "-m", "src.main"],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        env=test_env
-    )
-    
-    # Wait for server to be ready
-    max_retries = 30
-    for i in range(max_retries):
-        try:
-            time.sleep(0.5)
-            with httpx.Client(base_url=BASE_URL, timeout=5) as client:
-                resp = client.get("/api/threads")
-                if resp.status_code < 500:
-                    print(f"Test server started successfully (attempt {i+1})")
-                    yield
-                    return
-        except Exception:
-            if i == max_retries - 1:
-                raise Exception(f"Server failed to start after {max_retries} attempts")
-            continue
-    
-    yield
-    
-    # Cleanup: stop the server gracefully
-    if _SERVER_PROCESS:
-        print("Stopping test server...")
-        try:
-            # First try graceful shutdown with Ctrl+C
-            if os.name == 'nt':  # Windows
-                _SERVER_PROCESS.send_signal(signal.CTRL_C_EVENT)
-            else:
-                _SERVER_PROCESS.send_signal(signal.SIGTERM)
-            
-            # Wait up to 3 seconds for graceful shutdown
-            _SERVER_PROCESS.wait(timeout=3)
-        except (subprocess.TimeoutExpired, AttributeError, OSError):
-            # If graceful shutdown fails, force kill
+    if not server_ready:
+        # Start the server with test configuration
+        print(f"\nStarting AgentChatBus test server at {BASE_URL}...")
+        print(f"Using test database: {TEST_DB_PATH}")
+
+        # IMPORTANT: do NOT set stdout/stderr to subprocess.PIPE here.
+        # Pytest does not drain those pipes continuously, and once the pipe
+        # buffer fills the server can block (deadlock), leading to flaky
+        # httpx.ReadTimeout errors and the appearance that pytest has "hung".
+        _SERVER_PROCESS = subprocess.Popen(
+            [sys.executable, "-m", "src.main"],
+            env=test_env
+        )
+        started_here = True
+
+        # Wait for server to be ready
+        max_retries = 30
+        for i in range(max_retries):
             try:
-                _SERVER_PROCESS.terminate()
-                _SERVER_PROCESS.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                _SERVER_PROCESS.kill()
-                _SERVER_PROCESS.wait()
-        print("Test server stopped")
+                time.sleep(0.5)
+                with httpx.Client(base_url=BASE_URL, timeout=5) as client:
+                    resp = client.get("/api/threads")
+                    if resp.status_code < 500:
+                        print(f"Test server started successfully (attempt {i+1})")
+                        server_ready = True
+                        break
+            except Exception:
+                if i == max_retries - 1:
+                    raise Exception(f"Server failed to start after {max_retries} attempts")
+                continue
+
+    if not server_ready:
+        raise RuntimeError(f"Test server is not ready at {BASE_URL}")
     
-    # Optionally clean up test database
-    if os.path.exists(TEST_DB_PATH):
-        try:
-            os.remove(TEST_DB_PATH)
-            print(f"Cleaned up test database: {TEST_DB_PATH}")
-        except Exception as e:
-            print(f"Warning: Could not remove test database: {e}")
+    try:
+        yield
+    finally:
+        # Cleanup only for process started by this fixture.
+        if started_here and _SERVER_PROCESS:
+            print("Stopping test server...")
+            try:
+                # On Windows, CTRL_C_EVENT can interrupt the pytest parent process.
+                # Use terminate() for reliable child-only shutdown.
+                if os.name == 'nt':
+                    _SERVER_PROCESS.terminate()
+                else:
+                    _SERVER_PROCESS.send_signal(signal.SIGTERM)
+
+                # Wait up to 3 seconds for graceful shutdown
+                _SERVER_PROCESS.wait(timeout=3)
+            except (subprocess.TimeoutExpired, AttributeError, OSError):
+                # If graceful shutdown fails, force kill
+                try:
+                    _SERVER_PROCESS.terminate()
+                    _SERVER_PROCESS.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    _SERVER_PROCESS.kill()
+                    _SERVER_PROCESS.wait()
+            print("Test server stopped")
+            _SERVER_PROCESS = None
+
+        # Optionally clean up test database created by this fixture run.
+        if started_here and os.path.exists(TEST_DB_PATH):
+            try:
+                os.remove(TEST_DB_PATH)
+                print(f"Cleaned up test database: {TEST_DB_PATH}")
+            except Exception as e:
+                print(f"Warning: Could not remove test database: {e}")
