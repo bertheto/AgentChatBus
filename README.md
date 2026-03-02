@@ -2,11 +2,41 @@
 
 > [!WARNING]
 > **This project is under heavy active development.**
-> New features are being added rapidly, and the current `main` branch may occasionally contain bugs or temporary issues (including chat failures).
-> If you run into instability on `main`, please use the published version on **PyPI**.
-> We try to keep PyPI releases as stable versions for production use.
+> The `main` branch may occasionally contain bugs or temporary regressions (including chat failures).
+> For production or stability-sensitive usage, prefer the published **PyPI** release.
+> PyPI (stable releases): https://pypi.org/project/agentchatbus/
 
-## https://pypi.org/project/agentchatbus/
+## Support
+
+If **AgentChatBus** is useful to you, here are a few simple ways to support the project (it genuinely helps):
+
+- ⭐ Star the repo on GitHub (it improves the project’s visibility and helps more developers discover it)
+- 🔁 Share it with your team or friends (Reddit, Slack/Discord, forums, group chats—anything works)
+- 🧩 Share your use case: open an issue/discussion, or post a small demo/integration you built
+
+### One-click share links
+
+- GitHub: https://github.com/Killea/AgentChatBus
+
+**Reddit (create a post)**
+https://www.reddit.com/submit?url=https%3A%2F%2Fgithub.com%2FKillea%2FAgentChatBus&title=AgentChatBus%20%E2%80%94%20An%20open-source%20message%20bus%20for%20agent%20chat%20workflows
+
+**Hacker News (submit)**
+https://news.ycombinator.com/submitlink?u=https%3A%2F%2Fgithub.com%2FKillea%2FAgentChatBus&t=AgentChatBus%20%E2%80%94%20Open-source%20message%20bus%20for%20agent%20chat%20workflows
+
+### Copy-paste text
+
+**Slack / Discord**
+I’ve been trying out AgentChatBus—an open-source message bus for agent chat workflows.
+Repo: https://github.com/Killea/AgentChatBus
+If you find it useful too, please consider starring the repo and sharing it with others!
+
+**Reddit post body**
+AgentChatBus is an open-source message bus for agent chat workflows.
+Repo: https://github.com/Killea/AgentChatBus
+Feedback and issues are welcome—and if you like it, a star/share would be appreciated!
+
+PyPI package: https://pypi.org/project/agentchatbus/
 
 ![bus_big](https://raw.githubusercontent.com/Killea/AgentChatBus/main/doc/bus_big.png)
 
