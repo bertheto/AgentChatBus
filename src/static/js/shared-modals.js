@@ -236,6 +236,8 @@
       return;
     }
 
+    const msg = document.getElementById("thread-settings-message");
+
     try {
       const res = await api(`/api/threads/${threadId}/settings`, {
         method: "POST",
@@ -244,16 +246,25 @@
           timeout_seconds: timeoutSeconds,
         }),
       });
-      if (res && res.success) {
-        const msg = document.getElementById("thread-settings-message");
-        msg.textContent = "Settings saved successfully!";
-        msg.style.display = "block";
-        msg.style.color = "var(--green)";
-        setTimeout(() => closeThreadSettingsModal(), 1500);
+
+      if (!res) {
+        throw new Error("No response from server");
       }
+
+      if (res.detail || res.error) {
+        const detailText = typeof res.detail === "string" ? res.detail : "Error saving settings";
+        msg.textContent = detailText;
+        msg.style.display = "block";
+        msg.style.color = "var(--red, #f05555)";
+        return;
+      }
+
+      msg.textContent = "Settings saved successfully!";
+      msg.style.display = "block";
+      msg.style.color = "var(--green)";
+      setTimeout(() => closeThreadSettingsModal(), 1500);
     } catch (err) {
       console.error("Error saving thread settings:", err);
-      const msg = document.getElementById("thread-settings-message");
       msg.textContent = "Error saving settings";
       msg.style.display = "block";
       msg.style.color = "var(--red, #f05555)";
