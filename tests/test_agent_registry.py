@@ -83,3 +83,25 @@ async def test_agent_resume_rejects_bad_token():
         await crud.agent_resume(db, agent.id, "bad-token")
 
     await db.close()
+
+
+@pytest.mark.asyncio
+async def test_agent_thread_create_updates_activity():
+    """RQ-001: thread_create 后 agent last_activity 应更新为 'thread_create'，
+    last_heartbeat 也应同时更新（touch_heartbeat=True）"""
+    db = await aiosqlite.connect(":memory:")
+    db.row_factory = aiosqlite.Row
+    await init_schema(db)
+
+    agent = await crud.agent_register(db, ide="VSCode", model="GPT")
+    assert agent.last_activity == "registered"  # 初始状态
+    initial_heartbeat = agent.last_heartbeat
+
+    # 模拟 dispatch.handle_thread_create 中的 activity tracking
+    await crud._set_agent_activity(db, agent.id, "thread_create", touch_heartbeat=True)
+
+    refreshed = (await crud.agent_list(db))[0]
+    assert refreshed.last_activity == "thread_create", "Activity should be updated to 'thread_create'"
+    assert refreshed.last_heartbeat is not None, "last_heartbeat should be set"
+
+    await db.close()

@@ -208,6 +208,12 @@ async def handle_thread_create(db, arguments: dict[str, Any]) -> list[types.Text
         )
     except ValueError as e:
         return [types.TextContent(type="text", text=json.dumps({"error": str(e)}))]
+    
+    # RQ-001: 同步 agent 在线状态 — thread_create 作为 activity 触发点
+    agent_id, _ = src.mcp_server.get_connection_agent()
+    if agent_id:
+        await crud._set_agent_activity(db, agent_id, "thread_create", touch_heartbeat=True)
+    
     return [types.TextContent(type="text", text=json.dumps({
         "thread_id": result.id, "topic": result.topic, "status": result.status,
         "system_prompt": result.system_prompt, "template_id": result.template_id,
