@@ -8,6 +8,7 @@ import os
 import signal
 import time
 import subprocess
+from pathlib import Path
 import httpx
 import pytest
 
@@ -18,9 +19,58 @@ BASE_URL = f"http://127.0.0.1:{TEST_PORT}"
 TEST_DB_PATH = os.path.join(os.path.dirname(__file__), "data", "bus_test.db")
 _SERVER_PROCESS = None
 
+# Hard guardrails: tests must never accidentally use a production DB.
+# Set defaults early so modules that read config at import time see test values.
+os.environ.setdefault("AGENTCHATBUS_PORT", str(TEST_PORT))
+os.environ.setdefault("AGENTCHATBUS_TEST_BASE_URL", BASE_URL)
+os.environ.setdefault("AGENTCHATBUS_DB", TEST_DB_PATH)
+
 # Script-style checks that are intended to run manually against a dedicated server
 # should not be collected by pytest's normal test discovery.
 collect_ignore = ["test_image_paste.py", "test_token_exposure.py"]
+
+
+@pytest.fixture(scope="session", autouse=True)
+def enforce_test_database() -> None:
+    """Fail fast if a test run is configured to use a non-test database.
+
+    This protects developers from accidentally pointing tests at a production/dev DB
+    (e.g. repo data/bus.db or ~/.agentchatbus/bus.db).
+    """
+    db = os.getenv("AGENTCHATBUS_DB")
+    if not db:
+        raise RuntimeError(
+            "AGENTCHATBUS_DB must be set during tests to a test database path (or ':memory:')."
+        )
+
+    if db == ":memory:":
+        return
+
+    repo_root = Path(__file__).resolve().parents[1]
+    prod_repo_db = (repo_root / "data" / "bus.db").resolve()
+    prod_home_db = (Path.home() / ".agentchatbus" / "bus.db").resolve()
+
+    try:
+        resolved = Path(db).expanduser().resolve()
+    except Exception:
+        # If resolution fails, treat as unsafe.
+        raise RuntimeError(f"Invalid AGENTCHATBUS_DB path for tests: {db!r}")
+
+    if resolved == prod_repo_db or resolved == prod_home_db:
+        raise RuntimeError(
+            f"Refusing to run tests against a production DB: AGENTCHATBUS_DB={str(resolved)!r}"
+        )
+
+    resolved_str = str(resolved).replace("\\", "/").lower()
+    base = resolved.name.lower()
+
+    # Require a clearly test-scoped DB file name/path.
+    # Current test suite uses e.g. bus_test.db, data/test_*.db, tests/data/*.db
+    if "test" not in base and "/tests/" not in resolved_str and "/test" not in resolved_str:
+        raise RuntimeError(
+            "AGENTCHATBUS_DB must point to a test database (name/path should include 'test') "
+            f"or ':memory:'. Got: {str(resolved)!r}"
+        )
 
 
 @pytest.fixture(scope="session", autouse=True)
