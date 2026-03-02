@@ -13,7 +13,7 @@ from typing import Optional
 
 import aiosqlite
 
-from src.db.models import Thread, Message, AgentInfo, Event, ThreadTemplate, ThreadSettings
+from src.db.models import Thread, Message, AgentInfo, Event, ThreadTemplate, ThreadSettings, Reaction
 from src.config import (
     AGENT_HEARTBEAT_TIMEOUT,
     RATE_LIMIT_MSG_PER_MINUTE,
@@ -751,6 +751,9 @@ async def template_delete(db: aiosqlite.Connection, template_id: str) -> None:
 # Message CRUD
 # ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
+_VALID_PRIORITIES = {"normal", "urgent", "system"}
+
+
 async def msg_post(
     db: aiosqlite.Connection,
     thread_id: str,
@@ -760,7 +763,12 @@ async def msg_post(
     reply_token: str,
     role: str = "user",
     metadata: Optional[dict] = None,
+    priority: str = "normal",
 ) -> Message:
+    # Validate priority (UP-16)
+    if priority not in _VALID_PRIORITIES:
+        raise ValueError(f"Invalid priority '{priority}'. Must be one of: {', '.join(sorted(_VALID_PRIORITIES))}")
+
     # Content filter: block known secret patterns before any DB interaction
     if CONTENT_FILTER_ENABLED:
         blocked, pattern_name = check_content(content)
@@ -846,8 +854,8 @@ async def msg_post(
     seq = await next_seq(db)
     meta_json = json.dumps(metadata) if metadata else None
     await db.execute(
-        "INSERT INTO messages (id, thread_id, author, role, content, seq, created_at, metadata, author_id, author_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (mid, thread_id, actual_author, role, content, seq, now, meta_json, author_id, author_name),
+        "INSERT INTO messages (id, thread_id, author, role, content, seq, created_at, metadata, author_id, author_name, priority) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (mid, thread_id, actual_author, role, content, seq, now, meta_json, author_id, author_name, priority),
     )
     await db.execute(
         "UPDATE threads SET updated_at = ? WHERE id = ?", (now, thread_id)
@@ -896,11 +904,11 @@ async def msg_post(
                 "msg_id": mid, "thread_id": thread_id,
                 "agent": author_name, "reason": stop_reason,
             })
-    logger.debug(f"Message posted: seq={seq} author={author_name} thread={thread_id}")
+    logger.debug(f"Message posted: seq={seq} author={author_name} thread={thread_id} priority={priority}")
     return Message(
         id=mid, thread_id=thread_id, author=actual_author, role=role,
         content=content, seq=seq, created_at=_parse_dt(now), metadata=meta_json,
-        author_id=author_id, author_name=author_name
+        author_id=author_id, author_name=author_name, priority=priority
     )
 
 
@@ -910,12 +918,20 @@ async def msg_list(
     after_seq: int = 0,
     limit: int = 100,
     include_system_prompt: bool = True,
+    priority: Optional[str] = None,
 ) -> list[Message]:
-    async with db.execute(
-        "SELECT * FROM messages WHERE thread_id = ? AND seq > ? ORDER BY seq ASC LIMIT ?",
-        (thread_id, after_seq, limit),
-    ) as cur:
-        rows = await cur.fetchall()
+    if priority is not None:
+        async with db.execute(
+            "SELECT * FROM messages WHERE thread_id = ? AND seq > ? AND priority = ? ORDER BY seq ASC LIMIT ?",
+            (thread_id, after_seq, priority, limit),
+        ) as cur:
+            rows = await cur.fetchall()
+    else:
+        async with db.execute(
+            "SELECT * FROM messages WHERE thread_id = ? AND seq > ? ORDER BY seq ASC LIMIT ?",
+            (thread_id, after_seq, limit),
+        ) as cur:
+            rows = await cur.fetchall()
         
     msgs = [_row_to_message(r) for r in rows]
     
@@ -999,11 +1015,13 @@ async def _msg_create_system(
 
 def _row_to_message(row: aiosqlite.Row) -> Message:
     # safe dict-like fallback for new columns on older DB schemas
-    author_id = row["author_id"] if "author_id" in row.keys() else None
-    author_name = row["author_name"] if "author_name" in row.keys() else None
+    keys = row.keys()
+    author_id = row["author_id"] if "author_id" in keys else None
+    author_name = row["author_name"] if "author_name" in keys else None
     if not author_name:
         author_name = row["author"]
-        
+    priority = row["priority"] if "priority" in keys else "normal"
+
     return Message(
         id=row["id"],
         thread_id=row["thread_id"],
@@ -1015,11 +1033,156 @@ def _row_to_message(row: aiosqlite.Row) -> Message:
         metadata=row["metadata"],
         author_id=author_id,
         author_name=author_name,
+        priority=priority,
     )
 
 
-# ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
-# ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+def _row_to_reaction(row: aiosqlite.Row) -> Reaction:
+    return Reaction(
+        id=row["id"],
+        message_id=row["message_id"],
+        agent_id=row["agent_id"],
+        agent_name=row["agent_name"],
+        reaction=row["reaction"],
+        created_at=_parse_dt(row["created_at"]),
+    )
+
+
+# ─────────────────────────────────────────────
+# Reactions (UP-13)
+# ─────────────────────────────────────────────
+
+class MessageNotFoundError(Exception):
+    def __init__(self, message_id: str) -> None:
+        self.message_id = message_id
+        super().__init__(f"Message '{message_id}' not found")
+
+
+async def msg_react(
+    db: aiosqlite.Connection,
+    message_id: str,
+    agent_id: Optional[str],
+    reaction: str,
+) -> Reaction:
+    """Add a reaction to a message. Idempotent — duplicate reactions are silently ignored."""
+    if not reaction or not reaction.strip():
+        raise ValueError("Reaction must be a non-empty string")
+
+    # Verify message exists
+    async with db.execute("SELECT id FROM messages WHERE id = ?", (message_id,)) as cur:
+        msg_row = await cur.fetchone()
+    if msg_row is None:
+        raise MessageNotFoundError(message_id)
+
+    # Resolve agent name
+    agent_name: Optional[str] = None
+    if agent_id:
+        async with db.execute("SELECT name FROM agents WHERE id = ?", (agent_id,)) as cur:
+            agent_row = await cur.fetchone()
+        if agent_row:
+            agent_name = agent_row["name"]
+
+    rid = str(uuid.uuid4())
+    now = _now()
+
+    async with db.execute(
+        "INSERT OR IGNORE INTO reactions (id, message_id, agent_id, agent_name, reaction, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        (rid, message_id, agent_id, agent_name, reaction, now),
+    ) as cur:
+        inserted = cur.rowcount
+
+    await db.commit()
+
+    # Emit SSE event only when a new row was actually inserted (not a duplicate)
+    if inserted > 0:
+        await _emit_event(db, "msg.react", None, {
+            "reaction_id": rid, "message_id": message_id,
+            "agent_id": agent_id, "agent_name": agent_name, "reaction": reaction,
+        })
+        logger.debug(f"Reaction added: message={message_id} agent={agent_id} reaction={reaction}")
+    else:
+        logger.debug(f"Reaction already exists (ignored): message={message_id} agent={agent_id} reaction={reaction}")
+
+    # Fetch the actual stored row (may differ from rid if it was a duplicate)
+    async with db.execute(
+        "SELECT * FROM reactions WHERE message_id = ? AND agent_id IS ? AND reaction = ?",
+        (message_id, agent_id, reaction),
+    ) as cur:
+        row = await cur.fetchone()
+    return _row_to_reaction(row)
+
+
+async def msg_unreact(
+    db: aiosqlite.Connection,
+    message_id: str,
+    agent_id: Optional[str],
+    reaction: str,
+) -> bool:
+    """Remove a reaction. Returns True if deleted, False if it did not exist."""
+    async with db.execute(
+        "DELETE FROM reactions WHERE message_id = ? AND agent_id IS ? AND reaction = ?",
+        (message_id, agent_id, reaction),
+    ) as cur:
+        deleted = cur.rowcount
+
+    await db.commit()
+
+    if deleted > 0:
+        await _emit_event(db, "msg.unreact", None, {
+            "message_id": message_id, "agent_id": agent_id, "reaction": reaction,
+        })
+        logger.debug(f"Reaction removed: message={message_id} agent={agent_id} reaction={reaction}")
+        return True
+
+    logger.debug(f"Reaction not found (no-op): message={message_id} agent={agent_id} reaction={reaction}")
+    return False
+
+
+async def msg_reactions(
+    db: aiosqlite.Connection,
+    message_id: str,
+) -> list[Reaction]:
+    """Return all reactions for a given message, ordered by created_at."""
+    async with db.execute(
+        "SELECT * FROM reactions WHERE message_id = ? ORDER BY created_at ASC",
+        (message_id,),
+    ) as cur:
+        rows = await cur.fetchall()
+    return [_row_to_reaction(r) for r in rows]
+
+
+async def msg_reactions_bulk(
+    db: aiosqlite.Connection,
+    message_ids: list[str],
+) -> dict[str, list[dict]]:
+    """Batch-fetch reactions for a list of message IDs.
+
+    Returns a dict mapping message_id -> list of reaction dicts.
+    Single SQL query with IN (...) to avoid N+1 calls from msg_list.
+    """
+    if not message_ids:
+        return {}
+
+    placeholders = ",".join("?" * len(message_ids))
+    async with db.execute(
+        f"SELECT * FROM reactions WHERE message_id IN ({placeholders}) ORDER BY created_at ASC",
+        message_ids,
+    ) as cur:
+        rows = await cur.fetchall()
+
+    result: dict[str, list[dict]] = {mid: [] for mid in message_ids}
+    for row in rows:
+        mid = row["message_id"]
+        result[mid].append({
+            "id": row["id"],
+            "agent_id": row["agent_id"],
+            "agent_name": row["agent_name"],
+            "reaction": row["reaction"],
+            "created_at": row["created_at"],
+        })
+    return result
+
+
 # ─────────────────────────────────────────────
 # Agent registry
 # ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ

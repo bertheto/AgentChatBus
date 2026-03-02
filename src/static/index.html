@@ -733,7 +733,6 @@ Note: Thread name is the topic label. Thread ID is the unique identifier.`;
 
       // Build metadata badges (handoff_target, stop_reason)
       let handoffBadgeHtml = '';
-      let stopTagHtml = '';
       if (metaObj) {
         if (metaObj.handoff_target) {
           handoffBadgeHtml = `<span class="handoff-badge" title="Handoff to: ${esc(metaObj.handoff_target)}">&#8594; ${esc(metaObj.handoff_target)}</span>`;
@@ -744,15 +743,25 @@ Note: Thread name is the topic label. Thread ID is the unique identifier.`;
         }
       }
 
+      // Priority badge (UP-16)
+      let priorityBadgeHtml = '';
+      if (m.priority === 'urgent') {
+        priorityBadgeHtml = '<span class="msg-priority-badge msg-priority-urgent" title="Urgent message">URGENT</span>';
+      } else if (m.priority === 'system') {
+        priorityBadgeHtml = '<span class="msg-priority-badge msg-priority-system" title="System message">SYSTEM</span>';
+      }
+
       row.innerHTML = `
       <div class="msg-avatar" style="background:${bgAlpha};color:${color};border:1px solid ${color}44">${avatarEmoji}</div>
       <div class="msg-col">
         <div class="msg-header">
           <span class="msg-author-label" style="color:${color}">${esc(authorLabel)}</span>
           <span class="msg-time-label">seq ${m.seq} ${fmtTime(m.created_at)}</span>
+          ${priorityBadgeHtml}
           ${handoffBadgeHtml}
         </div>
         <div class="bubble-v2" style="border-color:${color}55;${isHuman ? 'border-right-color' : 'border-left-color'}:${color}"></div>
+        <div class="msg-reactions"></div>
       </div>`;
 
       const bubbleEl = row.querySelector('.bubble-v2');
@@ -796,6 +805,26 @@ Note: Thread name is the topic label. Thread ID is the unique identifier.`;
           bubbleEl.appendChild(imgContainer);
         } else {
           console.log(`[Bubble] No images to render`);
+        }
+      }
+
+      // Render reactions pills (UP-13)
+      if (m.reactions && m.reactions.length > 0) {
+        const reactionsEl = row.querySelector('.msg-reactions');
+        if (reactionsEl) {
+          // Group by reaction label
+          const groups = {};
+          for (const r of m.reactions) {
+            if (!groups[r.reaction]) groups[r.reaction] = [];
+            groups[r.reaction].push(r.agent_name || r.agent_id || '?');
+          }
+          for (const [label, agents] of Object.entries(groups)) {
+            const pill = document.createElement('span');
+            pill.className = 'reaction-pill';
+            pill.title = agents.join(', ');
+            pill.textContent = agents.length > 1 ? `${label} ×${agents.length}` : label;
+            reactionsEl.appendChild(pill);
+          }
         }
       }
 

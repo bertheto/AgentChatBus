@@ -302,6 +302,24 @@ async def init_schema(db: aiosqlite.Connection) -> None:
 
         CREATE INDEX IF NOT EXISTS idx_thread_settings_activity
             ON thread_settings(last_activity_time);
+
+        -- ----------------------------------------------------------------
+        -- Reactions: per-message reactions/annotations from agents (UP-13)
+        -- UNIQUE constraint prevents duplicate (message, agent, reaction) triples.
+        -- ----------------------------------------------------------------
+        CREATE TABLE IF NOT EXISTS reactions (
+            id          TEXT PRIMARY KEY,
+            message_id  TEXT NOT NULL REFERENCES messages(id),
+            agent_id    TEXT,
+            agent_name  TEXT,
+            reaction    TEXT NOT NULL,
+            created_at  TEXT NOT NULL
+        );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_reactions_unique
+            ON reactions(message_id, agent_id, reaction);
+        CREATE INDEX IF NOT EXISTS idx_reactions_message
+            ON reactions(message_id);
     """)
     await db.commit()
 
@@ -426,6 +444,33 @@ async def init_schema(db: aiosqlite.Connection) -> None:
         ("creator_assignment_time", "TEXT"),
     ]:
         await _add_column_if_missing(db, "thread_settings", col, typedef)
+
+    # Migration: Add priority column to messages (UP-16)
+    await _add_column_if_missing(db, "messages", "priority", "TEXT NOT NULL DEFAULT 'normal'")
+
+    # Migration: Create reactions table if it does not exist (UP-13)
+    # Safe for existing DBs — CREATE TABLE IF NOT EXISTS + CREATE UNIQUE INDEX IF NOT EXISTS
+    try:
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS reactions (
+                id          TEXT PRIMARY KEY,
+                message_id  TEXT NOT NULL REFERENCES messages(id),
+                agent_id    TEXT,
+                agent_name  TEXT,
+                reaction    TEXT NOT NULL,
+                created_at  TEXT NOT NULL
+            )
+        """)
+        await db.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_reactions_unique ON reactions(message_id, agent_id, reaction)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_reactions_message ON reactions(message_id)"
+        )
+        await db.commit()
+        logger.info("Migration: ensured reactions table + indexes exist (UP-13)")
+    except Exception as e:
+        logger.error(f"Migration failed for reactions table: {e}")
 
     # Seed built-in thread templates (UP-18) — idempotent via INSERT OR IGNORE
     await _seed_builtin_templates(db)

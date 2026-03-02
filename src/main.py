@@ -37,6 +37,7 @@ from src.db.crud import (
     ReplyTokenInvalidError,
     ReplyTokenExpiredError,
     ReplyTokenReplayError,
+    MessageNotFoundError,
 )
 from src.config import THREAD_TIMEOUT_ENABLED, THREAD_TIMEOUT_MINUTES, THREAD_TIMEOUT_SWEEP_INTERVAL, RELOAD_ENABLED
 from src.mcp_server import server as mcp_server, _session_language
@@ -421,8 +422,16 @@ async def api_threads(
 
 
 @app.get("/api/threads/{thread_id}/messages")
-async def api_messages(thread_id: str, after_seq: int = 0, limit: int = 200, include_system_prompt: bool = False):
+async def api_messages(
+    thread_id: str,
+    after_seq: int = 0,
+    limit: int = 200,
+    include_system_prompt: bool = False,
+    priority: str | None = None,
+):
     limit = min(limit, 1000)  # server-side hard cap — prevents memory exhaustion
+    if priority is not None and priority not in {"normal", "urgent", "system"}:
+        raise HTTPException(status_code=400, detail=f"Invalid priority filter '{priority}'")
     try:
         db = await asyncio.wait_for(get_db(), timeout=DB_TIMEOUT)
         t = await asyncio.wait_for(crud.thread_get(db, thread_id), timeout=DB_TIMEOUT)
@@ -438,13 +447,113 @@ async def api_messages(thread_id: str, after_seq: int = 0, limit: int = 200, inc
                 after_seq=after_seq,
                 limit=limit,
                 include_system_prompt=include_system_prompt,
+                priority=priority,
             ),
-            timeout=DB_TIMEOUT
+            timeout=DB_TIMEOUT,
         )
     except asyncio.TimeoutError:
         raise HTTPException(status_code=503, detail="Database operation timeout")
-    return [{"id": m.id, "author": m.author, "author_id": m.author_id, "author_name": m.author_name, "role": m.role, "content": m.content,
-             "seq": m.seq, "created_at": m.created_at.isoformat(), "metadata": m.metadata} for m in msgs]
+
+    # Fetch reactions for real message IDs (exclude synthetic system msg with id=sys-*)
+    real_ids = [m.id for m in msgs if not m.id.startswith("sys-")]
+    try:
+        reactions_map = await asyncio.wait_for(
+            crud.msg_reactions_bulk(db, real_ids),
+            timeout=DB_TIMEOUT,
+        )
+    except asyncio.TimeoutError:
+        reactions_map = {}
+
+    return [
+        {
+            "id": m.id,
+            "author": m.author,
+            "author_id": m.author_id,
+            "author_name": m.author_name,
+            "role": m.role,
+            "content": m.content,
+            "seq": m.seq,
+            "created_at": m.created_at.isoformat(),
+            "metadata": m.metadata,
+            "priority": m.priority,
+            "reactions": reactions_map.get(m.id, []),
+        }
+        for m in msgs
+    ]
+
+
+# ─────────────────────────────────────────────
+# Reactions API (UP-13)
+# ─────────────────────────────────────────────
+
+class ReactionCreate(BaseModel):
+    agent_id: str
+    reaction: str
+
+
+@app.post("/api/messages/{message_id}/reactions", status_code=201)
+async def api_add_reaction(message_id: str, body: ReactionCreate):
+    """Add a reaction to a message. Idempotent — duplicate reactions are silently ignored."""
+    if not body.reaction or not body.reaction.strip():
+        raise HTTPException(status_code=400, detail="Reaction must be a non-empty string")
+    try:
+        db = await asyncio.wait_for(get_db(), timeout=DB_TIMEOUT)
+        reaction = await asyncio.wait_for(
+            crud.msg_react(db, message_id=message_id, agent_id=body.agent_id, reaction=body.reaction.strip()),
+            timeout=DB_TIMEOUT,
+        )
+    except MessageNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Message '{message_id}' not found")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=503, detail="Database operation timeout")
+    return {
+        "id": reaction.id,
+        "message_id": reaction.message_id,
+        "agent_id": reaction.agent_id,
+        "agent_name": reaction.agent_name,
+        "reaction": reaction.reaction,
+        "created_at": reaction.created_at.isoformat(),
+    }
+
+
+@app.delete("/api/messages/{message_id}/reactions/{reaction}", status_code=200)
+async def api_remove_reaction(message_id: str, reaction: str, agent_id: str):
+    """Remove a reaction from a message. Returns removed=true/false."""
+    try:
+        db = await asyncio.wait_for(get_db(), timeout=DB_TIMEOUT)
+        removed = await asyncio.wait_for(
+            crud.msg_unreact(db, message_id=message_id, agent_id=agent_id, reaction=reaction),
+            timeout=DB_TIMEOUT,
+        )
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=503, detail="Database operation timeout")
+    return {"removed": removed, "message_id": message_id, "reaction": reaction, "agent_id": agent_id}
+
+
+@app.get("/api/messages/{message_id}/reactions")
+async def api_get_reactions(message_id: str):
+    """Get all reactions for a message."""
+    try:
+        db = await asyncio.wait_for(get_db(), timeout=DB_TIMEOUT)
+        reactions = await asyncio.wait_for(
+            crud.msg_reactions(db, message_id),
+            timeout=DB_TIMEOUT,
+        )
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=503, detail="Database operation timeout")
+    return [
+        {
+            "id": r.id,
+            "message_id": r.message_id,
+            "agent_id": r.agent_id,
+            "agent_name": r.agent_name,
+            "reaction": r.reaction,
+            "created_at": r.created_at.isoformat(),
+        }
+        for r in reactions
+    ]
 
 
 # ─────────────────────────────────────────────
@@ -615,6 +724,7 @@ class MessageCreate(BaseModel):
     mentions: list[str] | None = None
     metadata: dict | None = None
     images: list[dict] | None = None  # [{url: str, name: str}, ...]
+    priority: Literal["normal", "urgent", "system"] = "normal"  # UP-16
 
 class SyncContextRequest(BaseModel):
     agent_id: str | None = None
@@ -808,7 +918,8 @@ async def api_post_message(thread_id: str, body: MessageCreate, x_agent_token: s
                          expected_last_seq=expected_last_seq,
                          reply_token=reply_token,
                          role=body.role,
-                         metadata=msg_metadata if msg_metadata else None),
+                         metadata=msg_metadata if msg_metadata else None,
+                         priority=body.priority),
             timeout=DB_TIMEOUT
         )
     except MissingSyncFieldsError as e:
@@ -860,14 +971,15 @@ async def api_post_message(thread_id: str, body: MessageCreate, x_agent_token: s
     
     # Return the full message with metadata
     result = {"id": m.id, "seq": m.seq, "author": m.author,
-            "role": m.role, "content": m.content, "created_at": m.created_at.isoformat()}
-    
+            "role": m.role, "content": m.content, "created_at": m.created_at.isoformat(),
+            "priority": m.priority}
+
     # Add metadata (includes mentions and images)
     if m.metadata:
         result["metadata"] = m.metadata
     else:
         result["metadata"] = None
-    
+
     return result
 
 

@@ -196,6 +196,12 @@ async def list_tools() -> list[types.Tool]:
                         "description": "Strict sync field. Unconsumed reply token from msg_wait.",
                     },
                     "role":      {"type": "string", "enum": ["user", "assistant", "system"], "default": "user"},
+                    "priority":  {
+                        "type": "string",
+                        "enum": ["normal", "urgent", "system"],
+                        "default": "normal",
+                        "description": "Message priority level. 'urgent' for time-sensitive content, 'system' for automated coordination messages.",
+                    },
                     "mentions":  {
                         "type": "array",
                         "items": {"type": "string"},
@@ -234,6 +240,11 @@ async def list_tools() -> list[types.Tool]:
                     "thread_id": {"type": "string"},
                     "after_seq": {"type": "integer", "default": 0, "description": "Return messages with seq > this value."},
                     "limit":     {"type": "integer", "default": 100},
+                    "priority":  {
+                        "type": "string",
+                        "enum": ["normal", "urgent", "system"],
+                        "description": "Optional: filter messages by priority level.",
+                    },
                     "return_format": {
                         "type": "string",
                         "enum": ["json", "blocks"],
@@ -462,7 +473,35 @@ async def list_tools() -> list[types.Tool]:
             },
         ),
 
-        # ΓöÇΓöÇ Bus config ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+        # ── Reactions (UP-13) ────────────────────────────────────────────
+        types.Tool(
+            name="msg_react",
+            description="Add a reaction to a message. Idempotent — calling twice with the same (message_id, agent_id, reaction) triple is safe and returns the existing reaction.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "message_id": {"type": "string", "description": "ID of the message to react to."},
+                    "agent_id":   {"type": "string", "description": "ID of the reacting agent."},
+                    "reaction":   {"type": "string", "description": "Reaction label, e.g. 'agree', 'disagree', 'important'."},
+                },
+                "required": ["message_id", "agent_id", "reaction"],
+            },
+        ),
+        types.Tool(
+            name="msg_unreact",
+            description="Remove a reaction from a message. Returns removed=true if the reaction existed, false if it was already absent (safe to call even if not previously reacted).",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "message_id": {"type": "string", "description": "ID of the message."},
+                    "agent_id":   {"type": "string", "description": "ID of the agent removing their reaction."},
+                    "reaction":   {"type": "string", "description": "The reaction label to remove."},
+                },
+                "required": ["message_id", "agent_id", "reaction"],
+            },
+        ),
+
+        # ── Bus config ────────────────────────────────────────────────────
         types.Tool(
             name="bus_get_config",
             description=(

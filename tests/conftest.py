@@ -87,19 +87,29 @@ def server():
     test_env["AGENTCHATBUS_RELOAD"] = "0"  # Disable reload for tests
     
     # Check if a compatible test server is already running on the test port.
-    # Verify /health returns 200 AND both /api/metrics (UP-22) and /api/threads?limit=1
-    # (UP-20 pagination) work. This prevents reusing a stale server that lacks new endpoints.
+    # Verify /health + all new endpoints from UP-13+16, UP-20, UP-22:
+    # - /api/metrics (UP-22): must return 200
+    # - /api/threads?limit=1 (UP-20 pagination): must return dict with "threads" key
+    # - /api/messages/nonexistent/reactions (UP-13+16): must return 404 with "Message" in detail
+    #   (an old server without reactions route returns 404 "Not Found" — FastAPI generic default)
     try:
         with httpx.Client(base_url=BASE_URL, timeout=5) as client:
             health = client.get("/health")
-            metrics = client.get("/api/metrics")
-            threads_resp = client.get("/api/threads?limit=1")
+            metrics_resp = client.get("/api/metrics")
+            threads_resp = client.get("/api/threads", params={"limit": 1})
+            react_check = client.post(
+                "/api/messages/nonexistent/reactions",
+                json={"agent_id": "test", "reaction": "test"},
+            )
+            react_detail = react_check.json().get("detail", "") if react_check.status_code == 404 else ""
             if (
                 health.status_code == 200
-                and metrics.status_code < 500
-                and threads_resp.status_code < 500
+                and metrics_resp.status_code == 200
+                and threads_resp.status_code == 200
                 and isinstance(threads_resp.json(), dict)
                 and "threads" in threads_resp.json()
+                and react_check.status_code == 404
+                and "Message" in str(react_detail)
             ):
                 yield
                 return
@@ -109,9 +119,6 @@ def server():
     # Start the server with test configuration
     print(f"\nStarting AgentChatBus test server at {BASE_URL}...")
     print(f"Using test database: {TEST_DB_PATH}")
-    # Use sys.executable so the test server runs with the same Python interpreter
-    # (and venv) as the test process itself, ensuring local source changes are
-    # picked up rather than a stale installed package.
     _SERVER_PROCESS = subprocess.Popen(
         [sys.executable, "-m", "src.main"],
         stdout=subprocess.PIPE,

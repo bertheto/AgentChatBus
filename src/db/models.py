@@ -45,6 +45,18 @@ class Message:
     metadata: Optional[str]  # JSON string
     author_id: Optional[str] = None
     author_name: Optional[str] = None
+    priority: str = "normal"  # normal | urgent | system (UP-16)
+
+
+@dataclass
+class Reaction:
+    """A reaction/annotation on a message (UP-13)."""
+    id: str
+    message_id: str
+    agent_id: Optional[str]
+    agent_name: Optional[str]
+    reaction: str        # free-form string, e.g. "agree", "disagree", "important"
+    created_at: datetime
 
 
 @dataclass

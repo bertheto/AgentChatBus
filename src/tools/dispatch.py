@@ -31,6 +31,7 @@ from src.db.crud import (
     ReplyTokenInvalidError,
     ReplyTokenExpiredError,
     ReplyTokenReplayError,
+    MessageNotFoundError,
 )
 from src.db.models import Message
 import src.mcp_server
@@ -335,6 +336,7 @@ async def handle_msg_post(db, arguments: dict[str, Any]) -> list[types.TextConte
             reply_token=arguments.get("reply_token"),
             role=arguments.get("role", "user"),
             metadata=arguments.get("metadata"),
+            priority=arguments.get("priority", "normal"),
         )
     except MissingSyncFieldsError as e:
         return [types.TextContent(type="text", text=json.dumps({
@@ -381,7 +383,7 @@ async def handle_msg_post(db, arguments: dict[str, Any]) -> list[types.TextConte
         }))]
 
     meta = _safe_json_loads(msg.metadata)
-    result: dict[str, Any] = {"msg_id": msg.id, "seq": msg.seq}
+    result: dict[str, Any] = {"msg_id": msg.id, "seq": msg.seq, "priority": msg.priority}
     if isinstance(meta, dict):
         if meta.get("handoff_target"):
             result["handoff_target"] = meta["handoff_target"]
@@ -396,7 +398,12 @@ async def handle_msg_list(db, arguments: dict[str, Any]) -> list[types.Content]:
         after_seq=arguments.get("after_seq", 0),
         limit=arguments.get("limit", 100),
         include_system_prompt=arguments.get("include_system_prompt", True),
+        priority=arguments.get("priority"),
     )
+
+    # Batch-fetch reactions for all real message IDs
+    real_ids = [m.id for m in msgs if not m.id.startswith("sys-")]
+    reactions_map = await crud.msg_reactions_bulk(db, real_ids)
 
     return_format = arguments.get("return_format", "blocks")
     if return_format == "blocks":
@@ -406,10 +413,60 @@ async def handle_msg_list(db, arguments: dict[str, Any]) -> list[types.Content]:
         return blocks
 
     return [types.TextContent(type="text", text=json.dumps([
-        {"msg_id": m.id, "author": m.author, "author_id": m.author_id, "author_name": m.author_name, "role": m.role,
-         "content": m.content, "seq": m.seq, "created_at": m.created_at.isoformat(), "metadata": m.metadata}
+        {
+            "msg_id": m.id,
+            "author": m.author,
+            "author_id": m.author_id,
+            "author_name": m.author_name,
+            "role": m.role,
+            "content": m.content,
+            "seq": m.seq,
+            "created_at": m.created_at.isoformat(),
+            "metadata": m.metadata,
+            "priority": m.priority,
+            "reactions": reactions_map.get(m.id, []),
+        }
         for m in msgs
     ]))]
+
+
+async def handle_msg_react(db, arguments: dict[str, Any]) -> list[types.TextContent]:
+    try:
+        reaction = await crud.msg_react(
+            db,
+            message_id=arguments["message_id"],
+            agent_id=arguments.get("agent_id"),
+            reaction=arguments["reaction"],
+        )
+    except crud.MessageNotFoundError as e:
+        return [types.TextContent(type="text", text=json.dumps({
+            "error": "MESSAGE_NOT_FOUND",
+            "message_id": e.message_id,
+        }))]
+    except ValueError as e:
+        return [types.TextContent(type="text", text=json.dumps({"error": str(e)}))]
+    return [types.TextContent(type="text", text=json.dumps({
+        "reaction_id": reaction.id,
+        "message_id": reaction.message_id,
+        "agent_id": reaction.agent_id,
+        "agent_name": reaction.agent_name,
+        "reaction": reaction.reaction,
+        "created_at": reaction.created_at.isoformat(),
+    }))]
+
+
+async def handle_msg_unreact(db, arguments: dict[str, Any]) -> list[types.TextContent]:
+    removed = await crud.msg_unreact(
+        db,
+        message_id=arguments["message_id"],
+        agent_id=arguments.get("agent_id"),
+        reaction=arguments["reaction"],
+    )
+    return [types.TextContent(type="text", text=json.dumps({
+        "removed": removed,
+        "message_id": arguments["message_id"],
+        "reaction": arguments["reaction"],
+    }))]
 
 def _metadata_targets(msg: Any, agent_id: str) -> bool:
     """Return True if the message metadata.handoff_target matches agent_id."""
@@ -651,6 +708,8 @@ TOOLS_DISPATCH = {
     "msg_post": handle_msg_post,
     "msg_list": handle_msg_list,
     "msg_wait": handle_msg_wait,
+    "msg_react": handle_msg_react,
+    "msg_unreact": handle_msg_unreact,
     "agent_register": handle_agent_register,
     "agent_heartbeat": handle_agent_heartbeat,
     "agent_resume": handle_agent_resume,
