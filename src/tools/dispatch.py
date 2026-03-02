@@ -580,42 +580,13 @@ async def handle_msg_wait(db, arguments: dict[str, Any]) -> list[types.Content]:
         # Safety guard: if no agents are online (or current caller is not online),
         # do not emit administrator/coordinator prompts.
         if current_agent_online and online_count <= 1:
-            # Single-agent timeout: make the current agent the acting admin and
-            # return an explicit coordination instruction instead of silent waiting.
-            is_current_admin = (
-                settings.creator_admin_id == agent_id
-                or settings.auto_assigned_admin_id == agent_id
-            )
-
-            admin_label = agent_id
-            try:
-                agent_info = await crud.agent_get(db, agent_id)
-                if agent_info and agent_info.name:
-                    admin_label = agent_info.name
-            except Exception:
-                pass
-
-            if not is_current_admin:
-                try:
-                    await crud.thread_settings_assign_admin(db, thread_id, agent_id, admin_label)
-                    settings = await crud.thread_settings_get_or_create(db, thread_id)
-                    is_current_admin = (
-                        settings.creator_admin_id == agent_id
-                        or settings.auto_assigned_admin_id == agent_id
-                    )
-                except Exception as e:
-                    logger.warning(
-                        f"[msg_wait] Failed to assign single online agent as admin for thread {thread_id}: {e}"
-                    )
-
+            # Single-agent timeout: provide actionable guidance but do not auto-assign admin.
             coordination_prompt = {
-                "type": "single_agent_admin_notice",
+                "type": "single_agent_timeout_notice",
                 "message": (
                     f"No new messages for {int(timeout_s)} seconds. "
                     f"Other agents may be offline and only you remain active. "
-                    f"You are now the thread administrator ({admin_label}); "
-                    f"please coordinate by posting a status summary, proposing next steps, "
-                    f"and assigning follow-up actions."
+                    "Please post a status summary and propose next steps."
                 ),
             }
         elif current_agent_online and online_count > 1:

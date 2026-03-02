@@ -584,6 +584,37 @@ async def thread_settings_set_creator_admin(
     return await thread_settings_get_or_create(db, thread_id)
 
 
+async def thread_settings_switch_admin(
+    db: aiosqlite.Connection,
+    thread_id: str,
+    admin_id: str,
+    admin_name: str,
+) -> ThreadSettings:
+    """Switch thread admin based on explicit human confirmation.
+
+    This operation clears creator-admin priority and sets the selected admin as
+    the active auto-assigned admin.
+    """
+    now = _now()
+    await db.execute(
+        """
+        UPDATE thread_settings
+        SET creator_admin_id = NULL,
+            creator_admin_name = NULL,
+            creator_assignment_time = NULL,
+            auto_assigned_admin_id = ?,
+            auto_assigned_admin_name = ?,
+            admin_assignment_time = ?,
+            updated_at = ?
+        WHERE thread_id = ?
+          AND auto_administrator_enabled = 1
+        """,
+        (admin_id, admin_name, now, now, thread_id),
+    )
+    await db.commit()
+    return await thread_settings_get_or_create(db, thread_id)
+
+
 async def thread_settings_get_timeouts(
     db: aiosqlite.Connection,
 ) -> list[ThreadSettings]:
@@ -980,6 +1011,7 @@ async def _msg_create_system(
     thread_id: str,
     content: str,
     metadata: Optional[dict] = None,
+    clear_auto_admin: bool = True,
 ) -> Message:
     """Internal: Create a system message without reply token validation.
     
@@ -1003,8 +1035,22 @@ async def _msg_create_system(
     
     await db.commit()
     
-    # Update thread activity for timeout tracking
-    await thread_settings_update_activity(db, thread_id)
+    # Update thread activity for timeout tracking.
+    # Some system flows (e.g. human-confirmed admin switch) must preserve admin assignment.
+    if clear_auto_admin:
+        await thread_settings_update_activity(db, thread_id)
+    else:
+        now2 = _now()
+        await db.execute(
+            """
+            UPDATE thread_settings
+            SET last_activity_time = ?,
+                updated_at = ?
+            WHERE thread_id = ?
+            """,
+            (now2, now2, thread_id),
+        )
+        await db.commit()
     
     await _emit_event(db, "msg.new", thread_id, {
         "msg_id": mid, "thread_id": thread_id, "author": "System",

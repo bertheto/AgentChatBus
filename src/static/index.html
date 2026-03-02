@@ -91,6 +91,7 @@
   <script src="/static/js/components/acb-thread-header.js?v=2"></script>
   <script src="/static/js/components/acb-thread-item.js?v=2"></script>
   <script src="/static/js/components/acb-message-tail-meta.js?v=1"></script>
+  <script src="/static/js/components/acb-admin-switch-card.js?v=1"></script>
   <script src="/static/js/components/acb-compose-shell.js?v=3"></script>
   <script src="/static/js/components/acb-agent-status-shell.js?v=2"></script>
   <script src="/static/js/shared-threads.js?v=2"></script>
@@ -718,8 +719,34 @@ Note: Thread name is the topic label. Thread ID is the unique identifier.`;
         return;
       }
 
-      // ---- System event (centered pill) --------------------------------------------------------------------------
+      const parseMetadata = (raw) => {
+        if (!raw) return null;
+        if (typeof raw === 'object') return raw;
+        if (typeof raw !== 'string') return null;
+        try {
+          return JSON.parse(raw);
+        } catch {
+          return null;
+        }
+      };
+
+      // ---- System event (centered pill / action card) ------------------------------------------------------------
       if (m.role === 'system' && m.author === 'system') {
+        const metaObj = parseMetadata(m.metadata);
+        if (metaObj && metaObj.ui_type === 'admin_switch_confirmation_required') {
+          const card = document.createElement('acb-admin-switch-card');
+          if (typeof card.setData === 'function') {
+            card.setData({
+              message: m,
+              metadata: metaObj,
+              threadId: metaObj.thread_id || activeThreadId,
+              api,
+            });
+          }
+          box.appendChild(card);
+          return;
+        }
+
         const pill = document.createElement('div');
         pill.className = 'msg-sys-event';
         const sentAt = fmtTime(m.created_at);
@@ -747,10 +774,7 @@ Note: Thread name is the topic label. Thread ID is the unique identifier.`;
       row.setAttribute('data-seq', String(m.seq));
 
       // Check if this message has mentions (look in metadata if string/object)
-      let metaObj = null;
-      if (m.metadata) {
-        metaObj = (typeof m.metadata === 'string') ? JSON.parse(m.metadata) : m.metadata;
-      }
+      let metaObj = parseMetadata(m.metadata);
       const hasMentions = metaObj && metaObj.mentions && Array.isArray(metaObj.mentions) && metaObj.mentions.length > 0;
       if (hasMentions) {
         row.classList.add('message-has-mentions');
