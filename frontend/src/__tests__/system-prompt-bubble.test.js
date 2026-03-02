@@ -22,7 +22,8 @@ function appendSystemPromptBubble(box, m) {
       const promptHeader = document.createElement('button');
       promptHeader.type = 'button';
       promptHeader.className = 'msg-sys-prompt-header';
-      promptHeader.setAttribute('aria-expanded', 'true');
+          promptHeader.setAttribute('aria-expanded', 'true');
+          promptHeader.classList.add('is-expanded');
           promptHeader.innerHTML = `<span class="msg-sys-prompt-label">Thread Instructions (system)</span><span class="msg-sys-prompt-chevron">&#9650;</span>`;
 
       const promptBody = document.createElement('div');
@@ -32,6 +33,7 @@ function appendSystemPromptBubble(box, m) {
           promptHeader.addEventListener('click', () => {
             const expanded = promptHeader.getAttribute('aria-expanded') === 'true';
             promptHeader.setAttribute('aria-expanded', String(!expanded));
+            promptHeader.classList.toggle('is-expanded', !expanded);
             promptBody.classList.toggle('collapsed', expanded);
             promptHeader.querySelector('.msg-sys-prompt-chevron').innerHTML = expanded ? '&#9660;' : '&#9650;';
             promptHeader.querySelector('.msg-sys-prompt-label').textContent = expanded
@@ -93,17 +95,18 @@ describe('system prompt bubble rendering (UI-06)', () => {
     expect(body.querySelector('strong')).not.toBeNull();
   });
 
-  it('is expanded by default (aria-expanded=true, body not collapsed)', () => {
+  it('is expanded by default (aria-expanded=true, is-expanded class, body not collapsed)', () => {
     appendSystemPromptBubble(box, makeSystemPromptMsg());
 
     const header = box.querySelector('.msg-sys-prompt-header');
     const body = box.querySelector('.msg-sys-prompt-body');
 
     expect(header.getAttribute('aria-expanded')).toBe('true');
+    expect(header.classList.contains('is-expanded')).toBe(true);
     expect(body.classList.contains('collapsed')).toBe(false);
   });
 
-  it('collapses on header click: aria-expanded=false, body collapsed, label updated', () => {
+  it('collapses on header click: aria-expanded=false, is-expanded removed, body collapsed, label updated', () => {
     appendSystemPromptBubble(box, makeSystemPromptMsg());
 
     const header = box.querySelector('.msg-sys-prompt-header');
@@ -113,11 +116,12 @@ describe('system prompt bubble rendering (UI-06)', () => {
     header.click();
 
     expect(header.getAttribute('aria-expanded')).toBe('false');
+    expect(header.classList.contains('is-expanded')).toBe(false);
     expect(body.classList.contains('collapsed')).toBe(true);
     expect(label.textContent).toBe('Thread Instructions (system) \u2014 click to expand');
   });
 
-  it('expands again on second click: label restored to default', () => {
+  it('expands again on second click: is-expanded restored, label restored to default', () => {
     appendSystemPromptBubble(box, makeSystemPromptMsg());
 
     const header = box.querySelector('.msg-sys-prompt-header');
@@ -128,6 +132,7 @@ describe('system prompt bubble rendering (UI-06)', () => {
     header.click(); // expand
 
     expect(header.getAttribute('aria-expanded')).toBe('true');
+    expect(header.classList.contains('is-expanded')).toBe(true);
     expect(body.classList.contains('collapsed')).toBe(false);
     expect(label.textContent).toBe('Thread Instructions (system)');
   });

@@ -740,6 +740,7 @@ Note: Thread name is the topic label. Thread ID is the unique identifier.`;
           promptHeader.type = 'button';
           promptHeader.className = 'msg-sys-prompt-header';
           promptHeader.setAttribute('aria-expanded', 'true');
+          promptHeader.classList.add('is-expanded');
           promptHeader.innerHTML = `<span class="msg-sys-prompt-label">Thread Instructions (system)</span><span class="msg-sys-prompt-chevron">&#9650;</span>`;
 
           const promptBody = document.createElement('div');
@@ -749,6 +750,7 @@ Note: Thread name is the topic label. Thread ID is the unique identifier.`;
           promptHeader.addEventListener('click', () => {
             const expanded = promptHeader.getAttribute('aria-expanded') === 'true';
             promptHeader.setAttribute('aria-expanded', String(!expanded));
+            promptHeader.classList.toggle('is-expanded', !expanded);
             promptBody.classList.toggle('collapsed', expanded);
             promptHeader.querySelector('.msg-sys-prompt-chevron').innerHTML = expanded ? '&#9660;' : '&#9650;';
             promptHeader.querySelector('.msg-sys-prompt-label').textContent = expanded
