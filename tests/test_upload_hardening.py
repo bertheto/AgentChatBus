@@ -13,7 +13,7 @@ import os
 import httpx
 import pytest
 
-BASE_URL = os.getenv("AGENTCHATBUS_BASE_URL", "http://127.0.0.1:39766")
+BASE_URL = os.getenv("AGENTCHATBUS_TEST_BASE_URL", "http://127.0.0.1:39766")
 
 # Real magic bytes for each supported format
 _JPEG_MAGIC = b"\xff\xd8\xff" + b"\x00" * 10
