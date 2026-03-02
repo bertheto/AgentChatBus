@@ -87,15 +87,16 @@ def server():
     test_env["AGENTCHATBUS_RELOAD"] = "0"  # Disable reload for tests
     
     # Check if a compatible test server is already running on the test port.
-    # Verify /health returns 200 AND GET /api/threads?limit=1 returns an envelope
-    # with a "threads" key (UP-20 pagination support). This prevents reusing a stale
-    # server that returns a flat array (pre-UP-20 behaviour).
+    # Verify /health returns 200 AND both /api/metrics (UP-22) and /api/threads?limit=1
+    # (UP-20 pagination) work. This prevents reusing a stale server that lacks new endpoints.
     try:
         with httpx.Client(base_url=BASE_URL, timeout=5) as client:
             health = client.get("/health")
+            metrics = client.get("/api/metrics")
             threads_resp = client.get("/api/threads?limit=1")
             if (
                 health.status_code == 200
+                and metrics.status_code < 500
                 and threads_resp.status_code < 500
                 and isinstance(threads_resp.json(), dict)
                 and "threads" in threads_resp.json()
@@ -108,6 +109,9 @@ def server():
     # Start the server with test configuration
     print(f"\nStarting AgentChatBus test server at {BASE_URL}...")
     print(f"Using test database: {TEST_DB_PATH}")
+    # Use sys.executable so the test server runs with the same Python interpreter
+    # (and venv) as the test process itself, ensuring local source changes are
+    # picked up rather than a stale installed package.
     _SERVER_PROCESS = subprocess.Popen(
         [sys.executable, "-m", "src.main"],
         stdout=subprocess.PIPE,
