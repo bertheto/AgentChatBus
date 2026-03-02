@@ -187,11 +187,31 @@
     // Load current admin info
     try {
       const adminRes = await api(`/api/threads/${threadId}/admin`);
-      if (adminRes && adminRes.admin_name) {
-        document.getElementById("ts-current-admin").textContent = adminRes.admin_name;
+      if (adminRes) {
+        // Show current admin (creator or auto-assigned)
+        const currentAdminEl = document.getElementById("ts-current-admin");
+        if (adminRes.admin_name) {
+          const typeLabel = adminRes.admin_type === "creator" ? " (Creator)" : " (Auto)";
+          currentAdminEl.textContent = adminRes.admin_name + typeLabel;
+        } else {
+          currentAdminEl.textContent = "None assigned";
+        }
       }
     } catch (err) {
       console.error("Error loading admin info:", err);
+    }
+
+    // Load thread settings for creator admin
+    try {
+      const settingsRes = await api(`/api/threads/${threadId}/settings`);
+      const creatorAdminEl = document.getElementById("ts-creator-admin");
+      if (settingsRes && settingsRes.creator_admin_name) {
+        creatorAdminEl.textContent = settingsRes.creator_admin_name;
+      } else {
+        creatorAdminEl.textContent = "None";
+      }
+    } catch (err) {
+      console.error("Error loading creator admin:", err);
     }
   }
 

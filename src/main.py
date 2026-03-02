@@ -111,15 +111,40 @@ async def _admin_coordinator_loop() -> None:
                         )
                         online_agents = [a for a in agents if a.is_online]
                         
-                        if not online_agents:
-                            # No online agents, try any agents
-                            if agents:
+                        # Priority: creator_admin > auto_assigned_admin > random selection
+                        selected_agent = None
+                        assignment_type = "auto_selection"
+                        
+                        # 1. Check if creator_admin is online
+                        if ts.creator_admin_id:
+                            creator_online = next(
+                                (a for a in online_agents if a.id == ts.creator_admin_id), None
+                            )
+                            if creator_online:
+                                selected_agent = creator_online
+                                assignment_type = "creator_admin"
+                                logger.info(f"Creator admin {selected_agent.name} is online for thread {ts.thread_id}")
+                        
+                        # 2. If no creator or creator offline, check auto_assigned_admin
+                        if not selected_agent and ts.auto_assigned_admin_id:
+                            auto_admin_online = next(
+                                (a for a in online_agents if a.id == ts.auto_assigned_admin_id), None
+                            )
+                            if auto_admin_online:
+                                selected_agent = auto_admin_online
+                                assignment_type = "existing_auto_admin"
+                        
+                        # 3. If still no admin, select randomly from online agents
+                        if not selected_agent:
+                            if online_agents:
+                                selected_agent = random.choice(online_agents)
+                                assignment_type = "random_online"
+                            elif agents:
                                 selected_agent = random.choice(agents)
+                                assignment_type = "random_any"
                             else:
                                 logger.warning(f"No agents available to assign as admin for thread {ts.thread_id}")
                                 continue
-                        else:
-                            selected_agent = random.choice(online_agents)
                         
                         # Assign admin and send system message
                         await asyncio.wait_for(
@@ -143,7 +168,7 @@ async def _admin_coordinator_loop() -> None:
                         metadata = {
                             "thread_id": ts.thread_id,
                             "assigned_at": datetime.now(timezone.utc).isoformat(),
-                            "assignment_type": "auto_selection",
+                            "assignment_type": assignment_type,
                             "timeout_remaining_seconds": ts.timeout_seconds,
                         }
                         
@@ -158,7 +183,7 @@ async def _admin_coordinator_loop() -> None:
                             timeout=DB_TIMEOUT,
                         )
                         
-                        logger.info(f"Assigned admin {selected_agent.name} ({selected_agent.id}) to thread {ts.thread_id}")
+                        logger.info(f"Assigned admin {selected_agent.name} ({selected_agent.id}) to thread {ts.thread_id} via {assignment_type}")
                     except asyncio.TimeoutError:
                         logger.error(f"Timeout while assigning admin for thread {ts.thread_id}")
                     except Exception as e:
@@ -1201,6 +1226,9 @@ async def api_update_thread_settings(thread_id: str, body: ThreadSettingsUpdate)
         "auto_assigned_admin_id": settings.auto_assigned_admin_id,
         "auto_assigned_admin_name": settings.auto_assigned_admin_name,
         "admin_assignment_time": settings.admin_assignment_time.isoformat() if settings.admin_assignment_time else None,
+        "creator_admin_id": settings.creator_admin_id,
+        "creator_admin_name": settings.creator_admin_name,
+        "creator_assignment_time": settings.creator_assignment_time.isoformat() if settings.creator_assignment_time else None,
         "created_at": settings.created_at.isoformat(),
         "updated_at": settings.updated_at.isoformat(),
     }
@@ -1208,7 +1236,10 @@ async def api_update_thread_settings(thread_id: str, body: ThreadSettingsUpdate)
 
 @app.get("/api/threads/{thread_id}/admin")
 async def api_get_thread_admin(thread_id: str):
-    """Get current auto-assigned admin for a thread."""
+    """Get current admin for a thread.
+    
+    Priority: creator_admin > auto_assigned_admin
+    """
     try:
         db = await asyncio.wait_for(get_db(), timeout=DB_TIMEOUT)
         settings = await asyncio.wait_for(
@@ -1218,15 +1249,24 @@ async def api_get_thread_admin(thread_id: str):
     except asyncio.TimeoutError:
         raise HTTPException(status_code=503, detail="Database operation timeout")
     
-    if not settings.auto_assigned_admin_id:
-        return {"admin_id": None, "admin_name": None, "assigned_at": None, "expires_at": None}
+    # Priority: creator_admin > auto_assigned_admin
+    if settings.creator_admin_id:
+        return {
+            "admin_id": settings.creator_admin_id,
+            "admin_name": settings.creator_admin_name,
+            "admin_type": "creator",
+            "assigned_at": settings.creator_assignment_time.isoformat() if settings.creator_assignment_time else None,
+        }
     
-    return {
-        "admin_id": settings.auto_assigned_admin_id,
-        "admin_name": settings.auto_assigned_admin_name,
-        "assigned_at": settings.admin_assignment_time.isoformat() if settings.admin_assignment_time else None,
-        "expires_at": None,  # No expiration for now
-    }
+    if settings.auto_assigned_admin_id:
+        return {
+            "admin_id": settings.auto_assigned_admin_id,
+            "admin_name": settings.auto_assigned_admin_name,
+            "admin_type": "auto_assigned",
+            "assigned_at": settings.admin_assignment_time.isoformat() if settings.admin_assignment_time else None,
+        }
+    
+    return {"admin_id": None, "admin_name": None, "admin_type": None, "assigned_at": None}
 
 
 

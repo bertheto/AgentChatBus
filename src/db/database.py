@@ -411,6 +411,14 @@ async def init_schema(db: aiosqlite.Connection) -> None:
     except Exception:
         pass  # Column already exists — safe to ignore
 
+    # Migration: Add creator_admin fields to thread_settings for creator-as-admin feature
+    for col, typedef in [
+        ("creator_admin_id", "TEXT"),
+        ("creator_admin_name", "TEXT"),
+        ("creator_assignment_time", "TEXT"),
+    ]:
+        await _add_column_if_missing(db, "thread_settings", col, typedef)
+
     # Seed built-in thread templates (UP-18) — idempotent via INSERT OR IGNORE
     await _seed_builtin_templates(db)
 

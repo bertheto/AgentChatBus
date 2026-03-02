@@ -90,5 +90,8 @@ class ThreadSettings:
     auto_assigned_admin_id: Optional[str] = None
     auto_assigned_admin_name: Optional[str] = None
     admin_assignment_time: Optional[datetime] = None
+    creator_admin_id: Optional[str] = None          # Thread creator as admin
+    creator_admin_name: Optional[str] = None
+    creator_assignment_time: Optional[datetime] = None
     created_at: datetime = field(default_factory=lambda: datetime.now())
     updated_at: datetime = field(default_factory=lambda: datetime.now())

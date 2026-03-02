@@ -27,6 +27,18 @@ from src.content_filter import check_content, ContentFilterError
 
 logger = logging.getLogger(__name__)
 
+
+def _row_get(row: sqlite3.Row, key: str, default=None):
+    """Safely get a column from a sqlite3.Row, returning default if column doesn't exist.
+    
+    This is needed for migration compatibility when new columns are added.
+    """
+    try:
+        return row[key] if row[key] is not None else default
+    except (KeyError, IndexError):
+        return default
+
+
 class RateLimitExceeded(Exception):
     """Raised when an author exceeds the configured message rate limit."""
 
@@ -362,6 +374,9 @@ async def thread_settings_get_or_create(
             auto_assigned_admin_id=row["auto_assigned_admin_id"],
             auto_assigned_admin_name=row["auto_assigned_admin_name"],
             admin_assignment_time=_parse_dt(row["admin_assignment_time"]) if row["admin_assignment_time"] else None,
+            creator_admin_id=_row_get(row, "creator_admin_id"),
+            creator_admin_name=_row_get(row, "creator_admin_name"),
+            creator_assignment_time=_parse_dt(_row_get(row, "creator_assignment_time")) if _row_get(row, "creator_assignment_time") else None,
             created_at=_parse_dt(row["created_at"]),
             updated_at=_parse_dt(row["updated_at"]),
         )
@@ -394,6 +409,9 @@ async def thread_settings_get_or_create(
         auto_assigned_admin_id=row["auto_assigned_admin_id"],
         auto_assigned_admin_name=row["auto_assigned_admin_name"],
         admin_assignment_time=_parse_dt(row["admin_assignment_time"]) if row["admin_assignment_time"] else None,
+        creator_admin_id=_row_get(row, "creator_admin_id"),
+        creator_admin_name=_row_get(row, "creator_admin_name"),
+        creator_assignment_time=_parse_dt(_row_get(row, "creator_assignment_time")) if _row_get(row, "creator_assignment_time") else None,
         created_at=_parse_dt(row["created_at"]),
         updated_at=_parse_dt(row["updated_at"]),
     )
@@ -482,6 +500,33 @@ async def thread_settings_assign_admin(
     return await thread_settings_get_or_create(db, thread_id)
 
 
+async def thread_settings_set_creator_admin(
+    db: aiosqlite.Connection,
+    thread_id: str,
+    creator_id: str,
+    creator_name: str,
+) -> ThreadSettings:
+    """Set the thread creator as the default admin.
+    
+    This is called when a thread is created by an agent via MCP.
+    The creator has priority over auto-assigned admins.
+    """
+    now = _now()
+    await db.execute(
+        """
+        UPDATE thread_settings 
+        SET creator_admin_id = ?,
+            creator_admin_name = ?,
+            creator_assignment_time = ?,
+            updated_at = ?
+        WHERE thread_id = ?
+        """,
+        (creator_id, creator_name, now, now, thread_id),
+    )
+    await db.commit()
+    return await thread_settings_get_or_create(db, thread_id)
+
+
 async def thread_settings_get_timeouts(
     db: aiosqlite.Connection,
 ) -> list[ThreadSettings]:
@@ -513,6 +558,9 @@ async def thread_settings_get_timeouts(
             auto_assigned_admin_id=row["auto_assigned_admin_id"],
             auto_assigned_admin_name=row["auto_assigned_admin_name"],
             admin_assignment_time=_parse_dt(row["admin_assignment_time"]) if row["admin_assignment_time"] else None,
+            creator_admin_id=_row_get(row, "creator_admin_id"),
+            creator_admin_name=_row_get(row, "creator_admin_name"),
+            creator_assignment_time=_parse_dt(_row_get(row, "creator_assignment_time")) if _row_get(row, "creator_assignment_time") else None,
             created_at=_parse_dt(row["created_at"]),
             updated_at=_parse_dt(row["updated_at"]),
         ))

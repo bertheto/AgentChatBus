@@ -10,6 +10,7 @@ import base64
 import mimetypes
 from pathlib import Path
 from typing import Any
+from datetime import datetime, timezone
 
 import mcp.types as types
 
@@ -213,6 +214,11 @@ async def handle_thread_create(db, arguments: dict[str, Any]) -> list[types.Text
     agent_id, _ = src.mcp_server.get_connection_agent()
     if agent_id:
         await crud._set_agent_activity(db, agent_id, "thread_create", touch_heartbeat=True)
+        
+        # 设置创建者为 Thread 管理员
+        agent_info = await crud.agent_get(db, agent_id)
+        if agent_info:
+            await crud.thread_settings_set_creator_admin(db, result.id, agent_id, agent_info.name)
     
     return [types.TextContent(type="text", text=json.dumps({
         "thread_id": result.id, "topic": result.topic, "status": result.status,
@@ -459,6 +465,17 @@ async def handle_msg_wait(db, arguments: dict[str, Any]) -> list[types.Content]:
         msgs = []
 
     token_payload = await crud.issue_reply_token(db, thread_id=thread_id, agent_id=agent_id)
+    
+    # 检查是否为管理员并在超时时添加提示
+    coordination_prompt = None
+    if not msgs and agent_id:  # 超时且没有新消息
+        settings = await crud.thread_settings_get_or_create(db, thread_id)
+        if settings and (settings.creator_admin_id == agent_id or settings.auto_assigned_admin_id == agent_id):
+            coordination_prompt = {
+                "type": "admin_timeout_notice",
+                "message": f"Coordination timeout: No activity detected for {int(timeout_s)} seconds. As the Thread administrator, please issue instructions to continue the discussion."
+            }
+    
     envelope = {
         "messages": [
             {
@@ -478,6 +495,9 @@ async def handle_msg_wait(db, arguments: dict[str, Any]) -> list[types.Content]:
         "reply_token": token_payload["reply_token"],
         "reply_window": token_payload["reply_window"],
     }
+    
+    if coordination_prompt:
+        envelope["coordination_prompt"] = coordination_prompt
 
     return_format = arguments.get("return_format", "blocks")
     if return_format == "blocks":
