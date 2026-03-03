@@ -6,7 +6,6 @@ Tests for UP-14: Reply-To Message Threading.
 """
 import asyncio
 import json
-import os
 import uuid
 
 import aiosqlite
@@ -15,14 +14,11 @@ import pytest
 
 from src.db import crud
 from src.db.database import init_schema
+from tests._constants import TEST_BASE_URL as BASE_URL
 
 # ---------------------------------------------------------------------------
 # Helpers shared between unit and integration tests
 # ---------------------------------------------------------------------------
-
-TEST_PORT = int(os.environ.get("AGENTCHATBUS_PORT", "39769"))
-BASE_URL = os.environ.get("AGENTCHATBUS_TEST_BASE_URL", f"http://127.0.0.1:{TEST_PORT}")
-
 
 async def _make_db() -> aiosqlite.Connection:
     """Create an in-memory DB with the full schema initialized."""
