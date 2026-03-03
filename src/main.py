@@ -59,6 +59,15 @@ logger = logging.getLogger("agentchatbus")
 # Used to detect when all agents in a thread are waiting (coordination timeout).
 # Structure: {thread_id: {agent_id: {"entered_at": datetime, "timeout_ms": int}}}
 _thread_agent_wait_states: dict[str, dict[str, dict]] = {}
+_admin_decision_locks: dict[str, asyncio.Lock] = {}
+
+
+def _get_admin_decision_lock(source_message_id: str) -> asyncio.Lock:
+    lock = _admin_decision_locks.get(source_message_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _admin_decision_locks[source_message_id] = lock
+    return lock
 
 def agent_enter_wait(thread_id: str, agent_id: str, timeout_ms: int = 300000) -> None:
     """Record that an agent has entered msg_wait state for a thread."""
@@ -1584,6 +1593,19 @@ class AdminDecisionRequest(BaseModel):
     source_message_id: str | None = None
 
 
+def _parse_metadata_dict(raw: object) -> dict:
+    if isinstance(raw, dict):
+        return dict(raw)
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                return parsed
+        except json.JSONDecodeError:
+            return {}
+    return {}
+
+
 @app.post("/api/threads/{thread_id}/settings")
 async def api_update_thread_settings(thread_id: str, body: ThreadSettingsUpdate):
     """Update thread settings for coordination and timeout."""
@@ -1681,52 +1703,134 @@ async def api_thread_admin_decision(thread_id: str, body: AdminDecisionRequest):
     if t is None:
         raise HTTPException(status_code=404, detail="Thread not found")
 
+    decision_lock: asyncio.Lock | None = None
+    if body.source_message_id:
+        decision_lock = _get_admin_decision_lock(body.source_message_id)
+        await decision_lock.acquire()
+
     try:
-        settings = await asyncio.wait_for(
-            crud.thread_settings_get_or_create(db, thread_id),
-            timeout=DB_TIMEOUT,
-        )
-    except asyncio.TimeoutError:
-        raise HTTPException(status_code=503, detail="Database operation timeout")
-
-    current_admin_id = settings.creator_admin_id or settings.auto_assigned_admin_id
-    current_admin_name = settings.creator_admin_name or settings.auto_assigned_admin_name
-
-    if body.action == "switch":
-        if not body.candidate_admin_id:
-            raise HTTPException(status_code=400, detail="candidate_admin_id is required for action='switch'")
 
         try:
-            candidate = await asyncio.wait_for(crud.agent_get(db, body.candidate_admin_id), timeout=DB_TIMEOUT)
-        except asyncio.TimeoutError:
-            raise HTTPException(status_code=503, detail="Database operation timeout")
-        if candidate is None:
-            raise HTTPException(status_code=404, detail="Candidate admin agent not found")
-
-        candidate_name = candidate.display_name or candidate.name or candidate.id
-        try:
-            await asyncio.wait_for(
-                crud.thread_settings_switch_admin(db, thread_id, candidate.id, candidate_name),
+            settings = await asyncio.wait_for(
+                crud.thread_settings_get_or_create(db, thread_id),
                 timeout=DB_TIMEOUT,
             )
         except asyncio.TimeoutError:
             raise HTTPException(status_code=503, detail="Database operation timeout")
 
-        old_badge = f"{_agent_emoji(current_admin_id)} {current_admin_name or current_admin_id or 'Unknown'}"
-        new_badge = f"{_agent_emoji(candidate.id)} {candidate_name}"
-        confirmation = (
-            f"Administrator switched by human decision: {old_badge} -> {new_badge}."
-        )
+        current_admin_id = settings.creator_admin_id or settings.auto_assigned_admin_id
+        current_admin_name = settings.creator_admin_name or settings.auto_assigned_admin_name
+
+        source_msg = None
+        source_meta: dict = {}
+        if body.source_message_id:
+            try:
+                source_msg = await asyncio.wait_for(crud.msg_get(db, body.source_message_id), timeout=DB_TIMEOUT)
+            except asyncio.TimeoutError:
+                raise HTTPException(status_code=503, detail="Database operation timeout")
+            if source_msg is None:
+                raise HTTPException(status_code=404, detail="source_message_id not found")
+            if source_msg.thread_id != thread_id:
+                raise HTTPException(status_code=400, detail="source_message_id does not belong to this thread")
+
+            source_meta = _parse_metadata_dict(source_msg.metadata)
+            if source_meta.get("ui_type") != "admin_switch_confirmation_required":
+                raise HTTPException(status_code=400, detail="source_message_id is not an admin confirmation prompt")
+
+            if source_meta.get("decision_status") == "resolved":
+                existing_action = str(source_meta.get("decision_action") or body.action)
+                return {
+                    "ok": True,
+                    "thread_id": thread_id,
+                    "action": existing_action,
+                    "already_decided": True,
+                    "source_message_id": body.source_message_id,
+                    "decided_at": source_meta.get("decision_at"),
+                }
+
+        decided_at = datetime.now(timezone.utc).isoformat()
+
+        if body.action == "switch":
+            if not body.candidate_admin_id:
+                raise HTTPException(status_code=400, detail="candidate_admin_id is required for action='switch'")
+
+            try:
+                candidate = await asyncio.wait_for(crud.agent_get(db, body.candidate_admin_id), timeout=DB_TIMEOUT)
+            except asyncio.TimeoutError:
+                raise HTTPException(status_code=503, detail="Database operation timeout")
+            if candidate is None:
+                raise HTTPException(status_code=404, detail="Candidate admin agent not found")
+
+            candidate_name = candidate.display_name or candidate.name or candidate.id
+            try:
+                await asyncio.wait_for(
+                    crud.thread_settings_switch_admin(db, thread_id, candidate.id, candidate_name),
+                    timeout=DB_TIMEOUT,
+                )
+            except asyncio.TimeoutError:
+                raise HTTPException(status_code=503, detail="Database operation timeout")
+
+            old_badge = f"{_agent_emoji(current_admin_id)} {current_admin_name or current_admin_id or 'Unknown'}"
+            new_badge = f"{_agent_emoji(candidate.id)} {candidate_name}"
+            confirmation = (
+                f"Administrator switched by human decision: {old_badge} -> {new_badge}."
+            )
+            metadata = {
+                "ui_type": "admin_switch_decision_result",
+                "decision": "switch",
+                "thread_id": thread_id,
+                "source_message_id": body.source_message_id,
+                "previous_admin_id": current_admin_id,
+                "new_admin_id": candidate.id,
+                "new_admin_name": candidate_name,
+                "new_admin_emoji": _agent_emoji(candidate.id),
+                "decided_at": decided_at,
+            }
+
+            try:
+                await asyncio.wait_for(
+                    crud._msg_create_system(
+                        db,
+                        thread_id=thread_id,
+                        content=confirmation,
+                        metadata=metadata,
+                        clear_auto_admin=False,
+                    ),
+                    timeout=DB_TIMEOUT,
+                )
+            except asyncio.TimeoutError:
+                raise HTTPException(status_code=503, detail="Database operation timeout")
+
+            if source_msg is not None:
+                source_meta["decision_status"] = "resolved"
+                source_meta["decision_action"] = "switch"
+                source_meta["decision_at"] = decided_at
+                await db.execute(
+                    "UPDATE messages SET metadata = ? WHERE id = ?",
+                    (json.dumps(source_meta), source_msg.id),
+                )
+                await db.commit()
+
+            return {
+                "ok": True,
+                "action": "switch",
+                "thread_id": thread_id,
+                "new_admin_id": candidate.id,
+                "new_admin_name": candidate_name,
+                "already_decided": False,
+            }
+
+        kept_badge = f"{_agent_emoji(current_admin_id)} {current_admin_name or current_admin_id or 'Unknown'}"
+        confirmation = f"Administrator kept by human decision: {kept_badge}."
         metadata = {
             "ui_type": "admin_switch_decision_result",
-            "decision": "switch",
+            "decision": "keep",
             "thread_id": thread_id,
             "source_message_id": body.source_message_id,
-            "previous_admin_id": current_admin_id,
-            "new_admin_id": candidate.id,
-            "new_admin_name": candidate_name,
-            "new_admin_emoji": _agent_emoji(candidate.id),
-            "decided_at": datetime.now(timezone.utc).isoformat(),
+            "kept_admin_id": current_admin_id,
+            "kept_admin_name": current_admin_name,
+            "kept_admin_emoji": _agent_emoji(current_admin_id),
+            "decided_at": decided_at,
         }
 
         try:
@@ -1743,48 +1847,27 @@ async def api_thread_admin_decision(thread_id: str, body: AdminDecisionRequest):
         except asyncio.TimeoutError:
             raise HTTPException(status_code=503, detail="Database operation timeout")
 
+        if source_msg is not None:
+            source_meta["decision_status"] = "resolved"
+            source_meta["decision_action"] = "keep"
+            source_meta["decision_at"] = decided_at
+            await db.execute(
+                "UPDATE messages SET metadata = ? WHERE id = ?",
+                (json.dumps(source_meta), source_msg.id),
+            )
+            await db.commit()
+
         return {
             "ok": True,
-            "action": "switch",
+            "action": "keep",
             "thread_id": thread_id,
-            "new_admin_id": candidate.id,
-            "new_admin_name": candidate_name,
+            "kept_admin_id": current_admin_id,
+            "kept_admin_name": current_admin_name,
+            "already_decided": False,
         }
-
-    kept_badge = f"{_agent_emoji(current_admin_id)} {current_admin_name or current_admin_id or 'Unknown'}"
-    confirmation = f"Administrator kept by human decision: {kept_badge}."
-    metadata = {
-        "ui_type": "admin_switch_decision_result",
-        "decision": "keep",
-        "thread_id": thread_id,
-        "source_message_id": body.source_message_id,
-        "kept_admin_id": current_admin_id,
-        "kept_admin_name": current_admin_name,
-        "kept_admin_emoji": _agent_emoji(current_admin_id),
-        "decided_at": datetime.now(timezone.utc).isoformat(),
-    }
-
-    try:
-        await asyncio.wait_for(
-            crud._msg_create_system(
-                db,
-                thread_id=thread_id,
-                content=confirmation,
-                metadata=metadata,
-                clear_auto_admin=False,
-            ),
-            timeout=DB_TIMEOUT,
-        )
-    except asyncio.TimeoutError:
-        raise HTTPException(status_code=503, detail="Database operation timeout")
-
-    return {
-        "ok": True,
-        "action": "keep",
-        "thread_id": thread_id,
-        "kept_admin_id": current_admin_id,
-        "kept_admin_name": current_admin_name,
-    }
+    finally:
+        if decision_lock is not None and decision_lock.locked():
+            decision_lock.release()
 
 
 

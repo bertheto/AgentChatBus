@@ -1279,7 +1279,7 @@ body[data-theme="light"] .msg-sys-prompt-body {
 
 .msg-sys-admin-btn:disabled {
   opacity: .6;
-  cursor: default;
+  cursor: not-allowed;
 }
 
 .msg-sys-admin-btn-switch {
