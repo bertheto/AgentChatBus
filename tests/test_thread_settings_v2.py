@@ -68,18 +68,25 @@ async def test_thread_settings_update(db):
 
 @pytest.mark.asyncio
 async def test_thread_settings_update_invalid_timeout(db):
-    """Test that invalid timeout values are rejected."""
+    """Test that timeout below minimum is rejected."""
     thread_id = await create_test_thread(db)
     
     # Create settings first
     await crud.thread_settings_get_or_create(db, thread_id)
     
-    # Try to set timeout out of range
+    # Try to set timeout below minimum
     with pytest.raises(ValueError):
-        await crud.thread_settings_update(db, thread_id, timeout_seconds=5)
-    
-    with pytest.raises(ValueError):
-        await crud.thread_settings_update(db, thread_id, timeout_seconds=400)
+        await crud.thread_settings_update(db, thread_id, timeout_seconds=29)
+
+
+@pytest.mark.asyncio
+async def test_thread_settings_update_allows_large_timeout(db):
+    """Large timeout values are allowed (no max cap)."""
+    thread_id = await create_test_thread(db)
+    await crud.thread_settings_get_or_create(db, thread_id)
+
+    updated = await crud.thread_settings_update(db, thread_id, timeout_seconds=3600)
+    assert updated.timeout_seconds == 3600
 
 
 @pytest.mark.asyncio
@@ -145,12 +152,12 @@ async def test_timeout_detection_simple(db):
     """Test that timed-out threads can be detected by comparing times programmatically."""
     thread_id = await create_test_thread(db)
     
-    # Create settings with 10 second timeout
+    # Create settings with 30 second timeout
     settings = await crud.thread_settings_get_or_create(db, thread_id)
-    await crud.thread_settings_update(db, thread_id, timeout_seconds=10)
+    await crud.thread_settings_update(db, thread_id, timeout_seconds=30)
     
     # Backdate last_activity_time by updating directly
-    old_time = (datetime.now(timezone.utc) - timedelta(seconds=15)).isoformat()
+    old_time = (datetime.now(timezone.utc) - timedelta(seconds=35)).isoformat()
     async with db.execute(
         "UPDATE thread_settings SET last_activity_time = ? WHERE thread_id = ?",
         (old_time, thread_id)
@@ -164,7 +171,7 @@ async def test_timeout_detection_simple(db):
     # Manually check if it should timeout
     elapsed = (datetime.now(timezone.utc) - settings.last_activity_time.replace(tzinfo=timezone.utc)).total_seconds()
     
-    # Should be ~15 seconds elapsed with 10 second timeout
+    # Should be ~35 seconds elapsed with 30 second timeout
     assert elapsed >= settings.timeout_seconds
     assert settings.auto_coordinator_enabled is True
     assert settings.auto_assigned_admin_id is None

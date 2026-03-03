@@ -13,7 +13,6 @@ import logging
 import os
 import time
 import uuid
-import random
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -200,46 +199,47 @@ async def _thread_timeout_loop() -> None:
 
 
 async def _admin_coordinator_loop() -> None:
-    """Background task: check for msg_wait coordination timeouts and notify/assign admins.
-    
-    New logic (2026-03-02):
-    - Detect when all online agents in a thread are in msg_wait state for >= 60 seconds
-    - Notify the administrator to coordinate
-    - If no administrator exists, randomly assign one from online agents
-    - If only one agent remains, include "other agents offline" notice
+    """Background task: trigger admin intervention when all online thread agents are waiting.
+
+    Rules:
+    - Trigger when all online participants in a thread are in msg_wait for >= thread timeout.
+    - Single-agent and multi-agent: emit a human confirmation card before any admin switch.
+    - The actual switch/keep decision is handled by /api/threads/{thread_id}/admin/decision.
+    - Emit a paired human-only notice for UI transparency.
     """
     logger.info("Admin coordinator loop enabled: checking for msg_wait coordination timeouts every 10s")
     while True:
         try:
             await asyncio.sleep(10)
             db = await get_db()
-            
+
             # Get all agents for online status check
             all_agents = await asyncio.wait_for(crud.agent_list(db), timeout=DB_TIMEOUT)
+            all_agents_by_id = {a.id: a for a in all_agents}
             online_agents = [a for a in all_agents if a.is_online]
             online_agent_ids = {a.id for a in online_agents}
-            
+
             # Check each thread that has agents in wait state
             for thread_id, wait_states in list(_thread_agent_wait_states.items()):
                 if not wait_states:
                     continue
-                
+
                 # Get thread settings
                 ts = await asyncio.wait_for(
                     crud.thread_settings_get_or_create(db, thread_id),
                     timeout=DB_TIMEOUT,
                 )
-                
+
                 # Skip if auto_administrator is disabled
                 if not ts.auto_administrator_enabled:
                     continue
-                
+
                 # Filter wait states to only include online agents
                 online_wait_states = {
                     agent_id: state for agent_id, state in wait_states.items()
                     if agent_id in online_agent_ids
                 }
-                
+
                 if not online_wait_states:
                     continue
 
@@ -262,16 +262,13 @@ async def _admin_coordinator_loop() -> None:
                 if not thread_participant_ids:
                     thread_participant_ids = set(online_wait_states.keys())
 
-                participating_online_agents = [
-                    a for a in online_agents if a.id in thread_participant_ids
-                ]
-                if not participating_online_agents:
+                if not thread_participant_ids:
                     continue
-                
+
                 # Trigger only when all online participants of THIS thread are waiting.
                 if not thread_participant_ids.issubset(set(online_wait_states.keys())):
                     continue
-                
+
                 # All online agents are in wait state - check timing
                 # Use the most recent entry time (last agent to enter wait)
                 latest_enter = max(
@@ -282,64 +279,75 @@ async def _admin_coordinator_loop() -> None:
                 
                 if elapsed < ts.timeout_seconds:
                     continue
-                
+
                 # Timeout reached - evaluate admin coordination action
-                logger.info(f"Thread {thread_id}: all {len(online_wait_states)} online agents in msg_wait for {elapsed:.0f}s")
-                
+                logger.info(
+                    "Thread %s: all %d online participants in msg_wait for %.0fs (threshold=%ss)",
+                    thread_id,
+                    len(thread_participant_ids),
+                    elapsed,
+                    ts.timeout_seconds,
+                )
+
                 try:
-                    participant_count = len(participating_online_agents)
-                    # Trigger prompt when at least one online participant remains.
-                    if participant_count < 1:
+                    participating_online_agents = [
+                        a for a in online_agents if a.id in thread_participant_ids
+                    ]
+                    if not participating_online_agents:
                         continue
 
-                    # Current admin is creator-admin first, then auto-assigned admin.
                     current_admin_id = ts.creator_admin_id or ts.auto_assigned_admin_id
-                    if not current_admin_id:
-                        continue
+                    current_admin = all_agents_by_id.get(current_admin_id) if current_admin_id else None
+                    participant_count = len(participating_online_agents)
 
-                    current_admin_online = current_admin_id in thread_participant_ids
-                    if current_admin_online:
-                        continue
-
-                    current_admin = next((a for a in all_agents if a.id == current_admin_id), None)
-
-                    # Propose a candidate from online participants, excluding the current admin.
-                    candidate_pool = [a for a in participating_online_agents if a.id != current_admin_id]
-                    if not candidate_pool:
-                        logger.warning(f"No online candidate available for thread {thread_id} admin switch prompt")
-                        continue
-
-                    candidate_admin = random.choice(candidate_pool)
-
-                    current_admin_emoji = _agent_emoji(current_admin_id)
-                    current_admin_label = _agent_label(current_admin, current_admin_id)
-                    candidate_admin_emoji = _agent_emoji(candidate_admin.id)
-                    candidate_admin_label = _agent_label(candidate_admin, candidate_admin.id)
-
-                    system_msg_content = (
-                        "Possible administrator offline detected. "
-                        f"Current admin: {current_admin_emoji} {current_admin_label}. "
-                        f"Candidate admin: {candidate_admin_emoji} {candidate_admin_label}. "
-                        "Human confirmation is required before any admin change."
+                    sorted_candidates = sorted(
+                        participating_online_agents,
+                        key=lambda a: (str(a.display_name or a.name or a.id).lower(), a.id),
                     )
-                    
-                    metadata = {
+                    if current_admin_id:
+                        candidate_pool = [a for a in sorted_candidates if a.id != current_admin_id]
+                    else:
+                        candidate_pool = sorted_candidates
+                    candidate_agent = candidate_pool[0] if candidate_pool else sorted_candidates[0]
+
+                    current_admin_label = _agent_label(current_admin, current_admin_id)
+                    current_admin_emoji = _agent_emoji(current_admin_id)
+                    candidate_label = _agent_label(candidate_agent, candidate_agent.id)
+                    candidate_emoji = _agent_emoji(candidate_agent.id)
+
+                    if participant_count == 1:
+                        confirmation_content = (
+                            f"Auto Administrator Timeout reached after {int(elapsed)} seconds. "
+                            f"Only one online participant remains: {candidate_emoji} {candidate_label}. "
+                            "Human confirmation is required before changing administrator."
+                        )
+                    else:
+                        confirmation_content = (
+                            f"Auto Administrator Timeout reached after {int(elapsed)} seconds while all online participants were in msg_wait. "
+                            f"Current admin: {current_admin_emoji} {current_admin_label}. "
+                            f"Candidate admin: {candidate_emoji} {candidate_label}. "
+                            "Human confirmation is required before changing administrator."
+                        )
+
+                    confirmation_meta = {
                         "ui_type": "admin_switch_confirmation_required",
+                        "visibility": "human_only",
                         "thread_id": thread_id,
-                        "reason": "possible_admin_offline",
+                        "reason": "all_agents_waiting",
+                        "mode": "single_agent" if participant_count == 1 else "multi_agent",
                         "current_admin_id": current_admin_id,
                         "current_admin_name": current_admin_label,
                         "current_admin_emoji": current_admin_emoji,
-                        "candidate_admin_id": candidate_admin.id,
-                        "candidate_admin_name": candidate_admin_label,
-                        "candidate_admin_emoji": candidate_admin_emoji,
+                        "candidate_admin_id": candidate_agent.id,
+                        "candidate_admin_name": candidate_label,
+                        "candidate_admin_emoji": candidate_emoji,
                         "timeout_seconds": int(elapsed),
                         "online_agents_count": participant_count,
                         "triggered_at": datetime.now(timezone.utc).isoformat(),
                         "ui_buttons": [
                             {
                                 "action": "switch",
-                                "label": f"Switch admin to {candidate_admin_emoji} {candidate_admin_label}",
+                                "label": f"Switch admin to {candidate_emoji} {candidate_label}",
                             },
                             {
                                 "action": "keep",
@@ -347,34 +355,63 @@ async def _admin_coordinator_loop() -> None:
                             },
                         ],
                     }
-                    
-                    # Post system message
                     await asyncio.wait_for(
                         crud._msg_create_system(
                             db,
                             thread_id=thread_id,
-                            content=system_msg_content,
-                            metadata=metadata,
+                            content=confirmation_content,
+                            metadata=confirmation_meta,
                             clear_auto_admin=False,
                         ),
                         timeout=DB_TIMEOUT,
                     )
-                    
-                    # Clear wait states for this thread to avoid repeated notifications
-                    clear_thread_wait_state(thread_id)
-                    
-                    logger.info(
-                        "Sent admin-switch confirmation prompt for thread %s: current=%s, candidate=%s",
-                        thread_id,
-                        current_admin_id,
-                        candidate_admin.id,
+
+                    human_notice = (
+                        f"Auto Administrator Timeout triggered after {int(elapsed)} seconds. "
+                        "All online participants are currently waiting in msg_wait. "
+                        "Administrator switch now requires human confirmation."
                     )
-                    
+                    human_meta = {
+                        "ui_type": "admin_coordination_timeout_notice",
+                        "visibility": "human_only",
+                        "thread_id": thread_id,
+                        "reason": "all_agents_waiting",
+                        "mode": "single_agent" if participant_count == 1 else "multi_agent",
+                        "current_admin_id": current_admin_id,
+                        "current_admin_name": current_admin_label,
+                        "current_admin_emoji": current_admin_emoji,
+                        "candidate_admin_id": candidate_agent.id,
+                        "candidate_admin_name": candidate_label,
+                        "candidate_admin_emoji": candidate_emoji,
+                        "timeout_seconds": int(elapsed),
+                        "online_agents_count": participant_count,
+                        "triggered_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                    await asyncio.wait_for(
+                        crud._msg_create_system(
+                            db,
+                            thread_id=thread_id,
+                            content=human_notice,
+                            metadata=human_meta,
+                            clear_auto_admin=False,
+                        ),
+                        timeout=DB_TIMEOUT,
+                    )
+
+                    clear_thread_wait_state(thread_id)
+
+                    logger.info(
+                        "Sent admin confirmation prompt for thread %s: candidate=%s online_count=%s",
+                        thread_id,
+                        candidate_agent.id,
+                        participant_count,
+                    )
+
                 except asyncio.TimeoutError:
                     logger.error(f"Timeout processing coordination for thread {thread_id}")
                 except Exception as e:
                     logger.error(f"Error processing coordination for thread {thread_id}: {e}")
-                    
+
         except asyncio.CancelledError:
             break
         except Exception as exc:

@@ -17,7 +17,7 @@ async def _setup_db() -> aiosqlite.Connection:
 
 @pytest.mark.asyncio
 async def test_msg_wait_no_admin_prompt_when_no_agent_online():
-    """Do not emit admin/coordinator prompts when there are no online agents."""
+    """Do not emit coordination prompts when there are no online agents."""
     db = await _setup_db()
     try:
         thread = await crud.thread_create(db, "msg-wait-no-online")
@@ -42,8 +42,8 @@ async def test_msg_wait_no_admin_prompt_when_no_agent_online():
 
 
 @pytest.mark.asyncio
-async def test_msg_wait_single_online_agent_gets_admin_prompt():
-    """When the current caller is the only online agent, emit actionable non-admin prompt."""
+async def test_msg_wait_single_online_agent_has_no_dispatch_coordination_prompt():
+    """Coordinator prompts are now produced by the backend coordinator loop, not dispatch.msg_wait."""
     db = await _setup_db()
     try:
         thread = await crud.thread_create(db, "msg-wait-one-online")
@@ -62,25 +62,28 @@ async def test_msg_wait_single_online_agent_gets_admin_prompt():
         )
 
         payload = json.loads(out[0].text)
-        assert "coordination_prompt" in payload
-        assert payload["coordination_prompt"]["type"] == "single_agent_timeout_notice"
+        assert "coordination_prompt" not in payload
     finally:
         await db.close()
 
 
 @pytest.mark.asyncio
-async def test_msg_wait_admin_timeout_emits_system_message_in_english():
-    """When admin-timeout coordination triggers, emit an English system notice visible only to humans."""
+async def test_msg_wait_and_msg_list_filter_human_only_system_messages():
+    """human_only system notices must remain invisible to agent tool calls."""
     db = await _setup_db()
     try:
-        thread = await crud.thread_create(db, "msg-wait-admin-timeout")
-        admin = await crud.agent_register(db, ide="VS Code", model="GPT-5.3-Codex")
-        peer = await crud.agent_register(db, ide="Cursor", model="GPT-5.3-Codex")
-        await crud.thread_settings_switch_admin(
+        thread = await crud.thread_create(db, "msg-wait-human-only")
+        agent = await crud.agent_register(db, ide="VS Code", model="GPT-5.3-Codex")
+
+        await crud._msg_create_system(
             db,
             thread.id,
-            admin.id,
-            admin.display_name or admin.name or admin.id,
+            "Auto Administrator Timeout triggered after 100 seconds.",
+            metadata={
+                "ui_type": "admin_coordination_timeout_notice",
+                "visibility": "human_only",
+            },
+            clear_auto_admin=False,
         )
 
         out = await handle_msg_wait(
@@ -90,22 +93,13 @@ async def test_msg_wait_admin_timeout_emits_system_message_in_english():
                 "after_seq": 0,
                 "timeout_ms": 1,
                 "return_format": "json",
-                "agent_id": admin.id,
-                "token": admin.token,
+                "agent_id": agent.id,
+                "token": agent.token,
             },
         )
 
         payload = json.loads(out[0].text)
-        assert payload["coordination_prompt"]["type"] == "admin_timeout_notice"
-
-        msgs = await crud.msg_list(db, thread.id, after_seq=0, include_system_prompt=False)
-        timeout_msgs = [
-            m for m in msgs
-            if (m.role == "system") and ("Auto Administrator Timeout triggered" in (m.content or ""))
-        ]
-        assert len(timeout_msgs) == 1
-        timeout_meta = json.loads(timeout_msgs[0].metadata or "{}")
-        assert timeout_meta.get("visibility") == "human_only"
+        assert payload.get("messages") == []
 
         list_out = await handle_msg_list(
             db,
@@ -119,6 +113,5 @@ async def test_msg_wait_admin_timeout_emits_system_message_in_english():
         )
         listed = json.loads(list_out[0].text)
         assert not any("Auto Administrator Timeout triggered" in (m.get("content") or "") for m in listed)
-        assert peer.id != admin.id
     finally:
         await db.close()

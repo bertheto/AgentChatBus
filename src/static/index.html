@@ -732,6 +732,9 @@ Note: Thread name is the topic label. Thread ID is the unique identifier.`;
       // ---- System event (centered pill / action card) or system prompt (collapsable bubble) ---------------------
       if (m.role === 'system' && m.author === 'system') {
         const metaObj = parseMetadata(m.metadata);
+
+        // Frontend fallback: still render legacy human-decision admin switch cards
+        // if old messages exist in history.
         if (metaObj && metaObj.ui_type === 'admin_switch_confirmation_required') {
           const card = document.createElement('acb-admin-switch-card');
           if (typeof card.setData === 'function') {

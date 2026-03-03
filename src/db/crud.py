@@ -588,8 +588,8 @@ async def thread_settings_update(
 
     # Validate timeout_seconds if provided
     if timeout_seconds is not None:
-        if timeout_seconds < 10 or timeout_seconds > 300:
-            raise ValueError("timeout_seconds must be between 10 and 300")
+        if timeout_seconds < 30:
+            raise ValueError("timeout_seconds must be at least 30")
     
     # Prepare update statement
     updates = []

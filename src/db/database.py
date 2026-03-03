@@ -63,6 +63,119 @@ async def _table_has_column(db: aiosqlite.Connection, table: str, column: str) -
     return any(str(r[1]).lower() == wanted for r in rows)
 
 
+async def _thread_settings_needs_timeout_migration(db: aiosqlite.Connection) -> bool:
+    """Detect legacy thread_settings timeout constraints/defaults requiring rebuild."""
+    async with db.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'thread_settings'"
+    ) as cur:
+        row = await cur.fetchone()
+    if not row or not row["sql"]:
+        return False
+
+    ddl = str(row["sql"]).lower().replace("\n", " ")
+    has_legacy_max = "timeout_seconds" in ddl and "<= 300" in ddl
+    has_legacy_min = "timeout_seconds" in ddl and ">= 10" in ddl
+    has_default_100 = "timeout_seconds" in ddl and "default 100" in ddl
+    return has_legacy_max or has_legacy_min or has_default_100
+
+
+async def _migrate_thread_settings_timeout_constraints(db: aiosqlite.Connection) -> None:
+    """Rebuild thread_settings to apply timeout>=30 and default=60 with no max cap."""
+    if not await _thread_settings_needs_timeout_migration(db):
+        return
+
+    logger.info("Migration: rebuilding thread_settings for timeout_seconds >= 30 (no max), default 60")
+
+    has_creator_admin_id = await _table_has_column(db, "thread_settings", "creator_admin_id")
+    has_creator_admin_name = await _table_has_column(db, "thread_settings", "creator_admin_name")
+    has_creator_assignment_time = await _table_has_column(db, "thread_settings", "creator_assignment_time")
+    has_auto_admin_col = await _table_has_column(db, "thread_settings", "auto_administrator_enabled")
+    has_legacy_auto_col = await _table_has_column(db, "thread_settings", "auto_coordinator_enabled")
+
+    if has_auto_admin_col:
+        auto_admin_expr = "auto_administrator_enabled"
+    elif has_legacy_auto_col:
+        auto_admin_expr = "auto_coordinator_enabled"
+    else:
+        auto_admin_expr = "1"
+
+    creator_id_expr = "creator_admin_id" if has_creator_admin_id else "NULL"
+    creator_name_expr = "creator_admin_name" if has_creator_admin_name else "NULL"
+    creator_time_expr = "creator_assignment_time" if has_creator_assignment_time else "NULL"
+
+    await db.execute("PRAGMA foreign_keys=OFF")
+    try:
+        await db.executescript(
+            """
+            CREATE TABLE thread_settings_new (
+                id                          INTEGER PRIMARY KEY AUTOINCREMENT,
+                thread_id                   TEXT UNIQUE NOT NULL REFERENCES threads(id),
+                auto_administrator_enabled  INTEGER NOT NULL DEFAULT 1,
+                timeout_seconds             INTEGER NOT NULL DEFAULT 60 CHECK (timeout_seconds >= 30),
+                last_activity_time          TEXT NOT NULL,
+                auto_assigned_admin_id      TEXT,
+                auto_assigned_admin_name    TEXT,
+                admin_assignment_time       TEXT,
+                creator_admin_id            TEXT,
+                creator_admin_name          TEXT,
+                creator_assignment_time     TEXT,
+                created_at                  TEXT NOT NULL,
+                updated_at                  TEXT NOT NULL
+            );
+            """
+        )
+
+        await db.execute(
+            f"""
+            INSERT INTO thread_settings_new (
+                id,
+                thread_id,
+                auto_administrator_enabled,
+                timeout_seconds,
+                last_activity_time,
+                auto_assigned_admin_id,
+                auto_assigned_admin_name,
+                admin_assignment_time,
+                creator_admin_id,
+                creator_admin_name,
+                creator_assignment_time,
+                created_at,
+                updated_at
+            )
+            SELECT
+                id,
+                thread_id,
+                COALESCE({auto_admin_expr}, 1),
+                CASE
+                    WHEN timeout_seconds IS NULL THEN 60
+                    WHEN timeout_seconds < 30 THEN 30
+                    ELSE timeout_seconds
+                END,
+                last_activity_time,
+                auto_assigned_admin_id,
+                auto_assigned_admin_name,
+                admin_assignment_time,
+                {creator_id_expr},
+                {creator_name_expr},
+                {creator_time_expr},
+                created_at,
+                updated_at
+            FROM thread_settings
+            """
+        )
+
+        await db.execute("DROP TABLE thread_settings")
+        await db.execute("ALTER TABLE thread_settings_new RENAME TO thread_settings")
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_thread_settings_activity ON thread_settings(last_activity_time)"
+        )
+        await db.commit()
+        logger.info("Migration: thread_settings timeout constraints updated successfully")
+    finally:
+        await db.execute("PRAGMA foreign_keys=ON")
+        await db.commit()
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -299,7 +412,7 @@ async def init_schema(db: aiosqlite.Connection) -> None:
             id                          INTEGER PRIMARY KEY AUTOINCREMENT,
             thread_id                   TEXT UNIQUE NOT NULL REFERENCES threads(id),
             auto_administrator_enabled  INTEGER NOT NULL DEFAULT 1,  -- Renamed from auto_coordinator_enabled
-            timeout_seconds             INTEGER NOT NULL DEFAULT 60 CHECK (timeout_seconds >= 10 AND timeout_seconds <= 300),
+            timeout_seconds             INTEGER NOT NULL DEFAULT 60 CHECK (timeout_seconds >= 30),
             last_activity_time          TEXT NOT NULL,
             auto_assigned_admin_id      TEXT,
             auto_assigned_admin_name    TEXT,
@@ -452,6 +565,9 @@ async def init_schema(db: aiosqlite.Connection) -> None:
         ("creator_assignment_time", "TEXT"),
     ]:
         await _add_column_if_missing(db, "thread_settings", col, typedef)
+
+    # Migration: Rebuild thread_settings to relax timeout max cap and bump defaults.
+    await _migrate_thread_settings_timeout_constraints(db)
 
     # Migration: rename thread_settings.auto_coordinator_enabled -> auto_administrator_enabled
     # for existing DBs created before the terminology update.

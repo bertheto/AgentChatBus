@@ -112,9 +112,24 @@
         : `Keep ${currentBadge} as admin`;
       const resolvedAction = String(meta.decision_action || "").trim();
       const isResolved = meta.decision_status === "resolved" || resolvedAction.length > 0;
+      const timeoutSeconds = Number.isFinite(Number(meta.timeout_seconds)) ? Number(meta.timeout_seconds) : null;
+      const onlineCount = Number.isFinite(Number(meta.online_agents_count)) ? Number(meta.online_agents_count) : null;
+      const modeLabel = String(meta.mode || "").trim() === "single_agent" ? "single-agent" : "multi-agent";
+      const visibility = String(meta.visibility || "").trim().toLowerCase();
+      const reasonText = timeoutSeconds
+        ? `Trigger condition: all online participants stayed in msg_wait for ${timeoutSeconds}s (${modeLabel} path).`
+        : `Trigger condition: all online participants stayed in msg_wait past the configured timeout (${modeLabel} path).`;
+      const onlineText = onlineCount
+        ? `Online participants at trigger time: ${onlineCount}.`
+        : "Online participants at trigger time: unavailable.";
+      const visibilityText = visibility === "human_only"
+        ? "Visibility: human only (agents cannot read this card)."
+        : "Visibility: human decision required.";
 
       this.innerHTML = `
-        <div class="msg-sys-admin-title">Possible administrator offline detected</div>
+        <div class="msg-sys-admin-title">Administrator switch confirmation required</div>
+        <div class="msg-sys-admin-body">${this._esc(reasonText)} ${this._esc(onlineText)}</div>
+        <div class="msg-sys-admin-body">${this._esc(visibilityText)}</div>
         <div class="msg-sys-admin-body">Current admin: ${this._esc(currentBadge)} | Candidate: ${this._esc(candidateBadge)}</div>
         <div class="msg-sys-admin-actions">
           <button type="button" class="msg-sys-admin-btn msg-sys-admin-btn-switch" data-action="switch">${this._esc(switchLabel)}</button>

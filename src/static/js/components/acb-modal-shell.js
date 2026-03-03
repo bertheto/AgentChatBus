@@ -60,11 +60,15 @@
             onclick="event.stopPropagation()">
             <h3 style="font-size:16px;font-weight:600;margin-bottom:18px;color:var(--text-1)">⚙️ Thread Settings</h3>
             
-            <label style="display:block;font-size:13px;color:var(--text-2);margin-bottom:6px;">Enable Auto Administrator</label>
-            <input id="ts-auto-coordinator" type="checkbox" style="width:18px;height:18px;cursor:pointer;margin-bottom:16px;" />
-            
-            <label style="display:block;font-size:13px;color:var(--text-2);margin-bottom:6px;">Auto Administrator Timeout (seconds)</label>
-            <input id="ts-timeout-seconds" type="number" min="10" max="300" value="60"
+            <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text-2);margin-bottom:6px;">
+              Administrator Confirmation Delay (seconds)
+              <span
+                title="When all currently online participants stay in msg_wait for this long, the system creates a human-only administrator confirmation card. Minimum 30 seconds; no maximum."
+                aria-label="When all currently online participants stay in msg_wait for this long, the system creates a human-only administrator confirmation card. Minimum 30 seconds; no maximum."
+                style="display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;border:1px solid var(--border-light);border-radius:50%;font-size:11px;line-height:1;cursor:help;color:var(--text-2);"
+              >i</span>
+            </label>
+            <input id="ts-timeout-seconds" type="number" min="30" value="60"
               style="width:100%;background:var(--bg-input);border:1px solid var(--border-light);color:var(--text-1);border-radius:10px;padding:10px 14px;font-size:14px;font-family:inherit;margin-bottom:16px;" />
             
             <div style="background:var(--bg-input);border:1px solid var(--border-light);border-radius:10px;padding:12px;margin-bottom:16px;font-size:13px;color:var(--text-2);">

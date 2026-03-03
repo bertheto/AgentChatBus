@@ -199,8 +199,6 @@
     try {
       const res = await api(`/api/threads/${threadId}/settings`);
       if (res) {
-        document.getElementById("ts-auto-coordinator").checked =
-          res.auto_administrator_enabled ?? res.auto_coordinator_enabled ?? false;
         document.getElementById("ts-timeout-seconds").value = res.timeout_seconds || 60;
       }
     } catch (err) {
@@ -255,12 +253,11 @@
       return;
     }
 
-    const autoAdministratorEnabled = document.getElementById("ts-auto-coordinator").checked;
     const timeoutSeconds = parseInt(document.getElementById("ts-timeout-seconds").value, 10);
 
     // Validation
-    if (isNaN(timeoutSeconds) || timeoutSeconds < 10 || timeoutSeconds > 300) {
-      alert("Timeout must be between 10 and 300 seconds.");
+    if (isNaN(timeoutSeconds) || timeoutSeconds < 30) {
+      alert("Timeout must be at least 30 seconds.");
       return;
     }
 
@@ -280,8 +277,9 @@
       const res = await api(`/api/threads/${threadId}/settings`, {
         method: "POST",
         body: JSON.stringify({
-          auto_administrator_enabled: autoAdministratorEnabled,
-          auto_coordinator_enabled: autoAdministratorEnabled,
+          // Auto administrator stays enabled by default and is not user-configurable in UI.
+          auto_administrator_enabled: true,
+          auto_coordinator_enabled: true,
           timeout_seconds: timeoutSeconds,
         }),
       });
