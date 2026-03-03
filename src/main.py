@@ -1304,6 +1304,75 @@ async def api_agent_unregister(body: AgentToken):
     return {"ok": ok}
 
 
+@app.post("/api/agents/{agent_id}/kick")
+async def api_agent_kick(agent_id: str):
+    """Force an agent offline: interrupt msg_wait, remove from connections, backdate heartbeat.
+    
+    This is used to simulate agent crashes or forcibly disconnect misbehaving agents.
+    Does NOT require authentication.
+    """
+    try:
+        db = await asyncio.wait_for(get_db(), timeout=DB_TIMEOUT)
+        agent = await asyncio.wait_for(crud.agent_get(db, agent_id), timeout=DB_TIMEOUT)
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=503, detail="Database operation timeout")
+    
+    if agent is None:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    
+    # Step 1: Remove from all thread msg_wait states (interrupt long polls)
+    threads_interrupted = []
+    for thread_id in list(_thread_agent_wait_states.keys()):
+        if agent_id in _thread_agent_wait_states[thread_id]:
+            _thread_agent_wait_states[thread_id].pop(agent_id, None)
+            threads_interrupted.append(thread_id)
+            logger.info(f"[kick] Removed agent {agent_id} from msg_wait on thread {thread_id}")
+        if not _thread_agent_wait_states[thread_id]:
+            del _thread_agent_wait_states[thread_id]
+    
+    # Step 2: Remove from MCP connection registry (disconnect SSE/MCP sessions)
+    import uuid
+    sessions_disconnected = []
+    try:
+        from src.mcp_server import _connection_agents, pop_agent_for_session
+        for session_id in list(_connection_agents.keys()):
+            info = _connection_agents.get(session_id)
+            if info and info.get("agent_id") == agent_id:
+                result = pop_agent_for_session(session_id)
+                sessions_disconnected.append(session_id[:8])
+                logger.info(f"[kick] Removed agent {agent_id} from MCP session {session_id[:8]}...")
+    except Exception as e:
+        logger.warning(f"[kick] Could not remove from MCP connections: {e}")
+    
+    # Step 3: Mark agent offline by rotating token and backdating heartbeat
+    try:
+        now = datetime.now(timezone.utc)
+        old_heartbeat = now - timedelta(seconds=120)  # 120s in past, beyond 30s heartbeat window
+        new_token = str(uuid.uuid4())
+        
+        db2 = await asyncio.wait_for(get_db(), timeout=DB_TIMEOUT)
+        await asyncio.wait_for(
+            db2.execute(
+                "UPDATE agents SET token=?, last_heartbeat=? WHERE id=?",
+                (new_token, old_heartbeat.isoformat()+"+00:00", agent_id)
+            ),
+            timeout=DB_TIMEOUT
+        )
+        await asyncio.wait_for(db2.commit(), timeout=DB_TIMEOUT)
+        logger.info(f"[kick] Backdated heartbeat and rotated token for agent {agent_id}")
+    except Exception as e:
+        logger.warning(f"[kick] Could not update DB for agent {agent_id}: {e}")
+    
+    return {
+        "ok": True,
+        "agent_id": agent_id,
+        "agent_name": agent.display_name or agent.name,
+        "threads_interrupted": threads_interrupted,
+        "sessions_disconnected_count": len(sessions_disconnected),
+        "message": f"Agent {agent.display_name or agent.name} has been kicked offline. "
+                   f"Interrupted {len(threads_interrupted)} msg_wait(s), "
+                   f"disconnected {len(sessions_disconnected)} session(s)."
+    }
 
 
 
