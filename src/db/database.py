@@ -654,6 +654,50 @@ async def init_schema(db: aiosqlite.Connection) -> None:
     except Exception as e:
         logger.error(f"Migration failed for reactions table: {e}")
 
+    # Migration: FTS5 virtual table for full-text search (UI-02)
+    # messages_fts mirrors content from `messages` for fast MATCH queries.
+    # message_id / thread_id are UNINDEXED: stored for JOINs, not full-text indexed.
+    try:
+        await db.execute("""
+            CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+                message_id UNINDEXED,
+                thread_id  UNINDEXED,
+                author     UNINDEXED,
+                content
+            )
+        """)
+        await db.commit()
+        logger.info("Migration: ensured messages_fts FTS5 virtual table exists (UI-02)")
+    except Exception as e:
+        logger.error(f"Migration failed for messages_fts FTS5 table: {e}")
+
+    # Migration: INSERT trigger to keep messages_fts in sync with messages (UI-02)
+    try:
+        await db.execute("""
+            CREATE TRIGGER IF NOT EXISTS messages_fts_insert
+            AFTER INSERT ON messages
+            BEGIN
+                INSERT INTO messages_fts(message_id, thread_id, author, content)
+                VALUES (NEW.id, NEW.thread_id, NEW.author, NEW.content);
+            END
+        """)
+        await db.commit()
+        logger.info("Migration: ensured messages_fts_insert trigger exists (UI-02)")
+    except Exception as e:
+        logger.error(f"Migration failed for messages_fts_insert trigger: {e}")
+
+    # Migration: Backfill messages_fts for existing messages not yet indexed (UI-02)
+    try:
+        await db.execute("""
+            INSERT INTO messages_fts(message_id, thread_id, author, content)
+            SELECT id, thread_id, author, content FROM messages
+            WHERE id NOT IN (SELECT message_id FROM messages_fts)
+        """)
+        await db.commit()
+        logger.info("Migration: backfilled messages_fts for existing messages (UI-02)")
+    except Exception as e:
+        logger.error(f"Migration backfill for messages_fts failed: {e}")
+
     # Seed built-in thread templates (UP-18) — idempotent via INSERT OR IGNORE
     await _seed_builtin_templates(db)
 

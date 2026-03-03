@@ -521,10 +521,29 @@ async def list_tools() -> list[types.Tool]:
                 "Agents SHOULD call this once at startup. "
                 "The most important field is `preferred_language`: agents are expected to "
                 "try to communicate in that language whenever possible. "
-                "This is a SOFT recommendation ΓÇö no enforcement is done by the server. "
+                "This is a SOFT recommendation — no enforcement is done by the server. "
                 "If not configured by the operator, defaults to 'English'."
             ),
             inputSchema={"type": "object", "properties": {}},
+        ),
+
+        # ── Full-text search (UI-02) ──────────────────────────────────────
+        types.Tool(
+            name="msg_search",
+            description=(
+                "Full-text search across message content using SQLite FTS5. "
+                "Returns relevance-ranked results with snippets. "
+                "Optionally restrict to a single thread with thread_id."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "query":     {"type": "string", "description": "FTS5 MATCH expression, e.g. 'hello world' or 'angular*'."},
+                    "thread_id": {"type": "string", "description": "Optional thread ID to restrict search scope."},
+                    "limit":     {"type": "integer", "description": "Max results (default 50, max 200).", "default": 50},
+                },
+                "required": ["query"],
+            },
         ),
     ]
 

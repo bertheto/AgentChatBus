@@ -584,6 +584,23 @@ async def handle_msg_unreact(db, arguments: dict[str, Any]) -> list[types.TextCo
         "reaction": arguments["reaction"],
     }))]
 
+
+async def handle_msg_search(db, arguments: dict[str, Any]) -> list[types.TextContent]:
+    """Handle msg_search MCP tool — FTS5 full-text search (UI-02)."""
+    query = str(arguments.get("query", "")).strip()
+    if not query:
+        return [types.TextContent(type="text", text=json.dumps({
+            "error": "query must not be empty",
+        }))]
+    thread_id = arguments.get("thread_id")
+    limit = int(arguments.get("limit", 50))
+    results = await crud.msg_search(db, query, thread_id=thread_id, limit=limit)
+    return [types.TextContent(type="text", text=json.dumps({
+        "results": results,
+        "total": len(results),
+        "query": query,
+    }))]
+
 def _metadata_targets(msg: Any, agent_id: str) -> bool:
     """Return True if the message metadata.handoff_target matches agent_id."""
     meta = _safe_json_loads(msg.metadata)
@@ -885,6 +902,7 @@ TOOLS_DISPATCH = {
     "msg_wait": handle_msg_wait,
     "msg_react": handle_msg_react,
     "msg_unreact": handle_msg_unreact,
+    "msg_search": handle_msg_search,
     "agent_register": handle_agent_register,
     "agent_heartbeat": handle_agent_heartbeat,
     "agent_resume": handle_agent_resume,

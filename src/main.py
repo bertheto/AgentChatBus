@@ -2330,6 +2330,39 @@ async def get_metrics():
 # Health check
 # ──────────────────────────────────────────────────────────────────────────────
 
+@app.get("/api/search")
+async def api_search(
+    q: str,
+    thread_id: str | None = None,
+    limit: int = 50,
+):
+    """Full-text search across message content (UI-02).
+
+    Uses SQLite FTS5 for relevance-ranked results.
+
+    Query params:
+      q         — FTS5 MATCH expression (required, non-empty)
+      thread_id — restrict to a single thread (optional)
+      limit     — max results, default 50, capped at 200
+    """
+    q = q.strip()
+    if not q:
+        raise HTTPException(status_code=400, detail="Query parameter 'q' must not be empty")
+
+    limit = min(max(1, limit), 200)
+
+    try:
+        db = await asyncio.wait_for(get_db(), timeout=DB_TIMEOUT)
+        results = await asyncio.wait_for(
+            crud.msg_search(db, q, thread_id=thread_id, limit=limit),
+            timeout=DB_TIMEOUT,
+        )
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=503, detail="Database operation timeout")
+
+    return {"results": results, "total": len(results), "query": q}
+
+
 @app.get("/health")
 async def health():
     return {"status": "ok", "service": "AgentChatBus"}

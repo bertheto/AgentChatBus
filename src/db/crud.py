@@ -2027,3 +2027,85 @@ async def get_bus_metrics(db: aiosqlite.Connection) -> dict:
             "online": agents_online,
         },
     }
+
+
+# ── FTS5 full-text search (UI-02) ────────────────────────────────────────────
+
+async def msg_search(
+    db: aiosqlite.Connection,
+    query: str,
+    thread_id: Optional[str] = None,
+    limit: int = 50,
+) -> list[dict]:
+    """Full-text search across message content via FTS5.
+
+    Returns a list of dicts with keys:
+      message_id, thread_id, thread_topic, author, seq, created_at, snippet
+    ordered by FTS5 relevance rank (best match first).
+
+    Args:
+        db: async database connection
+        query: FTS5 MATCH expression (e.g. "hello world", "angular*")
+        thread_id: optional — restrict search to a single thread
+        limit: max results (capped at 200)
+    """
+    limit = min(limit, 200)
+
+    if thread_id is not None:
+        sql = """
+            SELECT
+                f.message_id,
+                f.thread_id,
+                t.topic       AS thread_topic,
+                f.author,
+                m.seq,
+                m.created_at,
+                snippet(messages_fts, 3, '<mark>', '</mark>', '…', 20) AS snippet
+            FROM messages_fts f
+            JOIN messages m ON m.id = f.message_id
+            JOIN threads  t ON t.id = f.thread_id
+            WHERE messages_fts MATCH ?
+              AND f.thread_id = ?
+            ORDER BY rank
+            LIMIT ?
+        """
+        params = (query, thread_id, limit)
+    else:
+        sql = """
+            SELECT
+                f.message_id,
+                f.thread_id,
+                t.topic       AS thread_topic,
+                f.author,
+                m.seq,
+                m.created_at,
+                snippet(messages_fts, 3, '<mark>', '</mark>', '…', 20) AS snippet
+            FROM messages_fts f
+            JOIN messages m ON m.id = f.message_id
+            JOIN threads  t ON t.id = f.thread_id
+            WHERE messages_fts MATCH ?
+            ORDER BY rank
+            LIMIT ?
+        """
+        params = (query, limit)
+
+    try:
+        async with db.execute(sql, params) as cur:
+            rows = await cur.fetchall()
+    except Exception as e:
+        # FTS5 MATCH syntax errors (e.g. bare "*") raise sqlite3.OperationalError
+        logger.warning(f"msg_search FTS5 query failed: query={query!r} error={e}")
+        return []
+
+    return [
+        {
+            "message_id":   row["message_id"],
+            "thread_id":    row["thread_id"],
+            "thread_topic": row["thread_topic"],
+            "author":       row["author"],
+            "seq":          row["seq"],
+            "created_at":   row["created_at"],
+            "snippet":      row["snippet"],
+        }
+        for row in rows
+    ]
