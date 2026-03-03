@@ -275,7 +275,7 @@
         if (!m) return;
         const id = decodeURIComponent(m[1]);
         try {
-          const response = await api(\/api/threads?include_archived=1&limit=500\);
+          const response = await api(`/api/threads?include_archived=1&limit=500`);
           const t = (response.threads || []).find((th) => th.id === id);
           if (t) selectThread(t.id, t.topic, t.status);
           else history.replaceState(null, '', location.pathname);
@@ -290,7 +290,7 @@
         if (!m) return;
         const id = decodeURIComponent(m[1]);
         try {
-          const response = await api(\/api/threads?include_archived=1&limit=500\);
+          const response = await api(`/api/threads?include_archived=1&limit=500`);
           const t = (response.threads || []).find((th) => th.id === id);
           if (t) selectThread(t.id, t.topic, t.status);
           else history.replaceState(null, '', location.pathname);
