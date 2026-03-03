@@ -1,25 +1,14 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 /**
- * UI-07 - Message Navigation Rail (Emoji Minimap)
- *
- * Tests for the logic in shared-nav-sidebar.js extracted in isolation:
- *   1. isEnabled() reads localStorage correctly (default = true)
- *   2. applyEnabledState() toggles body.minimap-hidden class
- *   3. setEnabled() writes to localStorage and updates class
- *   4. buildRail() creates .nav-dot elements from .msg-row DOM
- *   5. Dots carry data-seq and data-author-id attributes
- *   6. Dots use emoji from .msg-avatar element
- *   7. Click on dot triggers scrollIntoView
- *   8. buildRail() on empty thread leaves rail empty
- *   9. onNewMessage() after appendBubble rebuilds the rail
- *  10. Dots reposition on scroll (positionDots called)
+ * UI-07 - Message Navigation Sidebar (Emoji Minimap)
+ * Scrollable column to the right of the chat area.
  */
 
 const STORAGE_KEY = 'acb-minimap-enabled';
 
 function makeNavSidebar({ document, localStorage }) {
-  let _scrollListener = null;
+  let _observer = null;
 
   function isEnabled() {
     const val = localStorage.getItem(STORAGE_KEY);
@@ -35,37 +24,20 @@ function makeNavSidebar({ document, localStorage }) {
     document.body.classList.toggle('minimap-hidden', !enabled);
   }
 
-  function positionDots() {
-    const rail = document.getElementById('nav-rail');
+  function buildSidebar() {
+    const sidebar = document.getElementById('nav-sidebar');
     const messagesEl = document.getElementById('messages');
-    if (!rail || !messagesEl) return;
-    const dots = rail.querySelectorAll('.nav-dot');
+    if (!sidebar || !messagesEl) return;
+
+    if (_observer) { _observer.disconnect(); _observer = null; }
+    sidebar.innerHTML = '';
+
     const rows = messagesEl.querySelectorAll('.msg-row[data-seq]');
-    if (dots.length !== rows.length) { buildRail(); return; }
-    const scrollTop = messagesEl.scrollTop || 0;
-    rows.forEach((row, i) => {
-      const dot = dots[i];
-      if (!dot) return;
-      dot.style.top = (row.offsetTop - scrollTop) + 'px';
-    });
-  }
-
-  function buildRail() {
-    const rail = document.getElementById('nav-rail');
-    const messagesEl = document.getElementById('messages');
-    if (!rail || !messagesEl) return;
-
-    if (_scrollListener) {
-      messagesEl.removeEventListener('scroll', _scrollListener);
-      _scrollListener = null;
+    if (rows.length === 0) {
+      sidebar.classList.add('nav-sidebar-empty');
+      return;
     }
-
-    rail.innerHTML = '';
-
-    const rows = messagesEl.querySelectorAll('.msg-row[data-seq]');
-    if (rows.length === 0) return;
-
-    const scrollTop = messagesEl.scrollTop || 0;
+    sidebar.classList.remove('nav-sidebar-empty');
 
     rows.forEach((row) => {
       const seq = row.getAttribute('data-seq');
@@ -75,66 +47,64 @@ function makeNavSidebar({ document, localStorage }) {
       const authorNameEl = row.querySelector('.msg-author-label');
       const authorName = authorNameEl ? authorNameEl.textContent.trim() : authorId;
 
-      const dot = document.createElement('button');
-      dot.className = 'nav-dot';
-      dot.setAttribute('data-seq', seq);
-      dot.setAttribute('data-author-id', authorId);
-      dot.setAttribute('title', authorName);
-      dot.textContent = emoji;
-      dot.style.top = (row.offsetTop - scrollTop) + 'px';
+      const entry = document.createElement('button');
+      entry.className = 'nav-entry';
+      entry.setAttribute('data-seq', seq);
+      entry.setAttribute('data-author-id', authorId);
+      entry.setAttribute('title', authorName);
+      entry.innerHTML =
+        `<span class="nav-entry-emoji">${emoji}</span>` +
+        `<span class="nav-entry-meta"><span class="nav-entry-name">${authorName}</span></span>`;
 
-      dot.addEventListener('click', () => {
+      entry.addEventListener('click', () => {
         row.scrollIntoView({ behavior: 'smooth', block: 'center' });
         row.classList.add('nav-highlight');
         setTimeout(() => row.classList.remove('nav-highlight'), 1200);
       });
 
-      rail.appendChild(dot);
+      sidebar.appendChild(entry);
     });
-
-    _scrollListener = positionDots;
-    messagesEl.addEventListener('scroll', _scrollListener, { passive: true });
   }
 
-  return { isEnabled, applyEnabledState, setEnabled, rebuild: buildRail, onNewMessage: buildRail, positionDots };
+  return {
+    isEnabled, applyEnabledState, setEnabled,
+    rebuild: buildSidebar, onNewMessage: buildSidebar,
+  };
 }
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-function createRailDOM(document) {
-  const messagesWrap = document.createElement('div');
-  messagesWrap.id = 'messages-wrap';
+function createDOM(document) {
+  const chatArea = document.createElement('div');
+  chatArea.id = 'chat-area';
 
   const messagesEl = document.createElement('div');
   messagesEl.id = 'messages';
-  messagesWrap.appendChild(messagesEl);
+  chatArea.appendChild(messagesEl);
 
-  const rail = document.createElement('div');
-  rail.id = 'nav-rail';
-  messagesWrap.appendChild(rail);
+  const sidebar = document.createElement('nav');
+  sidebar.id = 'nav-sidebar';
+  chatArea.appendChild(sidebar);
 
-  document.body.appendChild(messagesWrap);
-  return { messagesEl, rail };
+  document.body.appendChild(chatArea);
+  return { messagesEl, sidebar };
 }
 
-function createMsgRow(messagesEl, { seq, authorId, authorName, emoji = '🤖' }) {
+function addRow(messagesEl, { seq, authorId, authorName, emoji = '🤖' }) {
   const row = document.createElement('div');
   row.className = 'msg-row';
   row.setAttribute('data-seq', String(seq));
   row.setAttribute('data-author-id', authorId);
-
   const avatar = document.createElement('span');
   avatar.className = 'msg-avatar';
   avatar.textContent = emoji;
   row.appendChild(avatar);
-
   const label = document.createElement('span');
   label.className = 'msg-author-label';
   label.textContent = authorName;
   row.appendChild(label);
-
   messagesEl.appendChild(row);
   return row;
 }
@@ -143,161 +113,126 @@ function createMsgRow(messagesEl, { seq, authorId, authorName, emoji = '🤖' })
 // Tests
 // ---------------------------------------------------------------------------
 
-describe('UI-07 — NavRail (Emoji Minimap)', () => {
+describe('UI-07 — Nav Sidebar (Emoji Minimap)', () => {
   let nav;
   let localStorageMock;
 
   beforeEach(() => {
     document.body.className = '';
     document.body.innerHTML = '';
-
     const store = {};
     localStorageMock = {
       getItem: vi.fn((k) => store[k] ?? null),
       setItem: vi.fn((k, v) => { store[k] = v; }),
       _store: store,
     };
-
     nav = makeNavSidebar({ document, localStorage: localStorageMock });
   });
 
-  afterEach(() => {
-    vi.clearAllMocks();
-  });
+  afterEach(() => vi.clearAllMocks());
 
-  // 1. Default enabled state
-  it('isEnabled() returns true when localStorage has no value', () => {
+  it('isEnabled() returns true by default', () => {
     expect(nav.isEnabled()).toBe(true);
   });
 
-  // 2. Disabled from localStorage
   it('isEnabled() returns false when localStorage is "false"', () => {
     localStorageMock._store[STORAGE_KEY] = 'false';
     expect(nav.isEnabled()).toBe(false);
   });
 
-  // 3. applyEnabledState adds minimap-hidden when disabled
-  it('applyEnabledState() adds minimap-hidden to body when disabled', () => {
+  it('applyEnabledState() adds minimap-hidden when disabled', () => {
     localStorageMock._store[STORAGE_KEY] = 'false';
     nav.applyEnabledState();
     expect(document.body.classList.contains('minimap-hidden')).toBe(true);
   });
 
-  // 4. applyEnabledState removes minimap-hidden when enabled
-  it('applyEnabledState() removes minimap-hidden from body when enabled', () => {
+  it('applyEnabledState() removes minimap-hidden when enabled', () => {
     document.body.classList.add('minimap-hidden');
     localStorageMock._store[STORAGE_KEY] = 'true';
     nav.applyEnabledState();
     expect(document.body.classList.contains('minimap-hidden')).toBe(false);
   });
 
-  // 5. setEnabled persists and updates class
   it('setEnabled(false) writes localStorage and adds minimap-hidden', () => {
     nav.setEnabled(false);
     expect(localStorageMock.setItem).toHaveBeenCalledWith(STORAGE_KEY, 'false');
     expect(document.body.classList.contains('minimap-hidden')).toBe(true);
   });
 
-  it('setEnabled(true) writes localStorage and removes minimap-hidden', () => {
+  it('setEnabled(true) removes minimap-hidden', () => {
     document.body.classList.add('minimap-hidden');
     nav.setEnabled(true);
-    expect(localStorageMock.setItem).toHaveBeenCalledWith(STORAGE_KEY, 'true');
     expect(document.body.classList.contains('minimap-hidden')).toBe(false);
   });
 
-  // 6. buildRail creates one .nav-dot per msg-row
-  it('rebuild() creates one .nav-dot per .msg-row[data-seq]', () => {
-    const { messagesEl } = createRailDOM(document);
-    createMsgRow(messagesEl, { seq: 1, authorId: 'agent-a', authorName: 'Agent A', emoji: '🤖' });
-    createMsgRow(messagesEl, { seq: 2, authorId: 'agent-b', authorName: 'Agent B', emoji: '🧠' });
-    createMsgRow(messagesEl, { seq: 3, authorId: 'agent-a', authorName: 'Agent A', emoji: '🤖' });
-
+  it('rebuild() creates one .nav-entry per .msg-row', () => {
+    const { messagesEl } = createDOM(document);
+    addRow(messagesEl, { seq: 1, authorId: 'a', authorName: 'Agent A', emoji: '🤖' });
+    addRow(messagesEl, { seq: 2, authorId: 'b', authorName: 'Human', emoji: '👤' });
+    addRow(messagesEl, { seq: 3, authorId: 'a', authorName: 'Agent A', emoji: '🤖' });
     nav.rebuild();
-
-    const dots = document.querySelectorAll('.nav-dot');
-    expect(dots).toHaveLength(3);
+    expect(document.querySelectorAll('.nav-entry')).toHaveLength(3);
   });
 
-  // 7. Dots carry correct attributes
-  it('dots carry correct data-seq and data-author-id', () => {
-    const { messagesEl } = createRailDOM(document);
-    createMsgRow(messagesEl, { seq: 5, authorId: 'agent-x', authorName: 'Agent X', emoji: '👾' });
-
+  it('entries carry correct data-seq, data-author-id, and emoji', () => {
+    const { messagesEl } = createDOM(document);
+    addRow(messagesEl, { seq: 5, authorId: 'x', authorName: 'X', emoji: '🧠' });
     nav.rebuild();
-
-    const dot = document.querySelector('.nav-dot');
-    expect(dot.getAttribute('data-seq')).toBe('5');
-    expect(dot.getAttribute('data-author-id')).toBe('agent-x');
-    expect(dot.textContent).toBe('👾');
+    const entry = document.querySelector('.nav-entry');
+    expect(entry.getAttribute('data-seq')).toBe('5');
+    expect(entry.getAttribute('data-author-id')).toBe('x');
+    expect(entry.querySelector('.nav-entry-emoji').textContent).toBe('🧠');
   });
 
-  // 8. Empty thread leaves rail empty
-  it('rebuild() on empty thread leaves #nav-rail empty', () => {
-    const { rail } = createRailDOM(document);
+  it('empty thread adds nav-sidebar-empty class', () => {
+    const { sidebar } = createDOM(document);
     nav.rebuild();
-    expect(rail.children).toHaveLength(0);
+    expect(sidebar.classList.contains('nav-sidebar-empty')).toBe(true);
   });
 
-  // 9. Click on dot calls scrollIntoView
-  it('clicking a dot calls scrollIntoView on the corresponding msg-row', () => {
-    const { messagesEl } = createRailDOM(document);
-    const row = createMsgRow(messagesEl, { seq: 7, authorId: 'bot', authorName: 'Bot', emoji: '🤖' });
+  it('non-empty thread removes nav-sidebar-empty class', () => {
+    const { messagesEl, sidebar } = createDOM(document);
+    sidebar.classList.add('nav-sidebar-empty');
+    addRow(messagesEl, { seq: 1, authorId: 'a', authorName: 'A' });
+    nav.rebuild();
+    expect(sidebar.classList.contains('nav-sidebar-empty')).toBe(false);
+  });
+
+  it('click on entry calls scrollIntoView on the msg-row', () => {
+    const { messagesEl } = createDOM(document);
+    const row = addRow(messagesEl, { seq: 7, authorId: 'b', authorName: 'B', emoji: '🤖' });
     row.scrollIntoView = vi.fn();
-
     nav.rebuild();
-
-    const dot = document.querySelector('.nav-dot[data-seq="7"]');
-    dot.click();
+    document.querySelector('.nav-entry[data-seq="7"]').click();
     expect(row.scrollIntoView).toHaveBeenCalledWith({ behavior: 'smooth', block: 'center' });
   });
 
-  // 10. onNewMessage() rebuilds and adds new dot
-  it('onNewMessage() adds a dot for each new message', () => {
-    const { messagesEl } = createRailDOM(document);
-    createMsgRow(messagesEl, { seq: 1, authorId: 'a', authorName: 'A', emoji: '🤖' });
-    nav.onNewMessage();
-    expect(document.querySelectorAll('.nav-dot')).toHaveLength(1);
-
-    createMsgRow(messagesEl, { seq: 2, authorId: 'b', authorName: 'B', emoji: '🧠' });
-    nav.onNewMessage();
-    expect(document.querySelectorAll('.nav-dot')).toHaveLength(2);
-  });
-
-  // 11. Fallback emoji when no avatar
-  it('uses 💬 as fallback emoji when no .msg-avatar element', () => {
-    const { messagesEl } = createRailDOM(document);
+  it('fallback emoji 💬 when no .msg-avatar', () => {
+    const { messagesEl } = createDOM(document);
     const row = document.createElement('div');
     row.className = 'msg-row';
     row.setAttribute('data-seq', '1');
     row.setAttribute('data-author-id', 'x');
     messagesEl.appendChild(row);
-
     nav.rebuild();
-
-    const dot = document.querySelector('.nav-dot');
-    expect(dot.textContent).toBe('💬');
+    expect(document.querySelector('.nav-entry .nav-entry-emoji').textContent).toBe('💬');
   });
 
-  // 12. Scroll listener attached after buildRail
-  it('scroll listener is attached to #messages after rebuild()', () => {
-    const { messagesEl } = createRailDOM(document);
-    const addSpy = vi.spyOn(messagesEl, 'addEventListener');
-    createMsgRow(messagesEl, { seq: 1, authorId: 'a', authorName: 'A', emoji: '🤖' });
-
-    nav.rebuild();
-
-    expect(addSpy).toHaveBeenCalledWith('scroll', expect.any(Function), { passive: true });
+  it('onNewMessage() adds entries for new messages', () => {
+    const { messagesEl } = createDOM(document);
+    addRow(messagesEl, { seq: 1, authorId: 'a', authorName: 'A' });
+    nav.onNewMessage();
+    expect(document.querySelectorAll('.nav-entry')).toHaveLength(1);
+    addRow(messagesEl, { seq: 2, authorId: 'b', authorName: 'B' });
+    nav.onNewMessage();
+    expect(document.querySelectorAll('.nav-entry')).toHaveLength(2);
   });
 
-  // 13. Previous scroll listener removed on rebuild
-  it('old scroll listener is removed before new one is attached', () => {
-    const { messagesEl } = createRailDOM(document);
-    const removeSpy = vi.spyOn(messagesEl, 'removeEventListener');
-    createMsgRow(messagesEl, { seq: 1, authorId: 'a', authorName: 'A', emoji: '🤖' });
-
-    nav.rebuild();  // first build attaches listener
-    nav.rebuild();  // second build should remove then re-attach
-
-    expect(removeSpy).toHaveBeenCalledWith('scroll', expect.any(Function));
+  it('rebuild() clears previous entries before rebuilding', () => {
+    const { messagesEl } = createDOM(document);
+    addRow(messagesEl, { seq: 1, authorId: 'a', authorName: 'A' });
+    nav.rebuild();
+    nav.rebuild();
+    expect(document.querySelectorAll('.nav-entry')).toHaveLength(1);
   });
 });

@@ -2921,44 +2921,110 @@ mark.search-match {
 }
 
 /* -----------------------------------------------------------------------
-   UI-07: Message Navigation Rail (Emoji Minimap)
+   UI-07: Message Navigation Sidebar (Emoji Minimap)
    ----------------------------------------------------------------------- */
 
-/* Rail container: absolute on the right edge of #messages-wrap */
-#nav-rail {
-  position: absolute;
-  top: 0;
-  right: 4px;
-  width: 26px;
-  height: 100%;
-  pointer-events: none;
-  z-index: 10;
+/* Wrapper: messages-wrap + nav-sidebar side by side */
+#chat-area {
+  display: flex;
+  flex-direction: row;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
 }
 
-/* Individual emoji dot */
-.nav-dot {
-  position: absolute;
-  right: 0;
-  width: 22px;
-  height: 22px;
+/* Emoji minimap column */
+#nav-sidebar {
+  width: 110px;
+  flex-shrink: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 6px 4px;
+  border-left: 1px solid var(--border);
+  background: var(--bg-panel);
+  scrollbar-width: thin;
+  scrollbar-color: var(--accent) transparent;
+}
+
+#nav-sidebar::-webkit-scrollbar      { width: 3px; }
+#nav-sidebar::-webkit-scrollbar-thumb { background: var(--accent); border-radius: 2px; }
+#nav-sidebar::-webkit-scrollbar-track { background: transparent; }
+
+/* Empty state */
+#nav-sidebar.nav-sidebar-empty::after {
+  content: "No messages";
+  display: block;
+  font-size: 10px;
+  color: var(--text-3);
+  text-align: center;
+  padding: 12px 4px;
+}
+
+/* Each entry */
+.nav-entry {
   display: flex;
   align-items: center;
-  justify-content: center;
-  font-size: 14px;
-  line-height: 1;
-  background: transparent;
+  gap: 4px;
+  padding: 3px 5px;
+  border-radius: 5px;
   border: none;
-  border-radius: 4px;
+  background: transparent;
   cursor: pointer;
-  pointer-events: auto;
-  opacity: 0.55;
-  transition: opacity .15s ease, transform .1s ease;
-  padding: 0;
+  font-family: inherit;
+  text-align: left;
+  width: 100%;
+  min-width: 0;
+  transition: background .12s ease;
+  opacity: 0.7;
 }
 
-.nav-dot:hover {
+.nav-entry:hover {
+  background: var(--bg-hover);
   opacity: 1;
-  transform: scale(1.2);
+}
+
+.nav-entry.nav-entry-active {
+  background: var(--bg-hover);
+  opacity: 1;
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+/* Emoji */
+.nav-entry-emoji {
+  font-size: 14px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+/* Name + time column */
+.nav-entry-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 0px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.nav-entry-name {
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--text-1);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 72px;
+}
+
+.nav-entry-time {
+  font-size: 9px;
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 72px;
 }
 
 /* Highlight flash on jump */
@@ -2972,13 +3038,11 @@ mark.search-match {
 }
 
 /* Toggle: hidden state */
-body.minimap-hidden #nav-rail {
+body.minimap-hidden #nav-sidebar {
   display: none;
 }
 
-/* Responsive: hide minimap below 900px */
-@media (max-width: 900px) {
-  #nav-rail {
-    display: none;
-  }
+/* Responsive: hide below 1000px */
+@media (max-width: 1000px) {
+  #nav-sidebar { display: none; }
 }
