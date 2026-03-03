@@ -747,6 +747,32 @@ Note: Thread name is the topic label. Thread ID is the unique identifier.`;
           return;
         }
 
+        if (metaObj && metaObj.ui_type === 'admin_coordination_timeout_notice') {
+          const wrapper = document.createElement('div');
+          wrapper.className = 'msg-sys-admin-timeout';
+          wrapper.setAttribute('data-seq', String(m.seq));
+
+          const pill = document.createElement('div');
+          pill.className = 'msg-sys-event msg-sys-event-admin-timeout';
+          const sentAt = fmtTime(m.created_at);
+          pill.textContent = sentAt ? `${sentAt}  ${m.content}` : m.content;
+          if (m.created_at) {
+            pill.title = `sent at ${m.created_at}`;
+          }
+
+          const note = document.createElement('div');
+          note.className = 'msg-sys-admin-timeout-note';
+          note.innerHTML = `
+            <span class="msg-sys-admin-timeout-note-icon" aria-hidden="true">i</span>
+            <span class="msg-sys-admin-timeout-note-text">This notice is visible only to human participants. Agents cannot read or receive this message.</span>
+          `;
+
+          wrapper.appendChild(pill);
+          wrapper.appendChild(note);
+          box.appendChild(wrapper);
+          return;
+        }
+
         // System prompt (seq=0): collapsable bubble with Markdown rendering
         if (m.seq === 0) {
           const wrapper = document.createElement('div');

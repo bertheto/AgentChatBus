@@ -515,6 +515,7 @@ async def handle_msg_list(db, arguments: dict[str, Any]) -> list[types.Content]:
         include_system_prompt=arguments.get("include_system_prompt", True),
         priority=arguments.get("priority"),
     )
+    msgs = [m for m in msgs if not _is_human_only_message(m)]
 
     # Batch-fetch reactions for all real message IDs
     real_ids = [m.id for m in msgs if not m.id.startswith("sys-")]
@@ -591,6 +592,15 @@ def _metadata_targets(msg: Any, agent_id: str) -> bool:
         return meta.get("handoff_target") == agent_id
     return False
 
+def _is_human_only_message(msg: Any) -> bool:
+    """True when message metadata marks this message as visible to humans only."""
+    meta = _safe_json_loads(getattr(msg, "metadata", None))
+    if not isinstance(meta, dict):
+        return False
+    visibility = str(meta.get("visibility") or "").strip().lower()
+    audience = str(meta.get("audience") or "").strip().lower()
+    return visibility == "human_only" or audience == "human"
+
 
 async def handle_msg_wait(db, arguments: dict[str, Any]) -> list[types.Content]:
     thread_id = arguments["thread_id"]
@@ -636,7 +646,8 @@ async def handle_msg_wait(db, arguments: dict[str, Any]) -> list[types.Content]:
     async def _poll():
         last_heartbeat = asyncio.get_event_loop().time()
         while True:
-            msgs = await crud.msg_list(db, thread_id, after_seq=after_seq, include_system_prompt=False)
+            raw_msgs = await crud.msg_list(db, thread_id, after_seq=after_seq, include_system_prompt=False)
+            msgs = [m for m in raw_msgs if not _is_human_only_message(m)]
             if msgs:
                 # Agent received messages - exit wait state
                 if agent_id:
@@ -693,10 +704,37 @@ async def handle_msg_wait(db, arguments: dict[str, Any]) -> list[types.Content]:
             }
         elif current_agent_online and online_count > 1:
             if settings and (settings.creator_admin_id == agent_id or settings.auto_assigned_admin_id == agent_id):
+                timeout_seconds = int(timeout_s)
+                # Emit a thread-visible system notice when admin-timeout coordination is activated.
+                system_notice = (
+                    f"Auto Administrator Timeout triggered after {timeout_seconds} seconds. "
+                    "All online participants are currently waiting in msg_wait. "
+                    "Thread administrator, please coordinate next actions."
+                )
+                system_notice_meta = {
+                    "ui_type": "admin_coordination_timeout_notice",
+                    "visibility": "human_only",
+                    "thread_id": thread_id,
+                    "admin_agent_id": agent_id,
+                    "timeout_seconds": timeout_seconds,
+                    "online_agents_count": online_count,
+                    "triggered_at": datetime.now(timezone.utc).isoformat(),
+                }
+                try:
+                    await crud._msg_create_system(
+                        db,
+                        thread_id=thread_id,
+                        content=system_notice,
+                        metadata=system_notice_meta,
+                        clear_auto_admin=False,
+                    )
+                except Exception as e:
+                    logger.warning(f"[msg_wait] Failed to create admin timeout system notice: {e}")
+
                 coordination_prompt = {
                     "type": "admin_timeout_notice",
                     "message": (
-                        f"Coordination timeout: No activity detected for {int(timeout_s)} seconds. "
+                        f"Coordination timeout: No activity detected for {timeout_seconds} seconds. "
                         f"As the Thread administrator, please issue instructions to continue the discussion."
                     ),
                 }
