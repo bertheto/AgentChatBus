@@ -790,6 +790,13 @@ async def template_delete(db: aiosqlite.Connection, template_id: str) -> None:
 _VALID_PRIORITIES = {"normal", "urgent", "system"}
 
 
+async def msg_get(db: aiosqlite.Connection, message_id: str) -> Optional[Message]:
+    """Fetch a single message by ID. Returns None if not found."""
+    async with db.execute("SELECT * FROM messages WHERE id = ?", (message_id,)) as cur:
+        row = await cur.fetchone()
+    return _row_to_message(row) if row else None
+
+
 async def msg_post(
     db: aiosqlite.Connection,
     thread_id: str,
@@ -800,10 +807,24 @@ async def msg_post(
     role: str = "user",
     metadata: Optional[dict] = None,
     priority: str = "normal",
+    reply_to_msg_id: Optional[str] = None,
 ) -> Message:
     # Validate priority (UP-16)
     if priority not in _VALID_PRIORITIES:
         raise ValueError(f"Invalid priority '{priority}'. Must be one of: {', '.join(sorted(_VALID_PRIORITIES))}")
+
+    # Validate reply_to_msg_id (UP-14): must exist and belong to the same thread
+    if reply_to_msg_id is not None:
+        async with db.execute(
+            "SELECT thread_id FROM messages WHERE id = ?", (reply_to_msg_id,)
+        ) as cur:
+            parent_row = await cur.fetchone()
+        if parent_row is None:
+            raise ValueError(f"reply_to_msg_id '{reply_to_msg_id}' does not exist.")
+        if parent_row["thread_id"] != thread_id:
+            raise ValueError(
+                f"reply_to_msg_id '{reply_to_msg_id}' belongs to a different thread."
+            )
 
     # Content filter: block known secret patterns before any DB interaction
     if CONTENT_FILTER_ENABLED:
@@ -890,8 +911,8 @@ async def msg_post(
     seq = await next_seq(db)
     meta_json = json.dumps(metadata) if metadata else None
     await db.execute(
-        "INSERT INTO messages (id, thread_id, author, role, content, seq, created_at, metadata, author_id, author_name, priority) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (mid, thread_id, actual_author, role, content, seq, now, meta_json, author_id, author_name, priority),
+        "INSERT INTO messages (id, thread_id, author, role, content, seq, created_at, metadata, author_id, author_name, priority, reply_to_msg_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (mid, thread_id, actual_author, role, content, seq, now, meta_json, author_id, author_name, priority, reply_to_msg_id),
     )
     await db.execute(
         "UPDATE threads SET updated_at = ? WHERE id = ?", (now, thread_id)
@@ -940,11 +961,19 @@ async def msg_post(
                 "msg_id": mid, "thread_id": thread_id,
                 "agent": author_name, "reason": stop_reason,
             })
-    logger.debug(f"Message posted: seq={seq} author={author_name} thread={thread_id} priority={priority}")
+    # SSE event for reply-to threading (UP-14)
+    if reply_to_msg_id is not None:
+        await _emit_event(db, "msg.reply", thread_id, {
+            "msg_id": mid, "reply_to_msg_id": reply_to_msg_id,
+            "thread_id": thread_id, "author": author_name, "seq": seq,
+        })
+
+    logger.debug(f"Message posted: seq={seq} author={author_name} thread={thread_id} priority={priority} reply_to={reply_to_msg_id}")
     return Message(
         id=mid, thread_id=thread_id, author=actual_author, role=role,
         content=content, seq=seq, created_at=_parse_dt(now), metadata=meta_json,
-        author_id=author_id, author_name=author_name, priority=priority
+        author_id=author_id, author_name=author_name, priority=priority,
+        reply_to_msg_id=reply_to_msg_id,
     )
 
 
@@ -1072,6 +1101,7 @@ def _row_to_message(row: aiosqlite.Row) -> Message:
     if not author_name:
         author_name = row["author"]
     priority = row["priority"] if "priority" in keys else "normal"
+    reply_to_msg_id = row["reply_to_msg_id"] if "reply_to_msg_id" in keys else None
 
     return Message(
         id=row["id"],
@@ -1085,6 +1115,7 @@ def _row_to_message(row: aiosqlite.Row) -> Message:
         author_id=author_id,
         author_name=author_name,
         priority=priority,
+        reply_to_msg_id=reply_to_msg_id,
     )
 
 
@@ -1636,9 +1667,9 @@ async def thread_export_markdown(db: aiosqlite.Connection, thread_id: str) -> Op
     return "\n".join(lines)
 
 
-# ─────────────────────────────────────────────
-# Metrics (UP-22)
-# ─────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
+# UP-22: Bus-level observability metrics
+# ──────────────────────────────────────────────────────────────────────────────
 
 async def get_bus_metrics(db: aiosqlite.Connection) -> dict:
     """Return a snapshot of bus-level observability metrics.
@@ -1664,21 +1695,20 @@ async def get_bus_metrics(db: aiosqlite.Connection) -> dict:
                              AGENT_HEARTBEAT_TIMEOUT window
     """
     now = datetime.now(timezone.utc)
-    now_iso = now.isoformat()
 
-    # ── Thread counts ────────────────────────────────────────────────────────
+    # ── Thread counts ──────────────────────────────────────────────────────────
     threads_by_status: dict[str, int] = {}
     async with db.execute("SELECT status, COUNT(*) AS cnt FROM threads GROUP BY status") as cur:
         async for row in cur:
             threads_by_status[row["status"]] = row["cnt"]
     threads_total = sum(threads_by_status.values())
 
-    # ── Message total ────────────────────────────────────────────────────────
+    # ── Message total ──────────────────────────────────────────────────────────
     async with db.execute("SELECT COUNT(*) AS cnt FROM messages") as cur:
         row = await cur.fetchone()
     messages_total = row["cnt"] if row else 0
 
-    # ── Message rates (1m / 5m / 15m) ───────────────────────────────────────
+    # ── Message rates (1m / 5m / 15m) ─────────────────────────────────────────
     cutoffs = {
         "last_1m":  (now - timedelta(minutes=1)).isoformat(),
         "last_5m":  (now - timedelta(minutes=5)).isoformat(),
@@ -1692,11 +1722,9 @@ async def get_bus_metrics(db: aiosqlite.Connection) -> dict:
             row = await cur.fetchone()
         message_rate[key] = row["cnt"] if row else 0
 
-    # ── Inter-message latency (avg ms, threads active in last 15 min) ────────
+    # ── Inter-message latency (avg ms, threads active in last 15 min) ─────────
     # Uses LAG() window function (SQLite >= 3.25.0) to compute time gaps
     # between consecutive messages within each thread, then averages them.
-    # Only considers threads that had activity in the last 15 minutes to keep
-    # the metric relevant to current bus load.
     cutoff_15m = cutoffs["last_15m"]
     avg_latency_ms: Optional[float] = None
     try:
@@ -1718,10 +1746,9 @@ async def get_bus_metrics(db: aiosqlite.Connection) -> dict:
         if row and row["avg_gap"] is not None:
             avg_latency_ms = round(row["avg_gap"], 1)
     except Exception:
-        # Defensive: if the window query fails for any reason, degrade gracefully
         avg_latency_ms = None
 
-    # ── stop_reason distribution (UP-17) ─────────────────────────────────────
+    # ── stop_reason distribution (UP-17) ──────────────────────────────────────
     canonical_reasons = ("convergence", "timeout", "complete", "error", "impasse")
     stop_reasons: dict[str, int] = {r: 0 for r in canonical_reasons}
     async with db.execute(
@@ -1736,7 +1763,7 @@ async def get_bus_metrics(db: aiosqlite.Connection) -> dict:
             reason = row["reason"]
             stop_reasons[reason] = stop_reasons.get(reason, 0) + row["cnt"]
 
-    # ── Agent counts ─────────────────────────────────────────────────────────
+    # ── Agent counts ───────────────────────────────────────────────────────────
     agents_total = 0
     agents_online = 0
     heartbeat_cutoff = (

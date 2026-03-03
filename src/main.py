@@ -106,7 +106,7 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 # Support environment variable override via AGENTCHATBUS_DB_TIMEOUT
 DB_TIMEOUT = int(os.getenv("AGENTCHATBUS_DB_TIMEOUT", "5"))
 
-# Server start time — set in lifespan(), used by /api/metrics
+# Server start time — set in lifespan(), used by /api/metrics (UP-22)
 _start_time: datetime | None = None
 
 
@@ -599,6 +599,7 @@ async def api_messages(
             "created_at": m.created_at.isoformat(),
             "metadata": m.metadata,
             "priority": m.priority,
+            "reply_to_msg_id": m.reply_to_msg_id,
             "reactions": reactions_map.get(m.id, []),
         }
         for m in msgs
@@ -850,6 +851,7 @@ class MessageCreate(BaseModel):
     metadata: dict | None = None
     images: list[dict] | None = None  # [{url: str, name: str}, ...]
     priority: Literal["normal", "urgent", "system"] = "normal"  # UP-16
+    reply_to_msg_id: str | None = None  # UP-14: optional parent message ID
 
 class SyncContextRequest(BaseModel):
     agent_id: str | None = None
@@ -1079,7 +1081,8 @@ async def api_post_message(thread_id: str, body: MessageCreate, x_agent_token: s
                          reply_token=reply_token,
                          role=body.role,
                          metadata=msg_metadata if msg_metadata else None,
-                         priority=body.priority),
+                         priority=body.priority,
+                         reply_to_msg_id=body.reply_to_msg_id),
             timeout=DB_TIMEOUT
         )
     except MissingSyncFieldsError as e:
@@ -1132,7 +1135,7 @@ async def api_post_message(thread_id: str, body: MessageCreate, x_agent_token: s
     # Return the full message with metadata
     result = {"id": m.id, "seq": m.seq, "author": m.author,
             "role": m.role, "content": m.content, "created_at": m.created_at.isoformat(),
-            "priority": m.priority}
+            "priority": m.priority, "reply_to_msg_id": m.reply_to_msg_id}
 
     # Add metadata (includes mentions and images)
     if m.metadata:
@@ -1717,12 +1720,9 @@ async def api_thread_admin_decision(thread_id: str, body: AdminDecisionRequest):
 
 
 # ─────────────────────────────────────────────
-# Health check
-# ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
-
-# ─────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
 # Metrics (UP-22)
-# ─────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
 
 @app.get("/api/metrics")
 async def get_metrics():
@@ -1751,6 +1751,9 @@ async def get_metrics():
         "schema_version": SCHEMA_VERSION,
     }
 
+
+# Health check
+# ──────────────────────────────────────────────────────────────────────────────
 
 @app.get("/health")
 async def health():
