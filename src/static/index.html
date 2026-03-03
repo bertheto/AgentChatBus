@@ -1048,11 +1048,12 @@ Note: Thread name is the topic label. Thread ID is the unique identifier.`;
           const promptHeader = document.createElement('button');
           promptHeader.type = 'button';
           promptHeader.className = 'msg-sys-prompt-header';
-          promptHeader.setAttribute('aria-expanded', 'false');
-          promptHeader.innerHTML = `<span class="msg-sys-prompt-label">Thread Instructions (system) — click to expand</span><span class="msg-sys-prompt-chevron">&#9660;</span>`;
+          promptHeader.setAttribute('aria-expanded', 'true');
+          promptHeader.classList.add('is-expanded');
+          promptHeader.innerHTML = `<span class="msg-sys-prompt-label">Thread Instructions (system)</span><span class="msg-sys-prompt-chevron">&#9650;</span>`;
 
           const promptBody = document.createElement('div');
-          promptBody.className = 'msg-sys-prompt-body bubble-v2 collapsed';
+          promptBody.className = 'msg-sys-prompt-body bubble-v2';
           renderMessageContent(promptBody, m.content, null);
 
           promptHeader.addEventListener('click', () => {
@@ -1274,6 +1275,22 @@ Note: Thread name is the topic label. Thread ID is the unique identifier.`;
 
       box.appendChild(row);
       if (window.AcbNavSidebar) window.AcbNavSidebar.onNewMessage();
+
+      // UI-07: collapse system prompt on first real message
+      const sysArea = document.getElementById('sys-prompt-area');
+      if (sysArea) {
+        const header = sysArea.querySelector('.msg-sys-prompt-header');
+        const body = sysArea.querySelector('.msg-sys-prompt-body');
+        if (header && body && header.getAttribute('aria-expanded') === 'true') {
+          header.setAttribute('aria-expanded', 'false');
+          header.classList.remove('is-expanded');
+          body.classList.add('collapsed');
+          const chevron = header.querySelector('.msg-sys-prompt-chevron');
+          const label = header.querySelector('.msg-sys-prompt-label');
+          if (chevron) chevron.innerHTML = '&#9660;';
+          if (label) label.textContent = 'Thread Instructions (system) — click to expand';
+        }
+      }
     }
     // ---- Typing indicator ----------------------------------------------------------------------------------------------------------
     function showTyping(agentId) {
