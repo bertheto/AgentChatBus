@@ -1494,6 +1494,9 @@ async def api_get_thread_settings(thread_id: str):
         "auto_assigned_admin_id": settings.auto_assigned_admin_id,
         "auto_assigned_admin_name": settings.auto_assigned_admin_name,
         "admin_assignment_time": settings.admin_assignment_time.isoformat() if settings.admin_assignment_time else None,
+        "creator_admin_id": settings.creator_admin_id,
+        "creator_admin_name": settings.creator_admin_name,
+        "creator_assignment_time": settings.creator_assignment_time.isoformat() if settings.creator_assignment_time else None,
         "created_at": settings.created_at.isoformat(),
         "updated_at": settings.updated_at.isoformat(),
     }
