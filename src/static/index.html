@@ -228,7 +228,6 @@
         <div style="padding:8px 12px;min-width:260px;">
           <div style="font-size:12px;color:var(--text-2);margin-bottom:6px;">Status Legend:</div>
           <div class="state-item"><span class="state-emoji">🟢</span> <strong>Active:</strong> Activity within 30s</div>
-          <div class="state-item"><span class="state-emoji">🌙</span> <strong>Idle:</strong> Activity within 5m</div>
           <div class="state-item"><span class="state-emoji">⏳</span> <strong>Waiting:</strong> Agent is online and currently in msg_wait</div>
           <div class="state-item"><span class="state-emoji">⚫</span> <strong>Offline:</strong> No recent activity</div>
         </div>
@@ -1069,24 +1068,7 @@ Note: Thread name is the topic label. Thread ID is the unique identifier.`;
     }
 
     function getAgentState(agent) {
-      // Σ╝ÿσàêΣ╜┐τö¿last_activity_timeσêñµû¡τè╢µÇü∩╝îΦÇîΘ¥₧is_online∩╝êσÉÄΦÇàσƒ║Σ║ÄheartbeatΦ╢àµù╢∩╝ë
-      const activityTime = agent.last_activity_time ? new Date(agent.last_activity_time) : null;
-      const now = new Date();
-
-      if (!activityTime) {
-        // σ«îσà¿µ▓íµ£ëµ┤╗σè¿Φ«░σ╜ò
-        return agent.is_online ? 'Waiting' : 'Offline';
-      }
-
-      const secondsAgo = (now - activityTime) / 1000;
-
-      // µá╣µì«µ┤╗σè¿τ▒╗σ₧ïσÆîµù╢Θù┤σêñµû¡τè╢µÇü
-      if (agent.last_activity === 'msg_wait' && secondsAgo < 60) return 'Waiting';
-      if (secondsAgo < 30) return 'Active';
-      if (secondsAgo < 300) return 'Idle';  // 5σêΘÆƒσàµ£ëµ┤╗σè¿τ«ù Idle
-
-      // Φ╢àΦ┐ç5σêΘÆƒµ▓íµ┤╗σè¿Σ╕öis_online=falseµëìµÿ╛τñ║Offline
-      return agent.is_online ? 'Idle' : 'Offline';
+      return window.AcbAgentStatus.getAgentState(agent);
     }
 
     function getOfflineTime(agent) {
@@ -1103,7 +1085,7 @@ Note: Thread name is the topic label. Thread ID is the unique identifier.`;
 
 
     function getStateEmoji(state) {
-      const map = { 'Offline': '⚫', 'Waiting': '⏳', 'Active': '🟢', 'Idle': '🌙' };
+      const map = { 'Offline': '⚫', 'Waiting': '⏳', 'Active': '🟢' };
       return map[state] || 'Γ¥ô';
     }
 

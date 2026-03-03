@@ -4,6 +4,16 @@ import '../../../src/static/js/shared-agent-status.js';
 const { getAgentState } = window.AcbAgentStatus;
 
 describe('shared-agent-status (real implementation)', () => {
+  it('never returns Idle state', () => {
+    const state = getAgentState({
+      is_online: true,
+      last_activity: 'heartbeat',
+      last_activity_time: new Date(Date.now() - 2 * 60 * 1000).toISOString(),
+    });
+    expect(state).not.toBe('Idle');
+    expect(state).toBe('Active');
+  });
+
   it('keeps msg_wait agents in Waiting while online', () => {
     const oldIso = new Date(Date.now() - 10 * 60 * 1000).toISOString();
     const state = getAgentState({

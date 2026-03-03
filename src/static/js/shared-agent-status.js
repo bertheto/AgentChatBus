@@ -1,30 +1,12 @@
 (function () {
   function getAgentState(agent) {
-    const activityTime = agent.last_activity_time ? new Date(agent.last_activity_time) : null;
-    const now = new Date();
-
-    // If backend reports the agent online and its latest activity is msg_wait,
-    // keep it in Waiting state throughout the wait loop.
-    if (agent && agent.is_online && agent.last_activity === "msg_wait") {
+    if (!agent || !agent.is_online) {
+      return "Offline";
+    }
+    if (agent.last_activity === "msg_wait") {
       return "Waiting";
     }
-
-    if (!activityTime) {
-      return agent.is_online ? "Waiting" : "Offline";
-    }
-
-    const secondsAgo = (now - activityTime) / 1000;
-    
-    if (agent.last_activity === "msg_wait" && secondsAgo < 60) {
-      return "Waiting";
-    }
-    if (secondsAgo < 30) {
-      return "Active";
-    }
-    if (secondsAgo < 300) {
-      return "Idle";
-    }
-    return agent.is_online ? "Idle" : "Offline";
+    return "Active";
   }
 
   function getOfflineTime(agent) {
@@ -80,7 +62,7 @@
   }
 
   function getStateEmoji(state) {
-    const map = { Offline: "⚫", Waiting: "⏳", Active: "🟢", Idle: "🌙" };
+    const map = { Offline: "⚫", Waiting: "⏳", Active: "🟢" };
     return map[state] || "❓";
   }
 
