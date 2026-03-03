@@ -225,20 +225,6 @@
       console.error("Error loading admin info:", err);
     }
 
-    // Load thread settings for creator admin
-    try {
-      const settingsRes = await api(`/api/threads/${threadId}/settings`);
-      const creatorAdminEl = document.getElementById("ts-creator-admin");
-      if (settingsRes && settingsRes.creator_admin_name) {
-        const creatorId = String(settingsRes.creator_admin_id || "").trim();
-        const emoji = (creatorId ? agentEmojiById.get(creatorId) : "") || String(settingsRes.creator_admin_emoji || "").trim() || "🤖";
-        creatorAdminEl.textContent = `${emoji} ${settingsRes.creator_admin_name}`;
-      } else {
-        creatorAdminEl.textContent = "None";
-      }
-    } catch (err) {
-      console.error("Error loading creator admin:", err);
-    }
   }
 
   function closeThreadSettingsModal(e) {
@@ -267,7 +253,10 @@
 
     const setSubmittingState = (submitting) => {
       if (cancelBtn) cancelBtn.disabled = submitting;
-      if (saveBtn) saveBtn.disabled = submitting;
+      if (saveBtn) {
+        saveBtn.disabled = submitting;
+        saveBtn.style.cursor = submitting ? "not-allowed" : "pointer";
+      }
     };
     let keepDisabledUntilClose = false;
 
