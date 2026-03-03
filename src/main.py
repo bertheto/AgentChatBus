@@ -42,6 +42,11 @@ from src.db.crud import (
 from src.config import THREAD_TIMEOUT_ENABLED, THREAD_TIMEOUT_MINUTES, THREAD_TIMEOUT_SWEEP_INTERVAL, RELOAD_ENABLED
 from src.mcp_server import server as mcp_server, _session_language
 from src.content_filter import ContentFilterError
+from src.thread_creation_service import (
+    create_thread_with_verified_creator,
+    CreatorAuthError,
+    CreatorNotFoundError,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -818,6 +823,7 @@ class ThreadCreate(BaseModel):
     metadata: dict | None = None
     system_prompt: str | None = None
     template: str | None = None   # Template ID for defaults (UP-18)
+    creator_agent_id: str
 
 
 class TemplateCreate(BaseModel):
@@ -960,7 +966,10 @@ async def api_sync_context(thread_id: str, body: SyncContextRequest | None = Non
     return sync
 
 @app.post("/api/threads", status_code=201)
-async def api_create_thread(body: ThreadCreate):
+async def api_create_thread(
+    body: ThreadCreate,
+    x_agent_token: str | None = Header(default=None),
+):
     # QW-07: apply content filter to system_prompt to block embedded secrets
     if body.system_prompt:
         from src.content_filter import check_content
@@ -971,43 +980,30 @@ async def api_create_thread(body: ThreadCreate):
     try:
         db = await asyncio.wait_for(get_db(), timeout=DB_TIMEOUT)
 
-        # Infer creator automatically. Prefer online active agents; if none are
-        # currently online, fall back to the most recently active registered agent.
-        creator_agent = None
-        agents = await asyncio.wait_for(crud.agent_list(db), timeout=DB_TIMEOUT)
-        online_agents = [a for a in agents if a.is_online]
-        candidate_agents = online_agents if online_agents else agents
-        if candidate_agents:
-            creator_agent = max(
-                candidate_agents,
-                key=lambda a: (a.last_activity_time or a.last_heartbeat, a.last_heartbeat),
+        if not x_agent_token:
+            raise HTTPException(
+                status_code=401,
+                detail="X-Agent-Token header required to create thread as a registered agent",
             )
 
-        t = await asyncio.wait_for(
-            crud.thread_create(
+        t, sync = await asyncio.wait_for(
+            create_thread_with_verified_creator(
                 db,
-                body.topic,
-                body.metadata,
-                body.system_prompt,
+                topic=body.topic,
+                creator_agent_id=body.creator_agent_id,
+                creator_token=x_agent_token,
+                metadata=body.metadata,
+                system_prompt=body.system_prompt,
                 template=body.template,
-                creator_admin_id=creator_agent.id if creator_agent else None,
-                creator_admin_name=(creator_agent.display_name or creator_agent.name) if creator_agent else None,
             ),
-            timeout=DB_TIMEOUT
-        )
-
-        if creator_agent is not None:
-            await asyncio.wait_for(
-                crud._set_agent_activity(db, creator_agent.id, "thread_create", touch_heartbeat=True),
-                timeout=DB_TIMEOUT,
-            )
-
-        sync = await asyncio.wait_for(
-            crud.issue_reply_token(db, thread_id=t.id, agent_id=creator_agent.id if creator_agent else None),
             timeout=DB_TIMEOUT,
         )
     except asyncio.TimeoutError:
         raise HTTPException(status_code=503, detail="Database operation timeout")
+    except CreatorAuthError as e:
+        raise HTTPException(status_code=401, detail=str(e))
+    except CreatorNotFoundError as e:
+        raise HTTPException(status_code=401, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     return {"id": t.id, "topic": t.topic, "status": t.status, "system_prompt": t.system_prompt,
@@ -1225,7 +1221,7 @@ async def api_agent_update(agent_id: str, body: AgentUpdate):
 
 
 @app.post("/api/agents/register", status_code=200)
-async def api_agent_register(body: AgentRegister):
+async def api_agent_register(body: AgentRegister, response: Response):
     try:
         db = await asyncio.wait_for(get_db(), timeout=DB_TIMEOUT)
         a = await asyncio.wait_for(
@@ -1243,6 +1239,8 @@ async def api_agent_register(body: AgentRegister):
     except asyncio.TimeoutError:
         raise HTTPException(status_code=503, detail="Database operation timeout")
     import json as _json
+    response.set_cookie("acb_agent_id", a.id, httponly=True, samesite="lax", path="/")
+    response.set_cookie("acb_agent_token", a.token, httponly=True, samesite="lax", path="/")
     return {
         "agent_id": a.id,
         "name": a.name,
@@ -1268,7 +1266,7 @@ async def api_agent_heartbeat(body: AgentToken):
     return {"ok": ok}
 
 @app.post("/api/agents/resume")
-async def api_agent_resume(body: AgentToken):
+async def api_agent_resume(body: AgentToken, response: Response):
     try:
         db = await asyncio.wait_for(get_db(), timeout=DB_TIMEOUT)
         a = await asyncio.wait_for(
@@ -1279,6 +1277,8 @@ async def api_agent_resume(body: AgentToken):
         raise HTTPException(status_code=503, detail="Database operation timeout")
     except ValueError:
         raise HTTPException(status_code=401, detail="Invalid agent_id/token")
+    response.set_cookie("acb_agent_id", a.id, httponly=True, samesite="lax", path="/")
+    response.set_cookie("acb_agent_token", body.token, httponly=True, samesite="lax", path="/")
     return {
         "ok": True,
         "agent_id": a.id,

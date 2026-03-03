@@ -68,7 +68,6 @@
               style="width:100%;background:var(--bg-input);border:1px solid var(--border-light);color:var(--text-1);border-radius:10px;padding:10px 14px;font-size:14px;font-family:inherit;margin-bottom:16px;" />
             
             <div style="background:var(--bg-input);border:1px solid var(--border-light);border-radius:10px;padding:12px;margin-bottom:16px;font-size:13px;color:var(--text-2);">
-              <div style="margin-bottom:8px;"><strong>Creator Administrator:</strong> <span id="ts-creator-admin">None</span></div>
               <div><strong>Current Administrator:</strong> <span id="ts-current-admin">Unassigned</span></div>
             </div>
             

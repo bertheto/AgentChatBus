@@ -254,7 +254,17 @@ async def test_dispatch_msg_post_with_reply():
 
 
 def _api_create_thread(client: httpx.Client, topic: str = "test-reply-thread") -> dict:
-    resp = client.post("/api/threads", json={"topic": topic, "status": "discuss"})
+    register_resp = client.post(
+        "/api/agents/register",
+        json={"ide": "VS Code", "model": "GPT-5.3-Codex"},
+    )
+    assert register_resp.status_code == 200, f"register failed: {register_resp.text}"
+    agent = register_resp.json()
+    resp = client.post(
+        "/api/threads",
+        json={"topic": topic, "status": "discuss", "creator_agent_id": agent["agent_id"]},
+        headers={"X-Agent-Token": agent["token"]},
+    )
     assert resp.status_code in (200, 201), f"create thread failed: {resp.text}"
     return resp.json()
 

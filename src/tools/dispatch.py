@@ -37,6 +37,11 @@ from src.db.models import Message
 import src.mcp_server
 from src.config import BUS_VERSION, HOST, PORT, MSG_WAIT_TIMEOUT
 from src.content_filter import ContentFilterError
+from src.thread_creation_service import (
+    create_thread_with_verified_creator,
+    CreatorAuthError,
+    CreatorNotFoundError,
+)
 import os
 
 logger = logging.getLogger(__name__)
@@ -197,32 +202,119 @@ async def handle_bus_get_config(db, arguments: dict[str, Any]) -> list[types.Tex
         "bus_name": "AgentChatBus",
         "version":  BUS_VERSION,
         "endpoint": f"http://{HOST}:{PORT}",
+        "auth_requirements": {
+            "mcp_thread_create": {
+                "required": True,
+                "body": ["topic", "agent_id", "token"],
+                "rule": "agent_id and token must be provided explicitly in thread_create input.",
+            },
+            "rest_thread_create": {
+                "required": True,
+                "body": ["topic", "creator_agent_id"],
+                "headers": ["X-Agent-Token"],
+            },
+        },
+        "thread_create_standard_call": {
+            "mcp_sequence": [
+                {
+                    "tool": "agent_register",
+                    "input": {"ide": "VS Code", "model": "GPT-5.3-Codex"},
+                },
+                {
+                    "tool": "thread_create",
+                    "input": {
+                        "topic": "Example topic",
+                        "agent_id": "<agent_register.result.agent_id>",
+                        "token": "<agent_register.result.token>",
+                    },
+                },
+            ],
+            "mcp_alternative": [
+                {
+                    "tool": "agent_resume",
+                    "input": {"agent_id": "<id>", "token": "<token>"},
+                },
+                {
+                    "tool": "thread_create",
+                    "input": {
+                        "topic": "Example topic",
+                        "agent_id": "<id>",
+                        "token": "<token>",
+                    },
+                },
+            ],
+        },
     }))]
 
 async def handle_thread_create(db, arguments: dict[str, Any]) -> list[types.TextContent]:
-    # Resolve current connection agent before creating the thread so creator-admin
-    # can be persisted at thread creation time.
-    agent_id, _ = src.mcp_server.get_connection_agent()
-    agent_info = await crud.agent_get(db, agent_id) if agent_id else None
+    # Strict creator auth: explicit id/token are mandatory for thread_create.
+    agent_id = arguments.get("agent_id")
+    token = arguments.get("token")
+    if not agent_id or not token:
+        return [types.TextContent(type="text", text=json.dumps({
+            "error": "thread_create requires explicit agent_id and token in input",
+            "explanation": (
+                "thread_create does not auto-read creator credentials from connection context. "
+                "You must pass both agent_id and token in the thread_create input payload."
+            ),
+            "credential_source": {
+                "from_agent_register": "Use the agent_id and token returned by agent_register.",
+                "from_agent_resume": "Use the same agent_id/token you passed to agent_resume (or its returned agent_id + your token).",
+            },
+            "how_to_fix": [
+                {
+                    "tool": "agent_register",
+                    "input": {"ide": "VS Code", "model": "GPT-5.3-Codex"},
+                    "note": "Read agent_id and token from this response.",
+                },
+                {
+                    "tool": "thread_create",
+                    "input": {
+                        "topic": arguments.get("topic", "Example topic"),
+                        "agent_id": "<agent_register.result.agent_id>",
+                        "token": "<agent_register.result.token>",
+                    },
+                },
+            ],
+            "alternative": [
+                {
+                    "tool": "agent_resume",
+                    "input": {"agent_id": "<id>", "token": "<token>"},
+                    "note": "After resume, reuse these same credentials for thread_create.",
+                },
+                {
+                    "tool": "thread_create",
+                    "input": {
+                        "topic": arguments.get("topic", "Example topic"),
+                        "agent_id": "<id>",
+                        "token": "<token>",
+                    },
+                },
+            ],
+        }))]
 
     try:
-        result = await crud.thread_create(
+        result, token_payload = await create_thread_with_verified_creator(
             db,
-            arguments["topic"],
-            arguments.get("metadata"),
-            arguments.get("system_prompt"),
+            topic=arguments["topic"],
+            creator_agent_id=agent_id,
+            creator_token=token,
+            metadata=arguments.get("metadata"),
+            system_prompt=arguments.get("system_prompt"),
             template=arguments.get("template"),
-            creator_admin_id=agent_info.id if agent_info else None,
-            creator_admin_name=(agent_info.display_name or agent_info.name) if agent_info else None,
         )
+    except CreatorAuthError as e:
+        return [types.TextContent(type="text", text=json.dumps({
+            "error": str(e),
+            "hint": "Pass agent_id and token explicitly in thread_create input.",
+        }))]
+    except CreatorNotFoundError as e:
+        return [types.TextContent(type="text", text=json.dumps({
+            "error": str(e),
+            "hint": "creator identity must map to an existing registered agent.",
+        }))]
     except ValueError as e:
         return [types.TextContent(type="text", text=json.dumps({"error": str(e)}))]
-    
-    # RQ-001: 同步 agent 在线状态 — thread_create 作为 activity 触发点
-    if agent_id:
-        await crud._set_agent_activity(db, agent_id, "thread_create", touch_heartbeat=True)
-
-    token_payload = await crud.issue_reply_token(db, thread_id=result.id, agent_id=agent_id)
 
     return [types.TextContent(type="text", text=json.dumps({
         "thread_id": result.id, "topic": result.topic, "status": result.status,
@@ -677,6 +769,17 @@ async def handle_agent_register(db, arguments: dict[str, Any]) -> list[types.Tex
         "skills": _json.loads(agent.skills) if agent.skills else [],
         "last_activity": agent.last_activity,
         "last_activity_time": agent.last_activity_time.isoformat() if agent.last_activity_time else None,
+        "thread_create_requirement": (
+            "When calling thread_create, you must provide both agent_id and token explicitly in input."
+        ),
+        "thread_create_example": {
+            "tool": "thread_create",
+            "input": {
+                "topic": "Example topic",
+                "agent_id": agent.id,
+                "token": agent.token,
+            },
+        },
     }))]
 
 async def handle_agent_heartbeat(db, arguments: dict[str, Any]) -> list[types.TextContent]:
@@ -706,6 +809,17 @@ async def handle_agent_resume(db, arguments: dict[str, Any]) -> list[types.TextC
         "last_heartbeat": agent.last_heartbeat.isoformat(),
         "last_activity": agent.last_activity,
         "last_activity_time": agent.last_activity_time.isoformat() if agent.last_activity_time else None,
+        "thread_create_requirement": (
+            "When calling thread_create, you must provide both agent_id and token explicitly in input."
+        ),
+        "thread_create_example": {
+            "tool": "thread_create",
+            "input": {
+                "topic": "Example topic",
+                "agent_id": agent.id,
+                "token": arguments["token"],
+            },
+        },
     }))]
 
 async def handle_agent_unregister(db, arguments: dict[str, Any]) -> list[types.TextContent]:

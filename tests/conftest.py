@@ -171,8 +171,24 @@ def server():
             react_detail = react_check.json().get("detail", "") if react_check.status_code == 404 else ""
             # UP-14: create a temp thread and check reply_to_msg_id field in messages response
             reply_field_ok = False
-            thread_resp = client.post("/api/threads", json={"topic": "__compat_check__", "status": "discuss"})
-            if thread_resp.status_code in (200, 201):
+            reg_resp = client.post(
+                "/api/agents/register",
+                json={"ide": "VS Code", "model": "GPT-5.3-Codex"},
+            )
+            if reg_resp.status_code == 200:
+                agent = reg_resp.json()
+                thread_resp = client.post(
+                    "/api/threads",
+                    json={
+                        "topic": "__compat_check__",
+                        "status": "discuss",
+                        "creator_agent_id": agent["agent_id"],
+                    },
+                    headers={"X-Agent-Token": agent["token"]},
+                )
+            else:
+                thread_resp = None
+            if thread_resp is not None and thread_resp.status_code in (200, 201):
                 tid = thread_resp.json().get("id", "")
                 if tid:
                     msgs_resp = client.get(f"/api/threads/{tid}/messages")

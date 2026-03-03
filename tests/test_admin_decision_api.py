@@ -22,28 +22,34 @@ def _require_server_or_skip(client: httpx.Client) -> None:
     pytest.skip(f"AgentChatBus server is not reachable at {BASE_URL}")
 
 
-def _create_thread(client: httpx.Client) -> str:
+def _create_thread(client: httpx.Client, creator_id: str, creator_token: str) -> str:
     topic = f"admin-decision-{uuid.uuid4()}"
-    resp = client.post("/api/threads", json={"topic": topic})
+    resp = client.post(
+        "/api/threads",
+        json={"topic": topic, "creator_agent_id": creator_id},
+        headers={"X-Agent-Token": creator_token},
+    )
     assert resp.status_code == 201, resp.text
     return resp.json()["id"]
 
 
-def _register_agent(client: httpx.Client) -> str:
+def _register_agent(client: httpx.Client) -> tuple[str, str]:
     resp = client.post(
         "/api/agents/register",
         json={"ide": "VS Code", "model": "GPT-5.3-Codex"},
     )
     assert resp.status_code == 200, resp.text
-    return resp.json()["agent_id"]
+    payload = resp.json()
+    return payload["agent_id"], payload["token"]
 
 
 def test_admin_decision_switch_then_keep():
     with _build_client() as client:
         _require_server_or_skip(client)
-        thread_id = _create_thread(client)
-        agent_a = _register_agent(client)
-        agent_b = _register_agent(client)
+        creator_id, creator_token = _register_agent(client)
+        thread_id = _create_thread(client, creator_id, creator_token)
+        agent_a, _ = _register_agent(client)
+        agent_b, _ = _register_agent(client)
 
         switch_resp = client.post(
             f"/api/threads/{thread_id}/admin/decision",
@@ -80,9 +86,10 @@ def test_admin_decision_switch_then_keep():
 def test_admin_decision_switch_replaces_previous_admin():
     with _build_client() as client:
         _require_server_or_skip(client)
-        thread_id = _create_thread(client)
-        agent_a = _register_agent(client)
-        agent_b = _register_agent(client)
+        creator_id, creator_token = _register_agent(client)
+        thread_id = _create_thread(client, creator_id, creator_token)
+        agent_a, _ = _register_agent(client)
+        agent_b, _ = _register_agent(client)
 
         r1 = client.post(
             f"/api/threads/{thread_id}/admin/decision",
@@ -105,13 +112,15 @@ def test_admin_decision_switch_replaces_previous_admin():
 def test_thread_creator_agent_is_admin():
     with _build_client() as client:
         _require_server_or_skip(client)
-        creator_id = _register_agent(client)
+        creator_id, creator_token = _register_agent(client)
 
         create_resp = client.post(
             "/api/threads",
             json={
                 "topic": f"creator-admin-{uuid.uuid4()}",
+                "creator_agent_id": creator_id,
             },
+            headers={"X-Agent-Token": creator_token},
         )
         assert create_resp.status_code == 201, create_resp.text
         thread_id = create_resp.json()["id"]
@@ -123,16 +132,18 @@ def test_thread_creator_agent_is_admin():
         assert payload["admin_type"] == "creator"
 
 
-def test_thread_creator_auto_assigns_online_agent_without_credentials():
+def test_thread_creator_requires_carried_credentials():
     with _build_client() as client:
         _require_server_or_skip(client)
-        creator_id = _register_agent(client)
+        creator_id, creator_token = _register_agent(client)
 
         create_resp = client.post(
             "/api/threads",
             json={
                 "topic": f"creator-auto-infer-{uuid.uuid4()}",
+                "creator_agent_id": creator_id,
             },
+            headers={"X-Agent-Token": creator_token},
         )
         assert create_resp.status_code == 201, create_resp.text
         thread_id = create_resp.json()["id"]
