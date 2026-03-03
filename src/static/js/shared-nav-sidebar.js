@@ -78,7 +78,14 @@
         `</span>`;
 
       entry.addEventListener("click", () => {
-        row.scrollIntoView({ behavior: "smooth", block: "center" });
+        // Scroll #messages-scroll to align the top of the row with the top of the viewport
+        const scrollEl = document.getElementById("messages-scroll");
+        if (scrollEl) {
+          const rowTop = row.offsetTop;
+          scrollEl.scrollTo({ top: rowTop - 12, behavior: "smooth" });
+        } else {
+          row.scrollIntoView({ behavior: "smooth", block: "start" });
+        }
         row.classList.add("nav-highlight");
         setTimeout(() => row.classList.remove("nav-highlight"), 1200);
       });
@@ -86,14 +93,20 @@
       sidebar.appendChild(entry);
     });
 
-    // IntersectionObserver: highlight entry for visible messages
+    // IntersectionObserver: highlight entry for visible messages.
+    // Guard: ignore the first batch of callbacks fired immediately on observe()
+    // (browser fires for all elements before any scroll has occurred).
+    let _ready = false;
+    setTimeout(() => { _ready = true; }, 300);
+
     _observer = new IntersectionObserver((entries) => {
+      if (!_ready) return;
       entries.forEach((e) => {
         const seq = e.target.getAttribute("data-seq");
         const entry = sidebar.querySelector(`.nav-entry[data-seq="${seq}"]`);
         if (entry) entry.classList.toggle("nav-entry-active", e.isIntersecting);
       });
-    }, { root: messagesEl, threshold: 0.3 });  // messagesEl = #messages-scroll (scroll container)
+    }, { root: messagesEl, threshold: 0.3 });
 
     rows.forEach((row) => _observer.observe(row));
   }
