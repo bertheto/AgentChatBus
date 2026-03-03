@@ -126,6 +126,8 @@
   async function openSettingsModal(api) {
     document.getElementById("settings-message").style.display = "none";
     setModalVisible("settings", true);
+    // UI-07: sync minimap checkbox state from localStorage
+    if (window.AcbModalShell) window.AcbModalShell.syncMinimapCheckbox();
     try {
       const res = await api("/api/settings");
       if (res) {

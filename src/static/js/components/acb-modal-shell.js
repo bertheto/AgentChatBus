@@ -6,6 +6,8 @@
     { label: "Wait Timeout (s)", id: "setting-wait", type: "number" },
   ];
 
+  const MINIMAP_KEY = "acb-minimap-enabled";
+
   function renderSettingsFields() {
     return SETTINGS_FIELDS.map((field) => {
       return `
@@ -13,6 +15,18 @@
         <input id="${field.id}" type="${field.type}"
           style="width:100%;background:var(--bg-input);border:1px solid var(--border-light);color:var(--text-1);border-radius:10px;padding:10px 14px;font-size:14px;font-family:inherit;margin-bottom:16px;" />`;
     }).join("\n");
+  }
+
+  function renderUiPreferences() {
+    return `
+      <div style="border-top:1px solid var(--border-light);margin:4px 0 16px;padding-top:16px;">
+        <div style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--text-2);margin-bottom:12px;">UI Preferences</div>
+        <label style="display:flex;align-items:center;gap:10px;font-size:13px;color:var(--text-1);cursor:pointer;user-select:none;">
+          <input id="setting-minimap" type="checkbox" style="width:15px;height:15px;cursor:pointer;accent-color:var(--accent);" />
+          <span>Message minimap (navigation sidebar)</span>
+        </label>
+        <div style="font-size:11px;color:var(--text-2);margin-top:4px;padding-left:25px;">Scrollable anchor list on the right — toggle without restart.</div>
+      </div>`;
   }
 
   class AcbModalShell extends HTMLElement {
@@ -45,10 +59,11 @@
             onclick="event.stopPropagation()">
             <h3 style="font-size:16px;font-weight:600;margin-bottom:18px;color:var(--text-1)">⚙️ MCP Server Settings</h3>
             ${renderSettingsFields()}
+            ${renderUiPreferences()}
             <div id="settings-message" style="font-size:12px;color:var(--green);margin-bottom:16px;display:none;"></div>
             <div class="modal-actions">
               <button class="btn-secondary" onclick="closeSettingsModal()">Cancel</button>
-              <button class="btn-primary" onclick="submitSettings()">Save (Requires Restart)</button>
+              <button class="btn-primary" id="btn-settings-save" onclick="submitSettings()">Save (Requires Restart)</button>
             </div>
           </div>
         </div>
@@ -83,8 +98,41 @@
             </div>
           </div>
         </div>`;
+
+      // Attach minimap toggle listener after DOM is built
+      this._attachMinimapToggle();
+    }
+
+    _attachMinimapToggle() {
+      const checkbox = this.querySelector("#setting-minimap");
+      if (!checkbox) return;
+
+      // Read saved state (default: enabled)
+      const saved = localStorage.getItem(MINIMAP_KEY);
+      checkbox.checked = saved === null ? true : saved === "true";
+
+      // Apply immediately on change (no restart needed)
+      checkbox.addEventListener("change", () => {
+        const enabled = checkbox.checked;
+        localStorage.setItem(MINIMAP_KEY, String(enabled));
+        if (window.AcbNavSidebar) {
+          window.AcbNavSidebar.setEnabled(enabled);
+        } else {
+          document.body.classList.toggle("minimap-hidden", !enabled);
+        }
+      });
     }
   }
+
+  // Expose helper so shared-modals.js openSettingsModal can sync the checkbox state
+  window.AcbModalShell = {
+    syncMinimapCheckbox() {
+      const checkbox = document.getElementById("setting-minimap");
+      if (!checkbox) return;
+      const saved = localStorage.getItem(MINIMAP_KEY);
+      checkbox.checked = saved === null ? true : saved === "true";
+    },
+  };
 
   if (!customElements.get("acb-modal-shell")) {
     customElements.define("acb-modal-shell", AcbModalShell);
