@@ -851,6 +851,45 @@ async def api_agents():
     return result
 
 
+@app.get("/api/threads/{thread_id}/agents")
+async def api_thread_agents(thread_id: str):
+    try:
+        db = await asyncio.wait_for(get_db(), timeout=DB_TIMEOUT)
+        t = await asyncio.wait_for(crud.thread_get(db, thread_id), timeout=DB_TIMEOUT)
+        if t is None:
+            raise HTTPException(status_code=404, detail="Thread not found")
+        agents = await asyncio.wait_for(crud.thread_agents_list(db, thread_id), timeout=DB_TIMEOUT)
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=503, detail="Database operation timeout")
+
+    try:
+        active_agent_ids = {v.get("agent_id") for v in mcp_server._connection_agents.values() if v.get("agent_id")}
+    except Exception:
+        active_agent_ids = set()
+
+    import json as _json
+    result = []
+    for a in agents:
+        is_online = bool(a.is_online or (a.id in active_agent_ids))
+        result.append({
+            "id": a.id,
+            "name": a.name,
+            "display_name": a.display_name,
+            "alias_source": a.alias_source,
+            "description": a.description,
+            "ide": a.ide,
+            "model": a.model,
+            "emoji": _agent_emoji(a.id),
+            "capabilities": _json.loads(a.capabilities) if a.capabilities else [],
+            "skills": _json.loads(a.skills) if a.skills else [],
+            "is_online": is_online,
+            "last_heartbeat": a.last_heartbeat.isoformat(),
+            "last_activity": a.last_activity,
+            "last_activity_time": a.last_activity_time.isoformat() if a.last_activity_time else None,
+        })
+    return result
+
+
 @app.get("/api/settings")
 async def api_get_settings():
     return get_config_dict()

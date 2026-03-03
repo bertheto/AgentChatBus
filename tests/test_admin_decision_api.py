@@ -156,6 +156,38 @@ def test_thread_creator_requires_carried_credentials():
         assert payload["admin_type"] == "creator"
 
 
+def test_thread_agents_endpoint_returns_thread_scoped_participants_only():
+    with _build_client() as client:
+        _require_server_or_skip(client)
+        creator_id, creator_token = _register_agent(client)
+        thread_a = _create_thread(client, creator_id, creator_token)
+        thread_b = _create_thread(client, creator_id, creator_token)
+        agent_b_id, agent_b_token = _register_agent(client)
+
+        post_resp = client.post(
+            f"/api/threads/{thread_a}/messages",
+            json={
+                "author": agent_b_id,
+                "role": "assistant",
+                "content": "thread-a message",
+            },
+            headers={"X-Agent-Token": agent_b_token},
+        )
+        assert post_resp.status_code == 201, post_resp.text
+
+        list_a = client.get(f"/api/threads/{thread_a}/agents")
+        assert list_a.status_code == 200, list_a.text
+        ids_a = {a.get("id") for a in list_a.json()}
+        assert creator_id in ids_a
+        assert agent_b_id in ids_a
+
+        list_b = client.get(f"/api/threads/{thread_b}/agents")
+        assert list_b.status_code == 200, list_b.text
+        ids_b = {a.get("id") for a in list_b.json()}
+        assert creator_id in ids_b
+        assert agent_b_id not in ids_b
+
+
 def test_admin_decision_source_message_is_single_use():
     with _build_client() as client:
         _require_server_or_skip(client)

@@ -1524,6 +1524,61 @@ async def agent_list(db: aiosqlite.Connection) -> list[AgentInfo]:
     return [_row_to_agent(r) for r in rows]
 
 
+async def thread_agents_list(db: aiosqlite.Connection, thread_id: str) -> list[AgentInfo]:
+    """List agents related to a thread.
+
+    Sources:
+    - message authors in the thread (messages.author_id)
+    - thread admin assignments (creator/auto-assigned) from thread_settings
+    """
+    participant_ids: set[str] = set()
+
+    async with db.execute(
+        """
+        SELECT DISTINCT author_id
+        FROM messages
+        WHERE thread_id = ?
+          AND author_id IS NOT NULL
+          AND author_id != ''
+        """,
+        (thread_id,),
+    ) as cur:
+        rows = await cur.fetchall()
+    for row in rows:
+        aid = row["author_id"]
+        if aid:
+            participant_ids.add(aid)
+
+    async with db.execute(
+        """
+        SELECT creator_admin_id, auto_assigned_admin_id
+        FROM thread_settings
+        WHERE thread_id = ?
+        """,
+        (thread_id,),
+    ) as cur:
+        settings_row = await cur.fetchone()
+    if settings_row is not None:
+        creator_admin_id = _row_get(settings_row, "creator_admin_id")
+        auto_assigned_admin_id = _row_get(settings_row, "auto_assigned_admin_id")
+        if creator_admin_id:
+            participant_ids.add(creator_admin_id)
+        if auto_assigned_admin_id:
+            participant_ids.add(auto_assigned_admin_id)
+
+    if not participant_ids:
+        return []
+
+    placeholders = ",".join("?" for _ in participant_ids)
+    params = [*participant_ids]
+    async with db.execute(
+        f"SELECT * FROM agents WHERE id IN ({placeholders}) ORDER BY registered_at",
+        params,
+    ) as cur:
+        agent_rows = await cur.fetchall()
+    return [_row_to_agent(r) for r in agent_rows]
+
+
 async def agent_get(db: aiosqlite.Connection, agent_id: str) -> Optional[AgentInfo]:
     """Return a single agent by ID, or None if not found."""
     async with db.execute("SELECT * FROM agents WHERE id = ?", (agent_id,)) as cur:
