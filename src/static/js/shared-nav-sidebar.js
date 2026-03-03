@@ -1,36 +1,14 @@
 /**
- * UI-07: Message Navigation Sidebar (Minimap)
- * Scrollable sidebar on the right of the chat area with clickable anchors
- * per agent + timestamp. Activatable/deactivatable via Settings > UI Preferences.
+ * UI-07: Message Navigation Rail (Emoji Minimap)
+ * Absolute-positioned emoji markers on the right edge of #messages-wrap,
+ * one per message, aligned to its msg-row. Click to scroll to the message.
+ * Activatable/deactivatable via Settings > UI Preferences.
  */
 (function () {
   const STORAGE_KEY = "acb-minimap-enabled";
-  const AUTHOR_COLORS = [
-    "var(--accent-a)",
-    "var(--accent-b)",
-    "var(--accent-c)",
-    "var(--accent-d)",
-    "var(--accent-e)",
-  ];
 
-  let _observer = null;
-  let _authorColorMap = {};
-  let _colorIndex = 0;
-
-  // ─── Colour assignment ────────────────────────────────────────────────────
-
-  function getAuthorColor(authorId) {
-    if (!_authorColorMap[authorId]) {
-      _authorColorMap[authorId] = AUTHOR_COLORS[_colorIndex % AUTHOR_COLORS.length];
-      _colorIndex++;
-    }
-    return _authorColorMap[authorId];
-  }
-
-  function resetColors() {
-    _authorColorMap = {};
-    _colorIndex = 0;
-  }
+  let _scrollListener = null;
+  let _resizeObserver = null;
 
   // ─── Enabled state ────────────────────────────────────────────────────────
 
@@ -43,147 +21,127 @@
     document.body.classList.toggle("minimap-hidden", !isEnabled());
   }
 
-  // ─── Build anchors ────────────────────────────────────────────────────────
+  function setEnabled(enabled) {
+    localStorage.setItem(STORAGE_KEY, String(enabled));
+    document.body.classList.toggle("minimap-hidden", !enabled);
+  }
 
-  function buildAnchors() {
-    const sidebar = document.getElementById("nav-sidebar");
-    if (!sidebar) return;
+  // ─── Position dots ────────────────────────────────────────────────────────
 
-    const list = sidebar.querySelector(".nav-sidebar-list");
-    if (!list) return;
+  function positionDots() {
+    const rail = document.getElementById("nav-rail");
+    const messagesEl = document.getElementById("messages");
+    if (!rail || !messagesEl) return;
 
-    list.innerHTML = "";
-    resetColors();
+    const dots = rail.querySelectorAll(".nav-dot");
+    const rows = messagesEl.querySelectorAll(".msg-row[data-seq]");
 
-    const rows = document.querySelectorAll(".msg-row[data-seq]");
-
-    if (rows.length === 0) {
-      sidebar.classList.add("nav-sidebar-empty");
+    if (dots.length !== rows.length) {
+      // Mismatch — full rebuild needed
+      buildRail();
       return;
     }
-    sidebar.classList.remove("nav-sidebar-empty");
+
+    // Reposition each dot based on current scroll
+    const scrollTop = messagesEl.scrollTop;
+    rows.forEach((row, i) => {
+      const dot = dots[i];
+      if (!dot) return;
+      const top = row.offsetTop - scrollTop;
+      dot.style.top = top + "px";
+      // Show/hide if out of visible area
+      const messagesHeight = messagesEl.clientHeight;
+      dot.style.opacity = (top >= 0 && top <= messagesHeight) ? "1" : "0";
+      dot.style.pointerEvents = (top >= 0 && top <= messagesHeight) ? "auto" : "none";
+    });
+  }
+
+  // ─── Build rail ───────────────────────────────────────────────────────────
+
+  function buildRail() {
+    const rail = document.getElementById("nav-rail");
+    const messagesEl = document.getElementById("messages");
+    if (!rail || !messagesEl) return;
+
+    // Detach old scroll listener
+    if (_scrollListener) {
+      messagesEl.removeEventListener("scroll", _scrollListener);
+      _scrollListener = null;
+    }
+    if (_resizeObserver) {
+      _resizeObserver.disconnect();
+      _resizeObserver = null;
+    }
+
+    rail.innerHTML = "";
+
+    const rows = messagesEl.querySelectorAll(".msg-row[data-seq]");
+    if (rows.length === 0) return;
+
+    const scrollTop = messagesEl.scrollTop;
+    const messagesHeight = messagesEl.clientHeight;
 
     rows.forEach((row) => {
       const seq = row.getAttribute("data-seq");
       const authorId = row.getAttribute("data-author-id") || "unknown";
 
-      // Derive label: try the author name label inside the row
-      const authorNameEl = row.querySelector(".msg-author-name, .msg-author, .author-label");
-      const authorName = authorNameEl
-        ? authorNameEl.textContent.trim()
-        : authorId;
+      // Get emoji from avatar element
+      const avatarEl = row.querySelector(".msg-avatar");
+      const emoji = avatarEl ? avatarEl.textContent.trim() : "💬";
 
-      // Derive timestamp from the row's tail-meta component or time element
-      const timeEl = row.querySelector("time, .msg-time, .msg-ts, acb-message-tail-meta");
-      const timestamp = timeEl ? timeEl.getAttribute("datetime") || timeEl.textContent.trim() : "";
+      // Get author name for tooltip
+      const authorNameEl = row.querySelector(".msg-author-label");
+      const authorName = authorNameEl ? authorNameEl.textContent.trim() : authorId;
 
-      const color = getAuthorColor(authorId);
+      // Get timestamp for tooltip
+      const timeEl = row.querySelector(".msg-time-label");
+      const timeText = timeEl ? timeEl.textContent.trim() : "";
 
-      const anchor = document.createElement("button");
-      anchor.className = "nav-anchor";
-      anchor.setAttribute("data-seq", seq);
-      anchor.setAttribute("data-author-id", authorId);
-      anchor.setAttribute("title", `${authorName}${timestamp ? " · " + timestamp : ""} (seq ${seq})`);
-      anchor.setAttribute("aria-label", `Jump to message ${seq} from ${authorName}`);
-      anchor.innerHTML = `
-        <span class="nav-anchor-dot" style="background:${color};"></span>
-        <span class="nav-anchor-label">
-          <span class="nav-anchor-name">${_escHtml(authorName)}</span>
-          ${timestamp ? `<span class="nav-anchor-ts">${_escHtml(timestamp)}</span>` : ""}
-        </span>`;
+      const top = row.offsetTop - scrollTop;
+      const visible = top >= 0 && top <= messagesHeight;
 
-      anchor.addEventListener("click", () => {
+      const dot = document.createElement("button");
+      dot.className = "nav-dot";
+      dot.setAttribute("data-seq", seq);
+      dot.setAttribute("data-author-id", authorId);
+      dot.setAttribute("title", `${authorName}${timeText ? " · " + timeText : ""}`);
+      dot.setAttribute("aria-label", `Jump to message ${seq} from ${authorName}`);
+      dot.textContent = emoji;
+      dot.style.top = top + "px";
+      dot.style.opacity = visible ? "1" : "0";
+      dot.style.pointerEvents = visible ? "auto" : "none";
+
+      dot.addEventListener("click", () => {
         row.scrollIntoView({ behavior: "smooth", block: "center" });
-        // Briefly highlight
         row.classList.add("nav-highlight");
         setTimeout(() => row.classList.remove("nav-highlight"), 1200);
       });
 
-      list.appendChild(anchor);
+      rail.appendChild(dot);
     });
 
-    // Re-init intersection observer
-    _initObserver(list);
-  }
+    // Reposition on scroll
+    _scrollListener = positionDots;
+    messagesEl.addEventListener("scroll", _scrollListener, { passive: true });
 
-  function _escHtml(str) {
-    return str
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;");
-  }
-
-  // ─── Active anchor tracking via IntersectionObserver ─────────────────────
-
-  function _initObserver(list) {
-    if (_observer) {
-      _observer.disconnect();
-      _observer = null;
-    }
-
-    const messagesEl = document.getElementById("messages");
-    if (!messagesEl) return;
-
-    _observer = new IntersectionObserver(
-      (entries) => {
-        entries.forEach((entry) => {
-          const seq = entry.target.getAttribute("data-seq");
-          const anchor = list.querySelector(`.nav-anchor[data-seq="${seq}"]`);
-          if (anchor) {
-            anchor.classList.toggle("nav-anchor-active", entry.isIntersecting);
-          }
-        });
-      },
-      {
-        root: messagesEl,
-        threshold: 0.2,
-      }
-    );
-
-    document.querySelectorAll(".msg-row[data-seq]").forEach((row) => {
-      _observer.observe(row);
-    });
+    // Reposition on resize (messages area resized)
+    _resizeObserver = new ResizeObserver(() => positionDots());
+    _resizeObserver.observe(messagesEl);
   }
 
   // ─── Public API ───────────────────────────────────────────────────────────
 
   window.AcbNavSidebar = {
-    /**
-     * Call once at init and after loading a thread.
-     */
     rebuild() {
-      buildAnchors();
+      buildRail();
     },
-
-    /**
-     * Call after each appendBubble to add the new anchor without full rebuild.
-     * Falls back to full rebuild for simplicity.
-     */
     onNewMessage() {
-      buildAnchors();
+      buildRail();
     },
-
-    /**
-     * Called from Settings modal to toggle minimap visibility.
-     * @param {boolean} enabled
-     */
-    setEnabled(enabled) {
-      localStorage.setItem(STORAGE_KEY, String(enabled));
-      document.body.classList.toggle("minimap-hidden", !enabled);
-    },
-
-    /**
-     * Returns current enabled state (reads localStorage).
-     */
+    setEnabled,
     isEnabled,
-
-    /**
-     * Apply saved state on page load.
-     */
     applyEnabledState,
   };
 
-  // Apply state immediately on script load
   applyEnabledState();
 })();

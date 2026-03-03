@@ -108,25 +108,22 @@
         <div id="search-all-results" class="search-all-results" aria-live="polite"></div>
       </div>
 
-      <!-- UI-07: chat area wrapper (messages + nav sidebar side by side) -->
-      <div id="chat-area">
-        <div id="messages-wrap" style="position:relative;flex:1;overflow:hidden;display:flex;flex-direction:column;">
-          <div id="messages">
-            <acb-empty-state></acb-empty-state>
-          </div>
 
-          <!-- UI-08: Scroll-to-top floating button -->
-          <button id="btn-scroll-top" class="scroll-top-btn" aria-label="Scroll to top" title="Scroll to top">
-            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-              <polyline points="18 15 12 9 6 15"/>
-            </svg>
-          </button>
+      <!-- UI-07: messages + emoji nav rail (absolute inside messages-wrap) -->
+      <div id="messages-wrap" style="position:relative;flex:1;overflow:hidden;display:flex;flex-direction:column;">
+        <div id="messages">
+          <acb-empty-state></acb-empty-state>
         </div>
 
-        <!-- UI-07: Message navigation sidebar (minimap) -->
-        <nav id="nav-sidebar" aria-label="Message navigation">
-          <div class="nav-sidebar-list"></div>
-        </nav>
+        <!-- UI-07: emoji nav rail (absolute, right edge of messages-wrap) -->
+        <div id="nav-rail" aria-label="Message navigation" role="navigation"></div>
+
+        <!-- UI-08: Scroll-to-top floating button -->
+        <button id="btn-scroll-top" class="scroll-top-btn" aria-label="Scroll to top" title="Scroll to top">
+          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="18 15 12 9 6 15"/>
+          </svg>
+        </button>
       </div>
 
       <acb-compose-shell></acb-compose-shell>
