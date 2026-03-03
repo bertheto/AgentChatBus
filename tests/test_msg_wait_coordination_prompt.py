@@ -115,3 +115,46 @@ async def test_msg_wait_and_msg_list_filter_human_only_system_messages():
         assert not any("Auto Administrator Timeout triggered" in (m.get("content") or "") for m in listed)
     finally:
         await db.close()
+
+
+@pytest.mark.asyncio
+async def test_msg_wait_for_agent_unmatched_message_keeps_wait_state():
+    """When for_agent does not match available messages, waiter should remain in wait state."""
+    db = await _setup_db()
+    try:
+        thread = await crud.thread_create(db, "msg-wait-for-agent-unmatched")
+        agent = await crud.agent_register(db, ide="VS Code", model="GPT-5.3-Codex")
+
+        sync = await crud.issue_reply_token(db, thread_id=thread.id, agent_id=agent.id)
+        await crud.msg_post(
+            db,
+            thread_id=thread.id,
+            author=agent.id,
+            content="message for another agent",
+            expected_last_seq=sync["current_seq"],
+            reply_token=sync["reply_token"],
+            role="assistant",
+            metadata={"handoff_target": "someone-else"},
+        )
+
+        out = await handle_msg_wait(
+            db,
+            {
+                "thread_id": thread.id,
+                "after_seq": 0,
+                "timeout_ms": 20,
+                "return_format": "json",
+                "agent_id": agent.id,
+                "token": agent.token,
+                "for_agent": agent.id,
+            },
+        )
+
+        payload = json.loads(out[0].text)
+        assert payload.get("messages") == []
+
+        states = await crud.thread_wait_states_grouped(db)
+        assert thread.id in states
+        assert agent.id in states[thread.id]
+    finally:
+        await db.close()

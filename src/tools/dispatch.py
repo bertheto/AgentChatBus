@@ -656,21 +656,26 @@ async def handle_msg_wait(db, arguments: dict[str, Any]) -> list[types.Content]:
 
     async def _poll():
         last_heartbeat = asyncio.get_event_loop().time()
+        local_after_seq = after_seq
         while True:
-            raw_msgs = await crud.msg_list(db, thread_id, after_seq=after_seq, include_system_prompt=False)
+            raw_msgs = await crud.msg_list(db, thread_id, after_seq=local_after_seq, include_system_prompt=False)
             msgs = [m for m in raw_msgs if not _is_human_only_message(m)]
             if msgs:
-                # Agent received messages - exit wait state.
-                # This must be a DB write (not local-memory mutation) so any
-                # process observing wait state sees that this agent is no longer
-                # waiting on this thread.
-                if agent_id:
-                    await crud.thread_wait_exit(db, thread_id, agent_id)
                 if for_agent:
                     filtered = [m for m in msgs if _metadata_targets(m, for_agent)]
                     if filtered:
+                        # Exit wait state only when returning a message to caller.
+                        if agent_id:
+                            await crud.thread_wait_exit(db, thread_id, agent_id)
                         return filtered
+                    # Messages were present but not targeted at this waiter.
+                    # Move the local cursor forward to avoid polling the same
+                    # non-target messages forever, and keep wait-state active.
+                    local_after_seq = max(local_after_seq, max(m.seq for m in msgs))
                 else:
+                    # No for_agent filter: any message wakes this waiter.
+                    if agent_id:
+                        await crud.thread_wait_exit(db, thread_id, agent_id)
                     return msgs
 
             now = asyncio.get_event_loop().time()
