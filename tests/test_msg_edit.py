@@ -1,4 +1,4 @@
-﻿"""
+"""
 Unit and integration tests for UP-21: message edit/versioning.
 
 Unit tests use an in-memory SQLite DB via aiosqlite + init_schema.
@@ -168,10 +168,14 @@ async def test_msg_edit_same_content_raises_noop():
     t = await crud.thread_create(db, "edit-test")
     msg = await _post(db, t.id, "agent-a", "same content")
 
-    with pytest.raises(MessageEditNoChangeError) as exc_info:
+    caught: MessageEditNoChangeError | None = None
+    try:
         await crud.msg_edit(db, msg.id, "same content", "agent-a")
+    except MessageEditNoChangeError as exc:
+        caught = exc
 
-    assert exc_info.value.current_version == 0
+    assert caught is not None, "MessageEditNoChangeError was not raised"
+    assert caught.current_version == 0
     await db.close()
 
 
@@ -183,10 +187,14 @@ async def test_msg_edit_noop_carries_current_version():
 
     await crud.msg_edit(db, msg.id, "v1", "agent-a")
 
-    with pytest.raises(MessageEditNoChangeError) as exc_info:
+    caught: MessageEditNoChangeError | None = None
+    try:
         await crud.msg_edit(db, msg.id, "v1", "agent-a")  # same as current
+    except MessageEditNoChangeError as exc:
+        caught = exc
 
-    assert exc_info.value.current_version == 1
+    assert caught is not None, "MessageEditNoChangeError was not raised"
+    assert caught.current_version == 1
     await db.close()
 
 
@@ -195,8 +203,13 @@ async def test_msg_edit_nonexistent_message():
     db = await _make_db()
     await init_schema(db)
 
-    with pytest.raises(MessageNotFoundError):
+    caught: MessageNotFoundError | None = None
+    try:
         await crud.msg_edit(db, "nonexistent-id", "content", "agent-a")
+    except MessageNotFoundError as exc:
+        caught = exc
+
+    assert caught is not None, "MessageNotFoundError was not raised"
     await db.close()
 
 
