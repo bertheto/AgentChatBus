@@ -188,6 +188,89 @@ def _message_to_blocks(m: Message) -> list[types.Content]:
 
     return blocks
 
+async def handle_bus_connect(db, arguments: dict[str, Any]) -> list[types.TextContent]:
+    # ── Phase 1: Determine Agent Identity ──
+    explicit_id = arguments.get("agent_id")
+    explicit_token = arguments.get("token")
+    conn_id, conn_token = src.mcp_server.get_connection_agent()
+
+    if explicit_id and explicit_token:
+        # Resume existing agent
+        agent = await crud.agent_resume(db, explicit_id, explicit_token)
+        newly_registered = False
+    elif conn_id:
+        # Reuse connection agent
+        agent = await crud.agent_get(db, conn_id)
+        if not agent:
+            return [types.TextContent(type="text", text=json.dumps({"error": "Connection agent not found in database"}))]
+        newly_registered = False
+    else:
+        # Register new agent
+        ide = arguments.get("ide", "Unknown IDE")
+        model = arguments.get("model", "Unknown Model")
+        agent = await crud.agent_register(db, ide=ide, model=model)
+        newly_registered = True
+
+    src.mcp_server.set_connection_agent(agent.id, agent.token)
+    
+    if newly_registered:
+        src.mcp_server._current_agent_id.set(agent.id)
+        src.mcp_server._current_agent_token.set(agent.token)
+
+    # ── Phase 2: Find or Create Thread ──
+    thread_name = arguments.get("thread_name")
+    if not thread_name:
+         return [types.TextContent(type="text", text=json.dumps({"error": "thread_name is required"}))]
+         
+    thread = await crud.thread_get_by_topic(db, thread_name)
+    thread_created = False
+
+    if thread is None:
+        thread = await crud.thread_create(
+            db,
+            topic=thread_name,
+            creator_admin_id=agent.id,
+            creator_admin_name=(agent.display_name or agent.name),
+        )
+        thread_created = True
+
+    # ── Phase 3: Fetch Messages and Sync Context ──
+    after_seq = arguments.get("after_seq", 0)
+    msgs = await crud.msg_list(db, thread.id, after_seq=after_seq)
+    sync = await crud.issue_reply_token(db, thread_id=thread.id, agent_id=agent.id)
+
+    # ── Assemble Result ──
+    agent_payload: dict[str, Any] = {
+        "agent_id": agent.id,
+        "name": agent.name,
+        "registered": newly_registered,
+    }
+    if newly_registered:
+        agent_payload["token"] = agent.token
+
+    return [types.TextContent(type="text", text=json.dumps({
+        "agent": agent_payload,
+        "thread": {
+            "thread_id": thread.id,
+            "topic": thread.topic,
+            "status": thread.status,
+            "created": thread_created,
+        },
+        "messages": [
+            {
+                "seq": m.seq,
+                "author": m.author_name or m.author,
+                "role": m.role,
+                "content": m.content,
+                "created_at": m.created_at.isoformat()
+            }
+            for m in msgs
+        ],
+        "current_seq": sync["current_seq"],
+        "reply_token": sync["reply_token"],
+        "reply_window": sync["reply_window"],
+    }))]
+
 async def handle_bus_get_config(db, arguments: dict[str, Any]) -> list[types.TextContent]:
     session_lang = src.mcp_server._session_language.get()
     effective_lang = session_lang or "English"
@@ -214,35 +297,17 @@ async def handle_bus_get_config(db, arguments: dict[str, Any]) -> list[types.Tex
                 "headers": ["X-Agent-Token"],
             },
         },
-        "thread_create_standard_call": {
-            "mcp_sequence": [
-                {
-                    "tool": "agent_register",
-                    "input": {"ide": "VS Code", "model": "GPT-5.3-Codex"},
-                },
-                {
-                    "tool": "thread_create",
-                    "input": {
-                        "topic": "Example topic",
-                        "agent_id": "<agent_register.result.agent_id>",
-                        "token": "<agent_register.result.token>",
-                    },
-                },
-            ],
-            "mcp_alternative": [
-                {
-                    "tool": "agent_resume",
-                    "input": {"agent_id": "<id>", "token": "<token>"},
-                },
-                {
-                    "tool": "thread_create",
-                    "input": {
-                        "topic": "Example topic",
-                        "agent_id": "<id>",
-                        "token": "<token>",
-                    },
-                },
-            ],
+        "recommended_workflow": {
+            "join_or_create_thread": {
+                "tool": "bus_connect",
+                "input": {"thread_name": "My Topic", "ide": "Cursor", "model": "Claude"},
+                "note": "One call: auto-registers agent, joins or creates thread, returns messages + sync context.",
+            },
+            "resume_existing_session": {
+                "tool": "bus_connect",
+                "input": {"thread_name": "My Topic", "agent_id": "<saved>", "token": "<saved>"},
+                "note": "Resume a previously registered agent and join thread.",
+            },
         },
     }))]
 
@@ -919,6 +984,7 @@ async def handle_agent_set_typing(db, arguments: dict[str, Any]) -> list[types.T
 
 TOOLS_DISPATCH = {
     "bus_get_config": handle_bus_get_config,
+    "bus_connect": handle_bus_connect,
     "thread_create": handle_thread_create,
     "thread_list": handle_thread_list,
     "thread_delete": handle_thread_delete,

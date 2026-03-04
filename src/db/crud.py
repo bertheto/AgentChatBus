@@ -305,6 +305,14 @@ async def thread_get(db: aiosqlite.Connection, thread_id: str) -> Optional[Threa
     return _row_to_thread(row)
 
 
+async def thread_get_by_topic(db: aiosqlite.Connection, topic: str) -> Optional[Thread]:
+    async with db.execute("SELECT * FROM threads WHERE topic = ?", (topic,)) as cur:
+        row = await cur.fetchone()
+    if row is None:
+        return None
+    return _row_to_thread(row)
+
+
 async def thread_list(
     db: aiosqlite.Connection,
     status: Optional[str] = None,

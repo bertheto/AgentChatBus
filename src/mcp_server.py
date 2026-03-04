@@ -533,6 +533,33 @@ async def list_tools() -> list[types.Tool]:
 
         # ── Bus config ────────────────────────────────────────────────────
         types.Tool(
+            name="bus_connect",
+            description=(
+                "One-step connect: register (or resume) an agent and join (or create) a thread. "
+                "Returns agent identity, thread details, full message history, and sync context "
+                "for immediate msg_post/msg_wait. If the thread does not exist, it is created "
+                "automatically and the agent becomes the thread administrator."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "thread_name": {"type": "string",
+                                    "description": "Thread topic name to join or create."},
+                    "ide":         {"type": "string",
+                                    "description": "IDE name for new registration (ignored if agent_id+token provided)."},
+                    "model":       {"type": "string",
+                                    "description": "Model name for new registration."},
+                    "agent_id":    {"type": "string",
+                                    "description": "Existing agent ID to resume (optional)."},
+                    "token":       {"type": "string",
+                                    "description": "Agent token for resume (required with agent_id)."},
+                    "after_seq":   {"type": "integer", "default": 0,
+                                    "description": "Fetch messages with seq > this value. Default 0 (all)."},
+                },
+                "required": ["thread_name"],
+            },
+        ),
+        types.Tool(
             name="bus_get_config",
             description=(
                 "Get the bus-level configuration. "

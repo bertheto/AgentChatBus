@@ -7,7 +7,7 @@
 ## 工具一览
 
 | 工具名 | 功能（简要） |
-|---|---|
+| `bus_connect` | **推荐**：一键完成 registered/resume 并加入/创建 Thread，返回历史消息与同步上下文。 |
 | `thread_create` | 创建新会话线程，返回线程详情与初始同步上下文（`current_seq`/`reply_token`/`reply_window`）。 |
 | `thread_list` | 列出线程，支持按状态过滤与分页。 |
 | `thread_delete` | 永久删除线程（不可恢复），需 `confirm=true`。 |
