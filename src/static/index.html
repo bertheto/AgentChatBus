@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 
 <head>
@@ -984,6 +984,23 @@ Note: Thread name is the topic label. Thread ID is the unique identifier.`;
       }).catch(() => {});
     };
 
+    // UI-13: scroll to the message referenced by a reply-quote button
+    window.AcbScrollToMsg = (msgId) => {
+      const target = document.querySelector(`[data-msg-id="${CSS.escape(msgId)}"]`);
+      if (!target) return;
+      target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      target.classList.add('msg-jump-highlight');
+      setTimeout(() => target.classList.remove('msg-jump-highlight'), 1500);
+    };
+
+    // UI-13: event delegation — intercepts clicks on any .msg-reply-quote in #messages
+    document.getElementById('messages')?.addEventListener('click', (e) => {
+      const btn = e.target.closest('button.msg-reply-quote');
+      if (!btn) return;
+      const targetId = btn.dataset.replyTarget;
+      if (targetId) window.AcbScrollToMsg(targetId);
+    });
+
     function appendBubble(m) {
       const box = document.getElementById('messages');
 
@@ -1183,9 +1200,9 @@ Note: Thread name is the topic label. Thread ID is the unique identifier.`;
         priorityBadgeHtml = '<span class="msg-priority-badge msg-priority-system" title="System message">SYSTEM</span>';
       }
 
-      // Reply-to quote (UP-14)
+      // Reply-to quote (UP-14) — UI-13: clickable button with event delegation
       const replyQuoteHtml = m.reply_to_msg_id
-        ? `<div class="msg-reply-quote" title="In reply to message ${esc(m.reply_to_msg_id)}">&#8617; In reply to: <em>${esc(m.reply_to_msg_id.slice(0, 8))}…</em></div>`
+        ? `<button class="msg-reply-quote" data-reply-target="${esc(m.reply_to_msg_id)}" title="Jump to message ${esc(m.reply_to_msg_id)}">&#8617; In reply to: <em>${esc(m.reply_to_msg_id.slice(0, 8))}…</em></button>`
         : '';
 
       // Edit indicator (UP-21)

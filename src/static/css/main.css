@@ -1042,6 +1042,30 @@ body[data-theme="light"] .msg-reply-quote {
   color: #555;
 }
 
+/* UI-13: reply-quote clickable button reset */
+button.msg-reply-quote {
+  cursor: pointer;
+  background: none;
+  border: none;
+  padding: 2px 8px;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  display: inline-block;
+}
+button.msg-reply-quote:hover {
+  text-decoration: underline dotted;
+  opacity: 0.85;
+}
+
+/* UI-13: jump highlight on target message */
+.msg-jump-highlight {
+  outline: 2px solid var(--accent, #7c6af7);
+  outline-offset: 3px;
+  border-radius: 6px;
+  transition: outline 0.3s ease-out;
+}
+
 body[data-theme="light"] .stop-tag {
   background: rgba(100,100,100,0.08);
   color: #555;
