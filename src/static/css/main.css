@@ -854,11 +854,20 @@ body[data-theme="light"] .thread-item.context-highlight {
 
 .msg-header {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 8px;
   font-size: 11px;
+  width: 100%;
 }
 
+.msg-row-left .msg-header .msg-copy-btn,
+.msg-row-left .msg-header .msg-edit-btn {
+  margin-left: 2px;
+}
+
+.msg-row-left .msg-header .msg-copy-btn {
+  margin-left: auto;
+}
 /* ── Per-message copy button ───────────────────────────────────────────────── */
 .msg-copy-btn {
   display: inline-flex;
@@ -873,7 +882,6 @@ body[data-theme="light"] .thread-item.context-highlight {
   color: var(--text-2);
   cursor: pointer;
   flex-shrink: 0;
-  margin-left: auto;
   opacity: 0;
   transition: opacity .15s, background .15s, border-color .15s, color .15s;
 }
@@ -896,7 +904,26 @@ body[data-theme="light"] .thread-item.context-highlight {
 }
 
 .msg-row-right .msg-header {
-  flex-direction: row-reverse;
+  justify-content: flex-end;
+  }
+  
+  .msg-row-right .msg-header .msg-copy-btn {
+    order: -1;
+    margin-right: 4px;
+  }
+  
+  .msg-row-right .msg-header .msg-edit-btn {
+    order: -2;
+    margin-right: 4px;
+  }
+  
+  .msg-row-right .msg-header .msg-author-label,
+  .msg-row-right .msg-header .msg-time-label {
+    margin-left: 8px;
+  }
+  
+  .msg-row-right .msg-header .msg-copy-btn {
+    margin-right: auto;
 }
 
 .msg-author-label {
@@ -1081,6 +1108,7 @@ body[data-theme="light"] .stop-tag {
   border: 1px solid var(--border-light);
   border-left-width: 3px;
   max-width: 100%;
+  min-width: 240px;
 }
 
 .msg-row-right .bubble-v2 {
