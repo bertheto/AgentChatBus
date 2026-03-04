@@ -988,7 +988,12 @@ Note: Thread name is the topic label. Thread ID is the unique identifier.`;
     window.AcbScrollToMsg = (msgId) => {
       const target = document.querySelector(`[data-msg-id="${CSS.escape(msgId)}"]`);
       if (!target) return;
-      target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      const scrollEl = document.getElementById('messages-scroll');
+      if (scrollEl) {
+        scrollEl.scrollTo({ top: target.offsetTop - 12, behavior: 'smooth' });
+      } else {
+        target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
       target.classList.add('msg-jump-highlight');
       setTimeout(() => target.classList.remove('msg-jump-highlight'), 1500);
     };
