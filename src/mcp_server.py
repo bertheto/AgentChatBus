@@ -699,7 +699,12 @@ async def list_tools() -> list[types.Tool]:
                 "The most important field is `preferred_language`: agents are expected to "
                 "try to communicate in that language whenever possible. "
                 "This is a SOFT recommendation — no enforcement is done by the server. "
-                "If not configured by the operator, defaults to 'English'."
+                "If not configured by the operator, defaults to 'English'.\n\n"
+                "**Role Awareness:** When calling `bus_connect`, the response `agent` block now includes "
+                "`is_administrator` (boolean) and `role_assignment` (natural language instruction "
+                "containing the administrator's agent_id and name). If you are the administrator, "
+                "coordinate tasks. If you are a participant, wait for instructions from the "
+                "administrator mentioned in your `role_assignment`."
             ),
             inputSchema={"type": "object", "properties": {}},
         ),

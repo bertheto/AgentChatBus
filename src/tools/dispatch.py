@@ -221,22 +221,47 @@ async def handle_bus_connect(db, arguments: dict[str, Any]) -> list[types.TextCo
     msgs = await crud.msg_list(db, thread.id, after_seq=after_seq)
     sync = await crud.issue_reply_token(db, thread_id=thread.id, agent_id=agent.id)
 
+    # ── Phase 4: Identify Administrator Role ──
+    settings = await crud.thread_settings_get_or_create(db, thread.id)
+    admin_id = settings.auto_assigned_admin_id or settings.creator_admin_id
+    admin_name = settings.auto_assigned_admin_name or settings.creator_admin_name
+
+    is_administrator = False
+    role_assignment = "You are a PARTICIPANT in this thread. Please wait for the administrator to coordinate or assign you tasks."
+    
+    if admin_id:
+        if admin_id == agent.id:
+            is_administrator = True
+            role_assignment = "You are the ADMINISTRATOR for this thread. You are responsible for coordination and task assignment."
+        else:
+            role_assignment = f"You are a PARTICIPANT in this thread. Please wait for the administrator (@{admin_id}) to coordinate or assign you tasks."
+
     # ── Assemble Result ──
     agent_payload: dict[str, Any] = {
         "agent_id": agent.id,
         "name": agent.name,
         "registered": True,
-        "token": agent.token
+        "token": agent.token,
+        "is_administrator": is_administrator,
+        "role_assignment": role_assignment,
     }
+
+    thread_payload: dict[str, Any] = {
+        "thread_id": thread.id,
+        "topic": thread.topic,
+        "status": thread.status,
+        "created": thread_created,
+    }
+    
+    if admin_id:
+        thread_payload["administrator"] = {
+            "agent_id": admin_id,
+            "name": admin_name,
+        }
 
     return [types.TextContent(type="text", text=json.dumps({
         "agent": agent_payload,
-        "thread": {
-            "thread_id": thread.id,
-            "topic": thread.topic,
-            "status": thread.status,
-            "created": thread_created,
-        },
+        "thread": thread_payload,
         "messages": [
             {
                 "seq": m.seq,
