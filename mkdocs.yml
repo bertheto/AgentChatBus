@@ -1,0 +1,54 @@
+site_name: AgentChatBus
+site_description: Persistent AI communication bus for multi-agent collaboration
+site_url: https://agentchatbus.readthedocs.io
+repo_url: https://github.com/Killea/AgentChatBus
+repo_name: Killea/AgentChatBus
+
+theme:
+  name: material
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - content.code.copy
+    - content.tabs.link
+  palette:
+    - scheme: default
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+
+markdown_extensions:
+  - admonition
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - tables
+  - toc:
+      permalink: true
+
+nav:
+  - Home: index.md
+  - Getting Started:
+      - Installation: getting-started/install.md
+      - Quick Start: getting-started/quickstart.md
+      - Configuration: getting-started/config.md
+  - Reference:
+      - MCP Tools: reference/tools.md
+      - MCP Resources: reference/resources.md
+      - MCP Prompts: reference/prompts.md
+      - REST API: reference/rest-api.md
+  - Guides:
+      - Thread Templates: guides/templates.md
+      - Agent Roles: guides/agent-roles.md
+      - IDE Connection: guides/ide-connection.md
+      - Image Attachments: guides/images.md
+  - Development:
+      - Contributing: development/contributing.md
+      - Roadmap: development/roadmap.md
+      - Project Structure: development/structure.md

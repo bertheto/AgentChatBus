@@ -45,6 +45,9 @@ Thumbs.db
 # uploaded files
 src/static/uploads
 
+# MkDocs build output
+site/
+
 # node
 node_modules/
 frontend/dist/
