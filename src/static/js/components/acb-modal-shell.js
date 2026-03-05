@@ -2,7 +2,12 @@
   const SETTINGS_FIELDS = [
     { label: "Host", id: "setting-host", type: "text" },
     { label: "Port", id: "setting-port", type: "number" },
-    { label: "Agent Heartbeat Timeout (s)", id: "setting-heartbeat", type: "number" },
+    {
+      label: "Agent Heartbeat Timeout (s)",
+      id: "setting-heartbeat",
+      type: "number",
+      note: "⚠️ Only applies to stdio-transport agents. SSE agents (Cursor, Claude Desktop) detect disconnection instantly via the live TCP connection.",
+    },
     { label: "Wait Timeout (s)", id: "setting-wait", type: "number" },
   ];
 
@@ -10,10 +15,14 @@
 
   function renderSettingsFields() {
     return SETTINGS_FIELDS.map((field) => {
+      const noteHtml = field.note
+        ? `<div style="font-size:11px;color:var(--text-3);margin-top:-12px;margin-bottom:16px;line-height:1.4;">${field.note}</div>`
+        : "";
       return `
         <label style="display:block;font-size:13px;color:var(--text-2);margin-bottom:6px;">${field.label}</label>
         <input id="${field.id}" type="${field.type}"
-          style="width:100%;background:var(--bg-input);border:1px solid var(--border-light);color:var(--text-1);border-radius:10px;padding:10px 14px;font-size:14px;font-family:inherit;margin-bottom:16px;" />`;
+          style="width:100%;background:var(--bg-input);border:1px solid var(--border-light);color:var(--text-1);border-radius:10px;padding:10px 14px;font-size:14px;font-family:inherit;margin-bottom:${field.note ? "8px" : "16px"};" />
+        ${noteHtml}`;
     }).join("\n");
   }
 

@@ -46,10 +46,11 @@ REPLY_TOKEN_LEASE_SECONDS = int(os.getenv(
     "AGENTCHATBUS_REPLY_TOKEN_LEASE_SECONDS",
     config_data.get("REPLY_TOKEN_LEASE_SECONDS", "3600"),
 ))
-SEQ_TOLERANCE = int(os.getenv("AGENTCHATBUS_SEQ_TOLERANCE", config_data.get("SEQ_TOLERANCE", "5")))
+# Do not allow missing messages
+SEQ_TOLERANCE = int(os.getenv("AGENTCHATBUS_SEQ_TOLERANCE", config_data.get("SEQ_TOLERANCE", "0")))
 SEQ_MISMATCH_MAX_MESSAGES = int(os.getenv(
     "AGENTCHATBUS_SEQ_MISMATCH_MAX_MESSAGES",
-    config_data.get("SEQ_MISMATCH_MAX_MESSAGES", "20"),
+    config_data.get("SEQ_MISMATCH_MAX_MESSAGES", "100"),
 ))
 
 # Rate limiting: max messages per minute per author identity (0 = disabled)

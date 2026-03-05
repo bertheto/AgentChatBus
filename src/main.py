@@ -654,7 +654,11 @@ app = FastAPI(
 # MCP SSE Transport (mounted at /mcp)
 # ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
-sse_transport = SseServerTransport("/mcp/messages")
+sse_transport = SseServerTransport("/mcp/messages/")
+
+# Live `/mcp/sse` stream registry (real TCP SSE streams currently connected).
+# This is independent from per-session message mapping in src.mcp_server.
+_live_mcp_sse_streams: dict[str, float] = {}
 
 
 class _SseCompletedResponse:
@@ -677,12 +681,17 @@ class _SseCompletedResponse:
 
 @app.get("/mcp/sse")
 async def mcp_sse_endpoint(request: Request):
-    """MCP SSE endpoint consumed by MCP clients (Claude Desktop, Cursor, ΓÇª)."""
-    from src.mcp_server import init_session_id, pop_agent_for_session
+    """MCP SSE endpoint consumed by MCP clients (Claude Desktop, Cursor, …)."""
+    from src.mcp_server import init_session_id, pop_agent_for_session, mark_sse_connected, mark_sse_disconnected
     from src.db import crud
     
+    # Track real `/mcp/sse` stream connection lifetime.
+    stream_id = str(uuid.uuid4())
+    _live_mcp_sse_streams[stream_id] = time.time()
+
     # Initialize unique session ID for this SSE connection
     session_id = init_session_id()
+    mark_sse_connected(session_id)  # register live TCP connection immediately
     logger.debug(f"New MCP SSE connection: session_id={session_id[:8]}")
     
     lang = request.query_params.get("lang")
@@ -698,7 +707,7 @@ async def mcp_sse_endpoint(request: Request):
                 mcp_server.create_initialization_options(),
             )
     except Exception as exc:
-        # Most are normal disconnects (anyio.ClosedResourceError, CancelledErrorΓÇª).
+        # Most are normal disconnects (anyio.ClosedResourceError, CancelledError…).
         # Mark agent as offline if it was registered for this connection.
         agent_id, token = pop_agent_for_session(session_id)
         if agent_id and token:
@@ -710,13 +719,26 @@ async def mcp_sse_endpoint(request: Request):
                 logger.warning(f"Failed to mark agent {agent_id} offline: {db_err}")
         else:
             logger.debug("MCP SSE session ended (no agent registered): %s: %s", type(exc).__name__, exc)
+    finally:
+        _live_mcp_sse_streams.pop(stream_id, None)
+        mark_sse_disconnected(session_id)  # always remove from live-connection set
     return _SseCompletedResponse()
 
 
 # Mount handle_post_message as a raw ASGI app ΓÇö NOT a FastAPI route.
 # The transport sends its own 202 Accepted internally; a FastAPI route wrapper
 # would attempt a second response and produce ASGI errors.
-app.mount("/mcp/messages/", app=sse_transport.handle_post_message)
+async def _mcp_messages_asgi(scope, receive, send):
+    if scope.get("type") == "http":
+        try:
+            from src.mcp_server import bind_session_id_from_scope
+            bind_session_id_from_scope(scope)
+        except Exception:
+            pass
+    await sse_transport.handle_post_message(scope, receive, send)
+
+
+app.mount("/mcp/messages/", app=_mcp_messages_asgi)
 
 
 # ΓöÇΓöÇ Suppress leftover ASGI RuntimeErrors caused by client disconnects ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
@@ -1114,6 +1136,7 @@ async def api_upload_image(request: Request):
 
 @app.get("/api/agents")
 async def api_agents():
+    from src.mcp_server import is_agent_sse_connected
     try:
         db = await asyncio.wait_for(get_db(), timeout=DB_TIMEOUT)
         agents = await asyncio.wait_for(crud.agent_list(db), timeout=DB_TIMEOUT)
@@ -1132,10 +1155,44 @@ async def api_agents():
             "skills": _json.loads(a.skills) if a.skills else [],
             "is_online": bool(a.is_online), "last_heartbeat": a.last_heartbeat.isoformat(),
             "last_activity": a.last_activity,
-            "last_activity_time": a.last_activity_time.isoformat() if a.last_activity_time else None
+            "last_activity_time": a.last_activity_time.isoformat() if a.last_activity_time else None,
+            "is_sse_connected": is_agent_sse_connected(a.id),
         })
 
     return result
+
+
+@app.get("/api/debug/sse-status")
+async def api_debug_sse_status():
+    """Debug: inspect real SSE streams + in-memory session/agent mapping."""
+    from src.mcp_server import _active_sse_sessions, _connection_agents
+
+    now = time.time()
+    live_streams = []
+    for sid, ts in _live_mcp_sse_streams.items():
+        live_streams.append({
+            "stream_id": sid,
+            "age_seconds": round(max(0.0, now - float(ts)), 3),
+        })
+    live_streams.sort(key=lambda x: x["age_seconds"])
+
+    sessions = []
+    for sid, ts in _active_sse_sessions.items():
+        info = _connection_agents.get(sid) or {}
+        sessions.append({
+            "session_id": sid,
+            "agent_id": info.get("agent_id"),
+            "age_seconds": round(max(0.0, now - float(ts)), 3),
+        })
+
+    sessions.sort(key=lambda x: x["age_seconds"])
+    return {
+        "live_mcp_sse_stream_count": len(_live_mcp_sse_streams),
+        "live_mcp_sse_streams": live_streams,
+        "active_session_count": len(_active_sse_sessions),
+        "mapped_agent_count": sum(1 for s in sessions if s.get("agent_id")),
+        "sessions": sessions,
+    }
 
 
 @app.get("/api/threads/{thread_id}/agents")
@@ -1164,6 +1221,7 @@ async def api_thread_agents(thread_id: str):
         )
 
     import json as _json
+    from src.mcp_server import is_agent_sse_connected
     result = []
     for a in agents:
         result.append({
@@ -1181,6 +1239,7 @@ async def api_thread_agents(thread_id: str):
             "last_heartbeat": a.last_heartbeat.isoformat(),
             "last_activity": a.last_activity,
             "last_activity_time": a.last_activity_time.isoformat() if a.last_activity_time else None,
+            "is_sse_connected": is_agent_sse_connected(a.id),
         })
     return result
 

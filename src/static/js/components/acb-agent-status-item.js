@@ -6,7 +6,6 @@
     }
 
     connectedCallback() {
-      this.style.display = "block";
       this._render();
     }
 
@@ -20,7 +19,6 @@
 
       const {
         avatarEmoji,
-        stateEmoji,
         label,
         state,
         offlineDisplay,
@@ -28,41 +26,52 @@
         compressedChar,
         escapeHtml,
         skills,
+        stateEmoji,
+        isStdio,
+        tooltipText,
       } = this._data;
 
       const esc = typeof escapeHtml === "function" ? escapeHtml : (v) => String(v ?? "");
-
-      const parsedSkills = Array.isArray(skills)
-        ? skills
-        : (typeof skills === "string" && skills ? (() => { try { return JSON.parse(skills); } catch { return []; } })() : []);
-      const skillsBadge = parsedSkills.length > 0
-        ? `<span class="skills-badge" title="${parsedSkills.length} skill${parsedSkills.length > 1 ? "s" : ""}: ${esc(parsedSkills.map(s => s.name || s.id).join(", "))}">${parsedSkills.length} skill${parsedSkills.length > 1 ? "s" : ""}</span>`
-        : "";
+      const stateLower = String(state ?? "").trim().toLowerCase();
 
       this.className = "agent-status-item";
-      this.dataset.state = String(state ?? "").trim().toLowerCase();
+      this.dataset.state = stateLower;
 
+      // Long-offline compact mode (>1hr offline)
       if (isLongOffline) {
-        const compactTitle = compressedChar === "∞" ? "Offline since unknown time" : `Offline ${offlineDisplay || compressedChar}`;
+        const compactTitle = compressedChar === "∞"
+          ? "Offline since unknown time"
+          : `Offline ${offlineDisplay || compressedChar}`;
         this.innerHTML = `
-          <div class="agent-status-emoji-row">
-            <div class="agent-status-emoji">${avatarEmoji}</div>
-            <div class="agent-status-text-compact" title="${esc(compactTitle)}">${compressedChar}</div>
-            <div class="agent-status-state-emoji" title="${esc(state)}">${stateEmoji}</div>
+          <div class="agent-status-item agent-status-item--compact" title="${esc(compactTitle)}">
+            <div class="asi-avatar asi-avatar--sm">${avatarEmoji}</div>
+            <span class="asi-state-emoji">${stateEmoji}</span>
           </div>
         `;
         return;
       }
 
+      // Normal card: 48x48 avatar on left, 24x48 status panel on right
+      const isOffline = stateLower === "offline";
+      const transportIcon = isOffline
+        ? `<span class="asi-transport-emoji">❔</span>`
+        : isStdio
+          ? `<span class="asi-transport-emoji">✡️</span>`
+          : `<span class="asi-transport-emoji">🌟</span>`;
+
       this.innerHTML = `
-        <div class="agent-status-emoji-row">
-          <div class="agent-status-emoji">${avatarEmoji}</div>
-          <span class="agent-status-separator-short">|</span>
-          <div class="agent-status-state-emoji" title="${esc(state)}">${stateEmoji}</div>
+        <div class="asi-avatar" data-tooltip="${esc(tooltipText || state)}">${avatarEmoji}</div>
+        <div class="asi-status-panel">
+          <div class="asi-status-box" data-tooltip="${esc(state || 'unknown')}">${stateEmoji}</div>
+          <div class="asi-transport-box" data-tooltip="${isOffline ? 'Connection unknown' : isStdio ? 'Stdio connection' : 'SSE connection'}">${transportIcon}</div>
         </div>
-        <div class="agent-state">${esc(state)}${esc(offlineDisplay)}</div>
-        ${skillsBadge}
       `;
+
+      // Remove all tooltip attributes from the card element itself so closest()
+      // doesn't short-circuit to the card before reaching the child boxes.
+      this.removeAttribute("title");
+      this.removeAttribute("data-tooltip");
+      this.removeAttribute("data-acb-tooltip");
     }
   }
 

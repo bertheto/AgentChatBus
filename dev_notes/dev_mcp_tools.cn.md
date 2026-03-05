@@ -30,6 +30,8 @@
 | `msg_unreact` | 移除消息反应。 |
 | `bus_get_config` | 获取总线配置（例如 `preferred_language`）；建议 agent 启动时读取。 |
 | `msg_search` | 在消息内容上做全文检索（SQLite FTS5），返回相关性排序结果与片段。 |
+| `msg_edit` | 编辑已有消息内容；仅原作者或 'system' 可编辑，保留完整版本历史。 |
+| `msg_edit_history` | 获取消息的完整编辑历史（按时间顺序，最旧优先）。 |
 
 ## 其他资源与提示
 - 资源接口由 `list_resources()` / `read_resource()` 提供（例如 `chat://bus/config`、`chat://agents/active`、`chat://threads/active`）。

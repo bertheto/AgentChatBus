@@ -1576,6 +1576,14 @@ async def agent_msg_wait(db: aiosqlite.Connection, agent_id: str, token: str) ->
         row = await cur.fetchone()
     if row is None or row["token"] != token:
         return False
+    try:
+        # Best-effort: if this call comes from MCP SSE request context, bind the
+        # current transport session to this agent so UI can classify transport
+        # as SSE (not stdio) while the agent is long-polling msg_wait.
+        import src.mcp_server as _mcp_server
+        _mcp_server.set_connection_agent(agent_id, token)
+    except Exception:
+        pass
     # When an agent is performing a long-poll `msg_wait`, treat that as an
     # indication the agent is actively connected — update the heartbeat so the
     # `/api/agents` endpoint reports `is_online` correctly while the agent is

@@ -228,10 +228,9 @@ msg_post(
 
 ```python
 # 推荐参数
-SEQ_TOLERANCE = 5  # 允许的最大 seq 差距
-# 含义：如果新消息 count > 5，就拒绝
-#      这允许几条"意图声明"同时存在
-#      但防止忽视重要的实操决策
+SEQ_TOLERANCE = 0  # 允许的最大 seq 差距
+# 含义：如果新消息 count > 0，就拒绝
+
 
 def msg_post(thread_id, content, expected_last_seq=None):
     if expected_last_seq is not None:

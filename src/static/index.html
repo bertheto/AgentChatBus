@@ -527,6 +527,15 @@ Note: Thread name is the topic label. Thread ID is the unique identifier.`;
       const resumeButtonState = activeThreadId ? '' : 'disabled';
       const resumeButtonStyle = activeThreadId ? '' : 'style="opacity:0.5;cursor:not-allowed;"';
 
+      // Build status footer
+      const state = getAgentState(agent);
+      const stateEmoji = getStateEmoji(state);
+      const offlineTime = getOfflineTime(agent);
+      const offlineStr = offlineTime ? ` — last seen ${offlineTime}` : '';
+      const isStdio = isStdioAgent ? isStdioAgent(agent) : false;
+      const transportEmoji = state.toLowerCase() === 'offline' ? '❔' : (isStdio ? '✡️' : '🌟');
+      const transportLabel = state.toLowerCase() === 'offline' ? 'unknown' : (isStdio ? 'stdio' : 'SSE');
+
       const html = `
         <div class="agent-tip-title">Agent Quick Prompt</div>
         <div class="agent-tip-meta">Alias: <code>${esc(alias)}</code><br/>Agent ID: <code>${esc(agentId || '(unknown)')}</code><br/>IDE: <code>${esc(ide)}</code><br/>Model: <code>${esc(model)}</code></div>
@@ -534,7 +543,8 @@ Note: Thread name is the topic label. Thread ID is the unique identifier.`;
         <div class="agent-tip-actions">
           <button type="button" data-copy="agent-id" data-copy-value="${esc(agentId)}">Copy Agent ID</button>
           <button type="button" data-copy="resume" data-copy-value="${esc(prompt)}" ${resumeButtonState} ${resumeButtonStyle} title="${activeThreadId ? '' : 'Select a thread first'}">Copy Resume Prompt</button>
-        </div>`;
+        </div>
+        <div class="agent-tip-status">${stateEmoji} ${esc(state)} — ${transportEmoji} ${esc(transportLabel)}${esc(offlineStr)}</div>`;
 
       window.AcbTooltip.showRich(anchorEl, html, {
         interactive: true,
@@ -545,14 +555,53 @@ Note: Thread name is the topic label. Thread ID is the unique identifier.`;
       activeAgentTooltipTarget = anchorEl;
     }
 
-    function bindAgentTooltipEvents(avatarEl, agent) {
-      if (!avatarEl) return;
-      avatarEl.addEventListener('mouseenter', () => showAgentTooltip(avatarEl, agent));
-      avatarEl.addEventListener('mouseleave', () => scheduleAgentTooltipHide());
-      avatarEl.addEventListener('click', (e) => {
-        e.stopPropagation();
-        showAgentTooltip(avatarEl, agent);
-      });
+    function bindAgentTooltipEvents(cardEl, agent) {
+      if (!cardEl) return;
+      // For message avatars (.msg-avatar), cardEl IS the avatar element itself.
+      // For status bar cards (<acb-agent-status-item>), cardEl has a .asi-avatar child
+      // that gets re-created on every setData call, so we bind on the stable cardEl
+      // and filter by target.
+      const isCard = cardEl.tagName && cardEl.tagName.toLowerCase() === 'acb-agent-status-item';
+
+      if (isCard) {
+        cardEl.addEventListener('mouseover', (e) => {
+          const overStatusBox = e.target.closest('.asi-status-box, .asi-transport-box');
+          if (overStatusBox) {
+            // Stop propagation so document-level shared-tooltip doesn't double-fire
+            e.stopPropagation();
+            // showTooltip resets manualMode and clears hide timers internally
+            window.AcbTooltip.showTooltip && window.AcbTooltip.showTooltip(overStatusBox);
+            return;
+          }
+          if (!e.target.closest('.asi-avatar')) return;
+          const avatarEl = cardEl.querySelector('.asi-avatar') || cardEl;
+          showAgentTooltip(avatarEl, agent);
+        });
+        cardEl.addEventListener('mouseout', (e) => {
+          const overStatusBox = e.target.closest('.asi-status-box, .asi-transport-box');
+          if (!overStatusBox) return;
+          // Only hide if actually leaving the status box (not moving between its children)
+          const toEl = e.relatedTarget;
+          if (toEl instanceof Element && overStatusBox.contains(toEl)) return;
+          e.stopPropagation();
+          window.AcbTooltip.scheduleHide && window.AcbTooltip.scheduleHide(80);
+        });
+        cardEl.addEventListener('mouseleave', () => scheduleAgentTooltipHide());
+        cardEl.addEventListener('click', (e) => {
+          if (e.target.closest('.asi-status-box, .asi-transport-box, .asi-status-panel')) return;
+          e.stopPropagation();
+          const avatarEl = cardEl.querySelector('.asi-avatar') || cardEl;
+          showAgentTooltip(avatarEl, agent);
+        });
+      } else {
+        // message avatar: bind directly
+        cardEl.addEventListener('mouseenter', () => showAgentTooltip(cardEl, agent));
+        cardEl.addEventListener('mouseleave', () => scheduleAgentTooltipHide());
+        cardEl.addEventListener('click', (e) => {
+          e.stopPropagation();
+          showAgentTooltip(cardEl, agent);
+        });
+      }
     }
 
     function applySavedTheme() {
@@ -1427,6 +1476,8 @@ Note: Thread name is the topic label. Thread ID is the unique identifier.`;
         getOfflineTime,
         isOfflineMoreThanHour,
         getCompressedOfflineChar,
+        isStdioAgent,
+        getTooltipText,
         escapeHtml,
         bindAgentTooltipEvents,
       });
@@ -1457,8 +1508,15 @@ Note: Thread name is the topic label. Thread ID is the unique identifier.`;
 
 
     function getStateEmoji(state) {
-      const map = { 'Offline': '⚫', 'Waiting': '⏳', 'Active': '🟢' };
-      return map[state] || '❓';
+          return window.AcbAgentStatus.getStateEmoji(state);
+        }
+
+        function isStdioAgent(agent) {
+          return window.AcbAgentStatus.isStdioAgent(agent);
+        }
+
+        function getTooltipText(agent, state, offlineDisplay) {
+          return window.AcbAgentStatus.getTooltipText(agent, state, offlineDisplay);
     }
 
     // ==============================================================================================

@@ -1843,8 +1843,8 @@ body[data-theme="light"] .msg-sys-admin-human-note-icon {
   display: flex;
   background: var(--bg-base);
   border-top: 1px solid var(--border-light);
-  padding: 8px 12px;
-  height: 56px;
+  padding: 6px 12px;
+    height: 68px;
   overflow-x: auto;
   overflow-y: hidden;
   gap: 10px;
@@ -1853,88 +1853,124 @@ body[data-theme="light"] .msg-sys-admin-human-note-icon {
 
 #agent-status-list {
   display: flex;
-  gap: 10px;
+  gap: 8px;
   align-items: center;
   flex-wrap: nowrap;
 }
 
+/* ── Agent Card ── */
 .agent-status-item {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   align-items: center;
-  gap: 2px;
-  padding: 4px 8px;
+  gap: 4px;
+  padding: 4px;
   background: var(--bg-input);
   border: 1px solid var(--border-light);
   border-radius: 8px;
   white-space: nowrap;
   flex-shrink: 0;
-  font-size: 12px;
   color: var(--text-1);
+  cursor: default;
+  transition: background 0.15s;
+  box-sizing: border-box;
+}
+.agent-status-item:hover {
+  background: var(--bg-hover, var(--bg-input));
+  filter: brightness(1.08);
 }
 
-.agent-status-emoji-row {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-}
-
-.agent-status-emoji {
-  font-size: 24px;
-  width: 26px;
+/* Left: 48x48 avatar emoji */
+.asi-avatar {
+  width: 48px;
+  height: 48px;
+  font-size: 40px;
+  line-height: 1;
   display: flex;
   align-items: center;
   justify-content: center;
+  flex-shrink: 0;
 }
 
-.agent-status-item[data-state="offline"] .agent-status-emoji {
-  filter: grayscale(1);
-  opacity: 0.72;
-}
-
-.agent-status-text {
+/* Right: 24x48 status panel with two 12x24 boxes */
+.asi-status-panel {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  width: 24px;
+  height: 48px;
+  gap: 0;
+  flex-shrink: 0;
 }
 
-.agent-alias {
-  font-weight: 500;
-  color: var(--text-1);
-}
-
-.agent-state {
-  font-size: 10px;
-  color: var(--text-2);
-  line-height: 1;
-}
-
-.agent-status-separator {
-  color: var(--text-3);
-  margin: 0 2px;
-}
-
-.agent-status-separator-short {
-  color: var(--text-3);
-  font-size: 12px;
-  line-height: 1;
-}
-
-.agent-status-text-compact {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text-2);
-  min-width: 16px;
-  text-align: center;
-}
-
-.agent-status-state-emoji {
-  margin-left: 0;
-  font-size: 16px;
-  width: 20px;
+/* Top box: 24x24 online status */
+.asi-status-box {
+  width: 24px;
+  height: 24px;
   display: flex;
   align-items: center;
   justify-content: center;
+  font-size: 18px;
+  line-height: 1;
+  border: 1px solid var(--border-light);
+  border-radius: 4px;
+  background: var(--bg-hover, rgba(255,255,255,0.05));
+}
+
+/* Bottom box: 24x24 transport type */
+.asi-transport-box {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  line-height: 1;
+  border: 1px solid var(--border-light);
+  border-radius: 4px;
+  background: var(--bg-hover, rgba(255,255,255,0.05));
+}
+
+/* State emoji (legacy class for compatibility) */
+.asi-state-emoji {
+  font-size: 14px;
+}
+
+/* Transport emoji (legacy class for compatibility) */
+.asi-transport {
+  font-size: 11px;
+}
+
+.asi-transport-emoji {
+  display: block;
+  line-height: 1;
+  pointer-events: none;
+}
+
+/* block pointer-events on direct children of tooltip boxes so mouseover target is the box itself */
+.asi-status-box > *,
+.asi-transport-box > * {
+  pointer-events: none;
+}
+
+/* Compact mode for >1hr offline */
+.agent-status-item--compact {
+  display: flex;
+  flex-direction: row;
+  gap: 2px;
+  padding: 2px;
+}
+
+.agent-status-item--compact .asi-avatar {
+  width: 24px;
+  height: 24px;
+  font-size: 18px;
+  flex-shrink: 0;
+}
+
+/* Dim avatar for offline agents */
+.agent-status-item[data-state="offline"] .asi-avatar {
+  filter: grayscale(1);
+  opacity: 0.72;
 }
 
 .skills-badge {
@@ -2421,6 +2457,15 @@ acb-confirm-dialog .confirm-actions {
 
 .agent-tip-actions button:hover {
   border-color: var(--accent);
+}
+
+.agent-tip-status {
+  margin-top: 8px;
+  padding-top: 7px;
+  border-top: 1px solid var(--border-light);
+  font-size: 11px;
+  color: var(--text-2, #aaa);
+  line-height: 1.4;
 }
 
 /* ====================================================================================

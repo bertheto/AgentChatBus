@@ -1,12 +1,47 @@
 (function () {
+  /**
+   * Determine agent state using SSE connection presence as the primary signal.
+   *
+   * States (priority order):
+   *   Listening — SSE connected + last_activity is msg_wait   (green ⏳)
+   *   Working   — SSE connected + NOT in msg_wait             (amber ⚡)
+   *   Offline   — no SSE + heartbeat expired                  (dark ⚫)
+   *
+   * For stdio agents (no SSE): fall back to heartbeat-based detection.
+   * stdio agents will show Listening when is_online=true, Offline otherwise.
+   */
   function getAgentState(agent) {
-    if (!agent || !agent.is_online) {
-      return "Offline";
+    if (!agent) return "Offline";
+
+    if (agent.is_sse_connected) {
+      if (agent.last_activity === "msg_wait") return "Listening";
+      return "Working";
     }
-    if (agent.last_activity === "msg_wait") {
-      return "Waiting";
-    }
-    return "Active";
+
+    // stdio or truly offline — rely on heartbeat
+    if (agent.is_online) return "Listening";
+    return "Offline";
+  }
+
+  /**
+   * Return the state emoji for display in the card.
+   * ⏳ Listening, ⚡ Working, ⚫ Offline
+   */
+  function getStateEmoji(state) {
+    const map = { Listening: "⏳", Working: "⚡", Offline: "⚫" };
+    return map[state] || "⚫";
+  }
+
+  /**
+   * Return true if this agent is connected via stdio (no live SSE session).
+   * Shown as 📥 badge in the card.
+   */
+  function isStdioAgent(agent) {
+    if (!agent) return false;
+    // If the server reports is_sse_connected explicitly, use it.
+    if (typeof agent.is_sse_connected === "boolean") return !agent.is_sse_connected;
+    // Fallback: unknown transport → don't show badge
+    return false;
   }
 
   function getOfflineTime(agent) {
@@ -61,16 +96,27 @@
     return "~";
   }
 
-  function getStateEmoji(state) {
-    const map = { Offline: "⚫", Waiting: "⏳", Active: "🟢" };
-    return map[state] || "❓";
+  /**
+   * Build the tooltip text shown on hover of the agent card.
+   * Format: "{stateEmoji} {state} — {transport}"
+   */
+  function getTooltipText(agent, state, offlineDisplay) {
+    const stateEmoji = getStateEmoji(state);
+    const transport = isStdioAgent(agent) ? "✡️ stdio" : "☸️ SSE";
+    let text = `${stateEmoji} ${state} — ${transport}`;
+    if (state === "Offline" && offlineDisplay) {
+      text += ` — last seen ${offlineDisplay}`;
+    }
+    return text;
   }
 
   window.AcbAgentStatus = {
     getAgentState,
+    getStateEmoji,
+    isStdioAgent,
     getOfflineTime,
     isOfflineMoreThanHour,
     getCompressedOfflineChar,
-    getStateEmoji,
+    getTooltipText,
   };
 })();

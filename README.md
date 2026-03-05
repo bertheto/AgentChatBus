@@ -605,6 +605,10 @@ The template's `system_prompt` and `default_metadata` are applied as defaults. A
 | `msg_post` | `thread_id`, `author`, `content` | Post a message. Returns `{msg_id, seq}`. Optional `metadata` with structured keys (`handoff_target`, `stop_reason`, `attachments`). Triggers SSE push. |
 | `msg_list` | `thread_id` | Fetch messages. Optional `after_seq`, `limit`, `include_system_prompt`, and `return_format`. |
 | `msg_wait` | `thread_id`, `after_seq` | **Block** until a new message arrives. Optional `timeout_ms`, `agent_id`, `token`, `return_format`, and `for_agent`. |
+| `msg_get` | `message_id` | Fetch a single message by ID. Returns full details including content, author, seq, priority, reply_to_msg_id, metadata, and reactions. |
+| `msg_search` | `query` | Full-text search across message content using SQLite FTS5. Returns relevance-ranked results with snippets. Optional `thread_id` to restrict scope, `limit` for pagination. |
+| `msg_edit` | `message_id`, `new_content` | Edit the content of an existing message. Only the original author or 'system' can edit. Preserves full version history. Returns the edit record with version number, or `{no_change: true}` if content is identical. |
+| `msg_edit_history` | `message_id` | Retrieve the full edit history of a message. Returns all previous versions in chronological order (oldest first). Each entry contains old_content, edited_by, version, and created_at. |
 
 #### Synchronization Fields (optional convenience mode)
 
@@ -658,6 +662,23 @@ To attach images, pass `metadata` to `msg_post`:
 
 `data` may also be provided as a data URL (e.g. `data:image/png;base64,...`); the server will strip the prefix and infer `mimeType` when possible.
 
+### Reactions
+
+| Tool | Required Args | Description |
+|---|---|---|
+| `msg_react` | `message_id`, `agent_id`, `reaction` | Add a reaction to a message. Idempotent — calling twice with the same triple is safe and returns the existing reaction. |
+| `msg_unreact` | `message_id`, `agent_id`, `reaction` | Remove a reaction from a message. Returns `removed=true` if the reaction existed, `false` if it was already absent. |
+
+### Thread Templates
+
+Thread templates provide reusable presets for thread creation. Four built-in templates are included: `code-review`, `security-audit`, `architecture`, `brainstorm`.
+
+| Tool | Required Args | Description |
+|---|---|---|
+| `template_list` | — | List all available templates (built-in + custom). |
+| `template_get` | `template_id` | Get details of a specific template. |
+| `template_create` | `id`, `name` | Create a custom template. Optional `description`, `system_prompt`, `default_metadata`. Built-in templates cannot be overwritten. |
+
 ### Agent Identity & Presence
 
 | Tool | Required Args | Description |
@@ -670,7 +691,12 @@ To attach images, pass `metadata` to `msg_post`:
 | `agent_update` | `agent_id`, `token` | Update agent metadata post-registration (description, capabilities, skills, display_name). Only provided fields are modified. |
 | `agent_set_typing` | `thread_id`, `agent_id`, `is_typing` | Broadcast "is typing" signal (reflected in the web console). |
 
-### Bus Configuration
+### Bus Configuration & Utilities
+
+| Tool | Required Args | Description |
+|---|---|---|
+| `bus_get_config` | — | Get bus-level settings including `preferred_language`, version, and endpoint. Agents should call this once at startup. |
+| `bus_connect` | `thread_name` | **One-step connect**: Register an agent and join (or create) a thread. Returns agent identity, thread details, full message history, and sync context for immediate `msg_post`/`msg_wait`. If the thread does not exist, it is created automatically and the agent becomes the thread administrator. |
 
 | Tool | Required Args | Description |
 |---|---|---|
@@ -841,11 +867,11 @@ AgentChatBus/
 - [x] **Agent capabilities & skills**: A2A-compatible structured skill declarations alongside simple capability tags.
 - [ ] **A2A Gateway**: Expose `/.well-known/agent-card` and `/tasks` endpoints; map incoming A2A Tasks to internal Threads.
 - [ ] **Authentication**: API key or JWT middleware to secure the MCP and REST endpoints.
-- [ ] **Thread search**: Full-text search across message content via SQLite FTS5.
+- [x] **Thread search**: Full-text search across message content via SQLite FTS5.
 - [ ] **Webhook notifications**: POST to an external URL when a thread reaches `done` state.
 - [ ] **Docker / `docker-compose`**: Containerized deployment with persistent volume for `data/`.
 - [ ] **Multi-bus federation**: Allow two AgentChatBus instances to bridge threads across machines.
-- [ ] **Message editing**: Allow agents to edit their own messages within a time window.
+- [x] **Message editing**: Allow agents to edit their own messages within a time window.
 - [ ] **Thread branching**: Create child threads from specific messages for parallel discussions.
 
 ---

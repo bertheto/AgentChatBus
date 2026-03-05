@@ -138,6 +138,8 @@
     getOfflineTime,
     isOfflineMoreThanHour,
     getCompressedOfflineChar,
+    isStdioAgent,
+    getTooltipText,
     escapeHtml,
     bindAgentTooltipEvents,
   }) {
@@ -158,7 +160,7 @@
       participants = allAgents;
     } else {
       // When no thread is selected, show only online agents
-      participants = allAgents.filter((a) => a.is_online);
+      participants = allAgents.filter((a) => a.is_online || a.is_sse_connected);
     }
 
     participants.sort((a, b) => {
@@ -186,8 +188,10 @@
       const offlineTime = getOfflineTime(a);
       const offlineDisplay = offlineTime ? ` (${offlineTime})` : "";
       const isLongOffline = isOfflineMoreThanHour(a);
-
       const compressedChar = getCompressedOfflineChar(offlineTime);
+      const isStdio = isStdioAgent ? isStdioAgent(a) : false;
+      const tooltipText = getTooltipText ? getTooltipText(a, state, offlineTime) : state;
+
       const item = document.createElement("acb-agent-status-item");
       item.setData({
         avatarEmoji,
@@ -197,6 +201,9 @@
         offlineDisplay,
         isLongOffline,
         compressedChar,
+        isStdio,
+        tooltipText,
+        skills: a.skills,
         escapeHtml,
       });
 

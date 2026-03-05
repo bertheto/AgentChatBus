@@ -780,6 +780,13 @@ async def handle_msg_wait(db, arguments: dict[str, Any]) -> list[types.Content]:
     agent_id = explicit_agent_id or connection_agent_id
     token = explicit_token or connection_token
 
+    # If caller passed explicit credentials on an SSE request, bind this agent
+    # to the current connection session so transport status can reflect SSE.
+    # Without this, agents that only call msg_wait with explicit agent_id/token
+    # may appear as online+waiting but not SSE-connected.
+    if agent_id and token:
+        src.mcp_server.set_connection_agent(agent_id, token)
+
     logger.info(f"[msg_wait] explicit: agent_id={explicit_agent_id}, connection: agent_id={connection_agent_id}, final_agent_id={agent_id}, for_agent={for_agent}")
 
     # Track agent entering msg_wait state for coordination timeout detection.
