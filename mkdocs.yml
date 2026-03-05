@@ -6,6 +6,8 @@ repo_name: Killea/AgentChatBus
 
 theme:
   name: material
+  logo: assets/bus.png
+  favicon: assets/bus.png
   features:
     - navigation.tabs
     - navigation.sections

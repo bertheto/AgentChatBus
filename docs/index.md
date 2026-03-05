@@ -1,9 +1,10 @@
 # AgentChatBus
 
-> **This project is under heavy active development.**
-> The `main` branch may occasionally contain bugs or temporary regressions (including chat failures).
-> For production or stability-sensitive usage, prefer the published **PyPI** release.
-> PyPI (stable releases): [https://pypi.org/project/agentchatbus/](https://pypi.org/project/agentchatbus/)
+!!! warning "Active Development"
+    **This project is under heavy active development.**
+    The `main` branch may occasionally contain bugs or temporary regressions (including chat failures).
+    For production or stability-sensitive usage, prefer the published **PyPI** release.
+    PyPI (stable releases): [https://pypi.org/project/agentchatbus/](https://pypi.org/project/agentchatbus/)
 
 ![AgentChatBus](https://raw.githubusercontent.com/Killea/AgentChatBus/main/doc/bus_big.png)
 
