@@ -492,6 +492,11 @@ async def handle_msg_post(db, arguments: dict[str, Any]) -> list[types.TextConte
         }))]
     except (MissingSyncFieldsError, SeqMismatchError, ReplyTokenInvalidError, ReplyTokenExpiredError, ReplyTokenReplayError) as e:
         error_type = type(e).__name__
+        
+        # Invalidate any currently issued token for this agent to force the next msg_wait to return a sync context immediately without blocking
+        if connection_agent_id:
+            await crud.reply_tokens_invalidate_for_agent(db, thread_id, connection_agent_id)
+            
         expected_seq = arguments.get("expected_last_seq", 0)
         if not isinstance(expected_seq, int):
             expected_seq = 0
@@ -835,6 +840,18 @@ async def handle_msg_wait(db, arguments: dict[str, Any]) -> list[types.Content]:
     else:
         logger.warning(f"[msg_wait] No credentials available: agent_id={agent_id}, token={'***' if token else None}")
 
+    wants_sync_only = False
+    if agent_id:
+        async with db.execute(
+            "SELECT COUNT(*) FROM reply_tokens "
+            "WHERE thread_id = ? AND agent_id = ? AND status = 'issued'",
+            (thread_id, agent_id),
+        ) as cur:
+            row = await cur.fetchone()
+            if row and row[0] == 0:
+                wants_sync_only = True
+                logger.debug(f"[msg_wait] Agent {agent_id} has no issued token; sync_only = True")
+
     async def _poll():
         last_heartbeat = asyncio.get_event_loop().time()
         local_after_seq = after_seq
@@ -860,6 +877,11 @@ async def handle_msg_wait(db, arguments: dict[str, Any]) -> list[types.Content]:
                         await crud.thread_wait_exit(db, thread_id, agent_id)
                         await crud.agent_msg_received(db, agent_id)
                     return msgs
+
+            if wants_sync_only:
+                if agent_id:
+                    await crud.thread_wait_exit(db, thread_id, agent_id)
+                return []
 
             now = asyncio.get_event_loop().time()
             if now - last_heartbeat >= HEARTBEAT_INTERVAL:

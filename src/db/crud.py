@@ -513,6 +513,20 @@ async def issue_reply_token(
         },
     }
 
+async def reply_tokens_invalidate_for_agent(
+    db: aiosqlite.Connection,
+    thread_id: str,
+    agent_id: str,
+) -> None:
+    now = _now()
+    await db.execute(
+        "UPDATE reply_tokens SET status = 'consumed', consumed_at = ? "
+        "WHERE thread_id = ? AND agent_id = ? AND status = 'issued'",
+        (now, thread_id, agent_id),
+    )
+    await db.commit()
+
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Thread wait states (cross-process shared)
