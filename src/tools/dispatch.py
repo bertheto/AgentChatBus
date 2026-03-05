@@ -190,10 +190,49 @@ def _message_to_blocks(m: Message) -> list[types.Content]:
     return blocks
 
 async def handle_bus_connect(db, arguments: dict[str, Any]) -> list[types.TextContent]:
-    # ── Phase 1: Register New Agent ──
-    ide = arguments.get("ide", "Unknown IDE")
-    model = arguments.get("model", "Unknown Model")
-    agent = await crud.agent_register(db, ide=ide, model=model)
+    # ── Phase 1: Agent Identity (Register or Resume) ──
+    agent = None
+    
+    # Route 1: Resume existing agent via agent_id + token
+    agent_id = arguments.get("agent_id")
+    token = arguments.get("token")
+    if agent_id and token:
+        try:
+            agent = await crud.agent_resume(db, agent_id, token)
+            logger.info(f"[bus_connect] client_type=bus_connect (resume) agent_id={agent.id}")
+        except ValueError as e:
+            return [types.TextContent(type="text", text=json.dumps({
+                "error": f"Failed to resume agent: {str(e)}",
+            }))]
+    
+    # Route 2/3: Register new agent (with or without metadata)
+    if not agent:
+        ide = arguments.get("ide", "Unknown IDE")
+        model = arguments.get("model", "Unknown Model")
+        description = arguments.get("description")
+        capabilities = arguments.get("capabilities")
+        if capabilities is not None and not isinstance(capabilities, list):
+            return [types.TextContent(type="text", text=json.dumps({
+                "error": "capabilities must be an array of strings",
+            }))]
+
+        display_name = arguments.get("display_name")
+        skills = arguments.get("skills")
+        if skills is not None and not isinstance(skills, list):
+            return [types.TextContent(type="text", text=json.dumps({
+                "error": "skills must be an array of objects",
+            }))]
+        
+        agent = await crud.agent_register(
+            db,
+            ide=ide,
+            model=model,
+            description=description or "",
+            capabilities=capabilities,
+            display_name=display_name,
+            skills=skills,
+        )
+        logger.info(f"[agent_register] client_type=bus_connect agent_id={agent.id}")
 
     src.mcp_server.set_connection_agent(agent.id, agent.token)
     src.mcp_server._current_agent_id.set(agent.id)
@@ -978,6 +1017,7 @@ async def handle_agent_register(db, arguments: dict[str, Any]) -> list[types.Tex
         display_name=arguments.get("display_name"),
         skills=arguments.get("skills"),
     )
+    logger.info(f"[agent_register] client_type=direct_register agent_id={agent.id}")
     src.mcp_server._current_agent_id.set(agent.id)
     src.mcp_server._current_agent_token.set(agent.token)
     src.mcp_server.set_connection_agent(agent.id, agent.token)
@@ -1003,6 +1043,65 @@ async def handle_agent_register(db, arguments: dict[str, Any]) -> list[types.Tex
                 "agent_id": agent.id,
                 "token": agent.token,
             },
+        },
+        "deprecation_info": {
+            "status": "deprecated",
+            "recommended_replacement": "bus_connect",
+            "reason": (
+                "agent_register only handles agent identity registration. "
+                "bus_connect provides a unified one-step agent + thread lifecycle, "
+                "returning agent credentials, thread details, and messages in a single call."
+            ),
+            "timeline": (
+                "Soft-warn in v1.1 → Soft-disable in v1.3 → Hard-remove in v2.0"
+            ),
+            "migration_examples": [
+                {
+                    "title": "Basic migration",
+                    "before": {
+                        "tool": "agent_register",
+                        "input": {"ide": "Cursor", "model": "Claude Haiku"},
+                    },
+                    "after": {
+                        "tool": "bus_connect",
+                        "input": {"thread_name": "My Thread", "ide": "Cursor", "model": "Claude Haiku"},
+                    },
+                    "benefit": "bus_connect gives you agent_id, token, thread_id, and messages in one call.",
+                },
+                {
+                    "title": "With agent metadata",
+                    "before": [
+                        {"tool": "agent_register", "input": {"ide": "...", "model": "...", "capabilities": [...]}},
+                        {"tool": "thread_create", "input": {"topic": "...", "agent_id": ..., "token": ...}},
+                    ],
+                    "after": {
+                        "tool": "bus_connect",
+                        "input": {
+                            "thread_name": "My Thread",
+                            "ide": "...",
+                            "model": "...",
+                            "capabilities": [...],
+                        },
+                    },
+                    "benefit": "Unified registration + thread join in single call.",
+                },
+                {
+                    "title": "Session resumption",
+                    "before": [
+                        {"tool": "agent_register", "input": {"ide": "...", "model": "..."}},
+                        {"tool": "agent_resume", "input": {"agent_id": ..., "token": ...}},
+                    ],
+                    "after": {
+                        "tool": "bus_connect",
+                        "input": {
+                            "thread_name": "My Thread",
+                            "agent_id": "...",
+                            "token": "...",
+                        },
+                    },
+                    "benefit": "bus_connect handles agent resume + thread join.",
+                },
+            ],
         },
     }))]
 

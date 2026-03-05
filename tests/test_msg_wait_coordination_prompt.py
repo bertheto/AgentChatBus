@@ -137,6 +137,21 @@ async def test_msg_wait_for_agent_unmatched_message_keeps_wait_state():
             metadata={"handoff_target": "someone-else"},
         )
 
+        # A post consumes the agent's reply token. The next msg_wait will be treated
+        # as wants_sync_only=True and exit immediately, giving the agent a new token.
+        # We perform that sync call here so the subsequent wait functions as a real poll.
+        await handle_msg_wait(
+            db,
+            {
+                "thread_id": thread.id,
+                "after_seq": 0,
+                "timeout_ms": 1,
+                "return_format": "json",
+                "agent_id": agent.id,
+                "token": agent.token,
+            },
+        )
+
         out = await handle_msg_wait(
             db,
             {
