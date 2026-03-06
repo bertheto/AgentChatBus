@@ -1225,7 +1225,7 @@ Note: Thread name is the topic label. Thread ID is the unique identifier.`;
           <button class="msg-copy-btn" title="Copy message" aria-label="Copy message content" onclick="window.AcbCopyMsg(this)">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
           </button>
-          ${!isSystem ? `<button class="msg-edit-btn toolbar-btn" title="Edit message" aria-label="Edit message" onclick="window.AcbMsgEditStart(this)" data-msg-id="${esc(m.id)}" data-author="${esc(m.author)}">
+          ${!isSystem ? `<button class="msg-edit-btn toolbar-btn" aria-label="Edit message" onclick="window.AcbMsgEditStart(this)" data-msg-id="${esc(m.id)}" data-author="${esc(m.author)}">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
           </button>` : ''}
         </div>
@@ -1235,6 +1235,7 @@ Note: Thread name is the topic label. Thread ID is the unique identifier.`;
         ${isAgentMessage ? '<acb-message-tail-meta></acb-message-tail-meta>' : ''}
         <div class="msg-reactions"></div>
       </div>`;
+
 
       const tailMetaEl = row.querySelector('acb-message-tail-meta');
       if (tailMetaEl && typeof tailMetaEl.setData === 'function') {
@@ -1308,6 +1309,30 @@ Note: Thread name is the topic label. Thread ID is the unique identifier.`;
             reactionsEl.appendChild(pill);
           }
         }
+      }
+
+      // Set rich tooltip for edit button
+      const editBtn = row.querySelector('.msg-edit-btn');
+      if (editBtn && window.AcbTooltip) {
+        const helpText = `
+          <div style="padding: 10px; max-width: 280px; font-size: 13px; line-height: 1.5; color: var(--text-1);">
+            <div style="font-weight: 600; margin-bottom: 4px;">Edit message</div>
+            <hr style="border: 0; border-top: 1px solid var(--border-light); margin: 6px 0;" />
+            <div style="font-weight: 600; margin-bottom: 6px; color: var(--accent); display: flex; align-items: center; gap: 6px;">
+              <span style="font-size: 16px;">⚠️</span> Agent Perception Notice
+            </div>
+            <div style="margin-bottom: 8px;">
+              AI Agents follow the <strong>sequence (seq)</strong> of the conversation. 
+              Modifying an old message does NOT change its sequence number, so agents currently waiting for new messages 
+              <strong>will not be notified</strong> of this edit.
+            </div>
+            <div style="border-top: 1px solid var(--border-light); padding-top: 8px; font-style: italic; color: var(--text-2); font-size: 11px;">
+              Recommendation: After editing, send a brief message to ensure they work with the latest context.
+            </div>
+          </div>
+        `;
+        editBtn.onmouseenter = () => window.AcbTooltip.showRich(editBtn, helpText, { maxWidth: '300px' });
+        editBtn.onmouseleave = () => window.AcbTooltip.scheduleHide(150);
       }
 
       if (!isHuman && !isSystem) {
@@ -1575,6 +1600,7 @@ Note: Thread name is the topic label. Thread ID is the unique identifier.`;
 
       const actions = document.createElement('div');
       actions.className = 'msg-edit-actions';
+
 
       const saveBtn = document.createElement('button');
       saveBtn.className = 'msg-edit-save-btn';
