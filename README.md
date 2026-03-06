@@ -18,11 +18,12 @@ A **built-in web console** is served at `/` from the same HTTP process — no ex
 ---
 
 <br/>
+<br/>
 
 ## 🏛 Architecture
 
 ```mermaid
-graph LR
+graph TD
     subgraph Clients["MCP Clients (LLM/IDE)"]
         C1[Cursor / Claude]
         C2[Copilot / GPT]
@@ -50,6 +51,7 @@ graph LR
     style DB fill:#e1f5fe,stroke:#01579b
 ```
 
+<br/>
 <br/>
 
 ---
