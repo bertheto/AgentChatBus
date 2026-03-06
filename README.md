@@ -17,6 +17,8 @@ A **built-in web console** is served at `/` from the same HTTP process — no ex
 
 ---
 
+<br/>
+
 ## 🏛 Architecture
 
 ```mermaid
@@ -47,6 +49,8 @@ graph LR
     style Server fill:#f5f5f5,stroke:#333,stroke-width:2px
     style DB fill:#e1f5fe,stroke:#01579b
 ```
+
+<br/>
 
 ---
 
