@@ -1,7 +1,10 @@
 (function registerAcbModalShell() {
-  const SETTINGS_FIELDS = [
+  const NETWORK_FIELDS = [
     { label: "Host", id: "setting-host", type: "text" },
     { label: "Port", id: "setting-port", type: "number" },
+  ];
+
+  const AGENT_FIELDS = [
     {
       label: "Agent Heartbeat Timeout (s)",
       id: "setting-heartbeat",
@@ -13,30 +16,43 @@
 
   const MINIMAP_KEY = "acb-minimap-enabled";
 
-  function renderSettingsFields() {
-    return SETTINGS_FIELDS.map((field) => {
+  function renderFields(fields) {
+    return fields.map((field) => {
       const noteHtml = field.note
-        ? `<div style="font-size:11px;color:var(--text-3);margin-top:-12px;margin-bottom:16px;line-height:1.4;">${field.note}</div>`
+        ? `<div class="settings-field-note">${field.note}</div>`
         : "";
       return `
-        <label style="display:block;font-size:13px;color:var(--text-2);margin-bottom:6px;">${field.label}</label>
-        <input id="${field.id}" type="${field.type}"
-          style="width:100%;background:var(--bg-input);border:1px solid var(--border-light);color:var(--text-1);border-radius:10px;padding:10px 14px;font-size:14px;font-family:inherit;margin-bottom:${field.note ? "8px" : "16px"};" />
-        ${noteHtml}`;
+        <div class="settings-field">
+          <label>${field.label}</label>
+          <input id="${field.id}" type="${field.type}" />
+          ${noteHtml}
+        </div>`;
     }).join("\n");
   }
 
   function renderUiPreferences() {
     return `
-      <div style="border-top:1px solid var(--border-light);margin:4px 0 16px;padding-top:16px;">
-        <div style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--text-2);margin-bottom:12px;">UI Preferences</div>
-        <label style="display:flex;align-items:center;gap:10px;font-size:13px;color:var(--text-1);cursor:pointer;user-select:none;">
-          <input id="setting-minimap" type="checkbox" style="width:15px;height:15px;cursor:pointer;accent-color:var(--accent);" />
-          <span>Message minimap (navigation sidebar)</span>
-        </label>
-        <div style="font-size:11px;color:var(--text-2);margin-top:4px;padding-left:25px;">Scrollable anchor list on the right — toggle without restart.</div>
-      </div>`;
+      <div class="settings-field settings-field-row">
+        <label for="setting-minimap">Message minimap (Navigation sidebar)</label>
+        <div class="toggle-switch">
+          <input id="setting-minimap" type="checkbox" />
+          <span class="toggle-slider"></span>
+        </div>
+      </div>
+      <div class="settings-field-note" style="margin-top: 4px;">Scrollable anchor list on the right — toggle without restart.</div>
+    `;
   }
+
+  window.switchSettingsTab = function (tabId) {
+    document.querySelectorAll('.settings-nav-item').forEach(el => el.classList.remove('active'));
+    document.querySelectorAll('.settings-tab-pane').forEach(el => el.classList.remove('active'));
+
+    const navItem = document.getElementById('nav-' + tabId);
+    if (navItem) navItem.classList.add('active');
+
+    const pane = document.getElementById('pane-' + tabId);
+    if (pane) pane.classList.add('active');
+  };
 
   class AcbModalShell extends HTMLElement {
     connectedCallback() {
@@ -63,15 +79,43 @@
 
         <div id="settings-modal-overlay" onclick="closeSettingsModal(event)"
           style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);align-items:center;justify-content:center;z-index:100;animation:fade-in .15s ease;">
-          <div id="settings-modal"
-            style="background:var(--bg-card);border:1px solid var(--border-light);border-radius:14px;padding:28px;width:440px;max-width:90vw;box-shadow:var(--shadow);animation:modal-in .2s ease;"
-            onclick="event.stopPropagation()">
-            <h3 style="font-size:16px;font-weight:600;margin-bottom:18px;color:var(--text-1)">⚙️ MCP Server Settings</h3>
-            ${renderSettingsFields()}
-            ${renderUiPreferences()}
-            <div id="settings-message" style="font-size:12px;color:var(--green);margin-bottom:16px;display:none;"></div>
-            <div class="modal-actions">
-              <button class="btn-secondary" onclick="closeSettingsModal()">Cancel</button>
+          <div id="settings-modal" class="settings-modal-container" onclick="event.stopPropagation()">
+            <div class="settings-modal-header">
+              <h3>Settings - AgentChatBus</h3>
+              <button class="settings-close-btn" onclick="closeSettingsModal()">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+              </button>
+            </div>
+            <div class="settings-modal-body">
+              <div class="settings-sidebar">
+                <div id="nav-agent" class="settings-nav-item active" onclick="switchSettingsTab('agent')">Agent</div>
+                <div id="nav-network" class="settings-nav-item" onclick="switchSettingsTab('network')">Network</div>
+                <div id="nav-ui" class="settings-nav-item" onclick="switchSettingsTab('ui')">UI</div>
+              </div>
+              <div class="settings-content">
+                <div id="pane-agent" class="settings-tab-pane active">
+                  <div class="settings-section-title">TIMEOUTS</div>
+                  <div class="settings-card">
+                    ${renderFields(AGENT_FIELDS)}
+                  </div>
+                </div>
+                <div id="pane-network" class="settings-tab-pane">
+                  <div class="settings-section-title">LISTENING</div>
+                  <div class="settings-card">
+                    ${renderFields(NETWORK_FIELDS)}
+                  </div>
+                </div>
+                <div id="pane-ui" class="settings-tab-pane">
+                  <div class="settings-section-title">PREFERENCES</div>
+                  <div class="settings-card">
+                    ${renderUiPreferences()}
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="settings-modal-footer">
+              <div id="settings-message" style="font-size:13px;color:var(--green);display:none;"></div>
+              <div style="flex:1"></div>
               <button class="btn-primary" id="btn-settings-save" onclick="submitSettings()">Save (Requires Restart)</button>
             </div>
           </div>
