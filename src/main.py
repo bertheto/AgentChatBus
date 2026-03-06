@@ -1254,6 +1254,9 @@ class SettingsUpdate(BaseModel):
     PORT: int | None = None
     AGENT_HEARTBEAT_TIMEOUT: int | None = None
     MSG_WAIT_TIMEOUT: int | None = None
+    ENABLE_HANDOFF_TARGET: bool | None = None
+    ENABLE_STOP_REASON: bool | None = None
+    ENABLE_PRIORITY: bool | None = None
 
 @app.put("/api/settings")
 async def api_update_settings(body: SettingsUpdate, x_admin_token: str | None = Header(default=None)):

@@ -146,6 +146,16 @@
         document.getElementById("setting-port").value = res.PORT || 39765;
         document.getElementById("setting-heartbeat").value = res.AGENT_HEARTBEAT_TIMEOUT || 30;
         document.getElementById("setting-wait").value = res.MSG_WAIT_TIMEOUT || 300;
+
+        if (document.getElementById("setting-handoff-target")) {
+          document.getElementById("setting-handoff-target").checked = !!res.ENABLE_HANDOFF_TARGET;
+        }
+        if (document.getElementById("setting-stop-reason")) {
+          document.getElementById("setting-stop-reason").checked = !!res.ENABLE_STOP_REASON;
+        }
+        if (document.getElementById("setting-priority")) {
+          document.getElementById("setting-priority").checked = !!res.ENABLE_PRIORITY;
+        }
       }
     } catch (err) {
       console.error(err);
@@ -163,6 +173,10 @@
     const pHb = parseInt(document.getElementById("setting-heartbeat").value, 10);
     const pWait = parseInt(document.getElementById("setting-wait").value, 10);
 
+    const pHandoffTarget = document.getElementById("setting-handoff-target") ? document.getElementById("setting-handoff-target").checked : false;
+    const pStopReason = document.getElementById("setting-stop-reason") ? document.getElementById("setting-stop-reason").checked : false;
+    const pPriority = document.getElementById("setting-priority") ? document.getElementById("setting-priority").checked : false;
+
     try {
       const res = await api("/api/settings", {
         method: "PUT",
@@ -171,6 +185,9 @@
           PORT: pPort,
           AGENT_HEARTBEAT_TIMEOUT: pHb,
           MSG_WAIT_TIMEOUT: pWait,
+          ENABLE_HANDOFF_TARGET: pHandoffTarget,
+          ENABLE_STOP_REASON: pStopReason,
+          ENABLE_PRIORITY: pPriority,
         }),
       });
       if (res && res.ok) {

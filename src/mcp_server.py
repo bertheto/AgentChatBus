@@ -234,7 +234,7 @@ server = Server("AgentChatBus")
 
 @server.list_tools()
 async def list_tools() -> list[types.Tool]:
-    return [
+    tools = [
         # ΓöÇΓöÇ Thread Management ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
         types.Tool(
             name="thread_create",
@@ -788,6 +788,28 @@ async def list_tools() -> list[types.Tool]:
             },
         ),
     ]
+
+    from src.config import ENABLE_HANDOFF_TARGET, ENABLE_STOP_REASON, ENABLE_PRIORITY
+    for t in tools:
+        if t.name == "msg_post":
+            props = t.inputSchema.get("properties", {})
+            meta_props = props.get("metadata", {}).get("properties", {})
+            if not ENABLE_HANDOFF_TARGET and "handoff_target" in meta_props:
+                del meta_props["handoff_target"]
+            if not ENABLE_STOP_REASON and "stop_reason" in meta_props:
+                del meta_props["stop_reason"]
+            if not ENABLE_PRIORITY and "priority" in props:
+                del props["priority"]
+        elif t.name == "msg_list":
+            props = t.inputSchema.get("properties", {})
+            if not ENABLE_PRIORITY and "priority" in props:
+                del props["priority"]
+        elif t.name == "msg_wait":
+            props = t.inputSchema.get("properties", {})
+            if not ENABLE_HANDOFF_TARGET and "for_agent" in props:
+                del props["for_agent"]
+
+    return tools
 
 
 @server.call_tool()

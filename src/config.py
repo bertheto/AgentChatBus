@@ -56,6 +56,12 @@ SEQ_MISMATCH_MAX_MESSAGES = int(os.getenv(
 # Rate limiting: max messages per minute per author identity (0 = disabled)
 RATE_LIMIT_MSG_PER_MINUTE = int(os.getenv("AGENTCHATBUS_RATE_LIMIT", "30"))
 RATE_LIMIT_ENABLED = RATE_LIMIT_MSG_PER_MINUTE > 0
+
+# Agent Attention Mechanisms
+ENABLE_HANDOFF_TARGET = str(os.getenv("AGENTCHATBUS_ENABLE_HANDOFF_TARGET", config_data.get("ENABLE_HANDOFF_TARGET", "false"))).lower() in {"1", "true", "yes"}
+ENABLE_STOP_REASON = str(os.getenv("AGENTCHATBUS_ENABLE_STOP_REASON", config_data.get("ENABLE_STOP_REASON", "false"))).lower() in {"1", "true", "yes"}
+ENABLE_PRIORITY = str(os.getenv("AGENTCHATBUS_ENABLE_PRIORITY", config_data.get("ENABLE_PRIORITY", "false"))).lower() in {"1", "true", "yes"}
+
 # Content filter: block messages containing known secret patterns
 CONTENT_FILTER_ENABLED = os.getenv("AGENTCHATBUS_CONTENT_FILTER_ENABLED", "true").lower() in {"1", "true", "yes"}
 # Conversation timeout: auto-close threads inactive for this many minutes (0 = disabled)
@@ -81,6 +87,9 @@ def get_config_dict():
         "SEQ_TOLERANCE": SEQ_TOLERANCE,
         "SEQ_MISMATCH_MAX_MESSAGES": SEQ_MISMATCH_MAX_MESSAGES,
         "EXPOSE_THREAD_RESOURCES": EXPOSE_THREAD_RESOURCES,
+        "ENABLE_HANDOFF_TARGET": ENABLE_HANDOFF_TARGET,
+        "ENABLE_STOP_REASON": ENABLE_STOP_REASON,
+        "ENABLE_PRIORITY": ENABLE_PRIORITY,
     }
 
 def save_config_dict(new_data: dict):

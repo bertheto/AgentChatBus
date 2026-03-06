@@ -14,6 +14,27 @@
     { label: "Wait Timeout (s)", id: "setting-wait", type: "number" },
   ];
 
+  const ATTENTION_FIELDS = [
+    {
+      label: "Handoff Target Mechanism",
+      id: "setting-handoff-target",
+      type: "toggle",
+      description: "Controls whether agents can explicitly route messages to one another. Disabling this saves token output and prevents agents from over-thinking coordination."
+    },
+    {
+      label: "Stop Reason Mechanism",
+      id: "setting-stop-reason",
+      type: "toggle",
+      description: "Controls whether agents must justify ending their turn. Disabling this avoids agents wasting attention on selecting the right exit status."
+    },
+    {
+      label: "Message Priority Mechanism",
+      id: "setting-priority",
+      type: "toggle",
+      description: "Controls whether agents can mark messages as 'urgent' or 'system'. Disabling this prevents agents from hyper-fixating on message priority."
+    },
+  ];
+
   const MINIMAP_KEY = "acb-minimap-enabled";
 
   function renderFields(fields) {
@@ -21,10 +42,30 @@
       const noteHtml = field.note
         ? `<div class="settings-field-note">${field.note}</div>`
         : "";
+      const descHtml = field.description
+        ? `<div class="settings-field-description">${field.description}</div>`
+        : "";
+
+      if (field.type === "toggle") {
+        return `
+          <div class="settings-field-container" style="display:flex;flex-direction:column;gap:4px;margin-bottom:8px;">
+            <div class="settings-field settings-field-row" style="margin-bottom:0;">
+              <span style="font-size:13px;color:var(--text-1);font-weight:500;">${field.label}</span>
+              <label class="toggle-switch" for="${field.id}">
+                <input id="${field.id}" type="checkbox" />
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            ${descHtml}
+            ${noteHtml}
+          </div>`;
+      }
+
       return `
-        <div class="settings-field">
+        <div class="settings-field" style="margin-bottom:8px;">
           <label>${field.label}</label>
           <input id="${field.id}" type="${field.type}" />
+          ${descHtml}
           ${noteHtml}
         </div>`;
     }).join("\n");
@@ -33,11 +74,11 @@
   function renderUiPreferences() {
     return `
       <div class="settings-field settings-field-row">
-        <label for="setting-minimap">Message minimap (Navigation sidebar)</label>
-        <div class="toggle-switch">
+        <span style="font-size:13px;color:var(--text-1);font-weight:500;">Message minimap (Navigation sidebar)</span>
+        <label class="toggle-switch" for="setting-minimap">
           <input id="setting-minimap" type="checkbox" />
           <span class="toggle-slider"></span>
-        </div>
+        </label>
       </div>
       <div class="settings-field-note" style="margin-top: 4px;">Scrollable anchor list on the right — toggle without restart.</div>
     `;
@@ -89,6 +130,7 @@
             <div class="settings-modal-body">
               <div class="settings-sidebar">
                 <div id="nav-agent" class="settings-nav-item active" onclick="switchSettingsTab('agent')">Agent</div>
+                <div id="nav-attention" class="settings-nav-item" onclick="switchSettingsTab('attention')">Attention</div>
                 <div id="nav-network" class="settings-nav-item" onclick="switchSettingsTab('network')">Network</div>
                 <div id="nav-ui" class="settings-nav-item" onclick="switchSettingsTab('ui')">UI</div>
               </div>
@@ -97,6 +139,12 @@
                   <div class="settings-section-title">TIMEOUTS</div>
                   <div class="settings-card">
                     ${renderFields(AGENT_FIELDS)}
+                  </div>
+                </div>
+                <div id="pane-attention" class="settings-tab-pane">
+                  <div class="settings-section-title">ATTENTION MECHANISMS</div>
+                  <div class="settings-card">
+                    ${renderFields(ATTENTION_FIELDS)}
                   </div>
                 </div>
                 <div id="pane-network" class="settings-tab-pane">

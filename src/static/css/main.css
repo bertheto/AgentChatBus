@@ -3429,6 +3429,12 @@ body[data-theme="light"] .settings-nav-item.active {
   gap: 6px;
 }
 
+.settings-field-description {
+  font-size: 12px;
+  color: var(--text-2);
+  margin-top: 2px;
+  line-height: 1.4;
+}
 .settings-field-row {
   flex-direction: row;
   align-items: center;
