@@ -1,4 +1,5 @@
 import json
+import time
 import aiosqlite
 import pytest
 from mcp import types
@@ -156,7 +157,7 @@ async def test_bus_connect_requires_msg_wait_before_first_msg_post():
 
 
 @pytest.mark.asyncio
-async def test_bus_connect_token_makes_next_msg_wait_immediate_once():
+async def test_bus_connect_does_not_make_next_msg_wait_fast_return():
     db = await aiosqlite.connect(":memory:")
     db.row_factory = aiosqlite.Row
     await init_schema(db)
@@ -174,38 +175,25 @@ async def test_bus_connect_token_makes_next_msg_wait_immediate_once():
     agent_id = connect_payload["agent"]["agent_id"]
     agent_token = connect_payload["agent"]["token"]
 
-    # First wait should fast-return due to pending bus_connect token.
+    # First wait after bus_connect should follow normal waiting semantics.
+    start = time.perf_counter()
     waited = await handle_msg_wait(
         db,
         {
             "thread_id": thread_id,
             "after_seq": 0,
-            "timeout_ms": 1,
+            "timeout_ms": 120,
             "return_format": "json",
             "agent_id": agent_id,
             "token": agent_token,
         },
     )
+    elapsed = time.perf_counter() - start
     wait_payload = json.loads(waited[0].text)
+    assert wait_payload["messages"] == []
     assert "reply_token" in wait_payload
     assert "current_seq" in wait_payload
-
-    # The same pending bus_connect token should only fast-return once.
-    # Second wait should follow timeout behavior (still returns sync envelope).
-    waited2 = await handle_msg_wait(
-        db,
-        {
-            "thread_id": thread_id,
-            "after_seq": 0,
-            "timeout_ms": 10,
-            "return_format": "json",
-            "agent_id": agent_id,
-            "token": agent_token,
-        },
-    )
-    wait_payload2 = json.loads(waited2[0].text)
-    assert wait_payload2["messages"] == []
-    assert "reply_token" in wait_payload2
+    assert elapsed >= 0.08
 
     posted2 = await handle_msg_post(
         db,
@@ -213,8 +201,8 @@ async def test_bus_connect_token_makes_next_msg_wait_immediate_once():
             "thread_id": thread_id,
             "author": agent_id,
             "content": "first message with msg_wait sync context",
-            "expected_last_seq": wait_payload2["current_seq"],
-            "reply_token": wait_payload2["reply_token"],
+            "expected_last_seq": wait_payload["current_seq"],
+            "reply_token": wait_payload["reply_token"],
             "role": "assistant",
         },
     )
@@ -289,20 +277,66 @@ async def test_msg_post_error_invalidate_tokens_uses_validated_author_when_no_co
     err_payload = json.loads(err[0].text)
     assert err_payload["error"] in {"SeqMismatchError", "ReplyTokenReplayError", "ReplyTokenInvalidError"}
 
-    # Next msg_wait should quick-return because issued tokens were invalidated.
+    # After invalidation, a caught-up agent should still perform a real wait.
+    # The result should still contain fresh sync context once that wait ends.
+    start = time.perf_counter()
     waited2 = await handle_msg_wait(
         db,
         {
             "thread_id": thread_id,
             "after_seq": 1,
-            "timeout_ms": 1000,
+            "timeout_ms": 120,
             "return_format": "json",
             "agent_id": agent_id,
             "token": agent_token,
         },
     )
+    elapsed = time.perf_counter() - start
     wait_payload2 = json.loads(waited2[0].text)
     assert wait_payload2["messages"] == []
     assert "reply_token" in wait_payload2
+    assert elapsed >= 0.08
+
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_msg_wait_caught_up_agent_waits_instead_of_fast_returning():
+    db = await aiosqlite.connect(":memory:")
+    db.row_factory = aiosqlite.Row
+    await init_schema(db)
+
+    thread = await crud.thread_create(db, topic="Caught Up Wait")
+    agent = await crud.agent_register(db, ide="VS Code", model="GPT-5.3-Codex")
+
+    sync = await crud.issue_reply_token(db, thread.id, agent.id)
+    await crud.msg_post(
+        db,
+        thread.id,
+        author=agent.id,
+        content="seed",
+        expected_last_seq=sync["current_seq"],
+        reply_token=sync["reply_token"],
+        role="assistant",
+    )
+
+    start = time.perf_counter()
+    waited = await handle_msg_wait(
+        db,
+        {
+            "thread_id": thread.id,
+            "after_seq": 1,
+            "timeout_ms": 120,
+            "return_format": "json",
+            "agent_id": agent.id,
+            "token": agent.token,
+        },
+    )
+    elapsed = time.perf_counter() - start
+
+    payload = json.loads(waited[0].text)
+    assert payload["messages"] == []
+    assert "reply_token" in payload
+    assert elapsed >= 0.08
 
     await db.close()

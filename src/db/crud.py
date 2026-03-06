@@ -1647,11 +1647,25 @@ async def agent_heartbeat(db: aiosqlite.Connection, agent_id: str, token: str) -
     return await _set_agent_activity(db, agent_id, "heartbeat", touch_heartbeat=True)
 
 
-async def agent_msg_wait(db: aiosqlite.Connection, agent_id: str, token: str) -> bool:
-    async with db.execute("SELECT token FROM agents WHERE id = ?", (agent_id,)) as cur:
+async def agent_msg_wait(db: aiosqlite.Connection, agent_id: str, token: str, wait_seconds: float = None, fast_return_allowed: bool = None, reason: str = None, after_seq: int = None, current_latest_seq: int = None) -> bool:
+    async with db.execute("SELECT name, token FROM agents WHERE id = ?", (agent_id,)) as cur:
         row = await cur.fetchone()
     if row is None or row["token"] != token:
         return False
+        
+    # Temporary diagnostics for msg_wait behavior. Safe to delete after
+    # wait/fast-return debugging is complete.
+    if wait_seconds is not None:
+        try:
+            fast_return_str = f", fast_return_allowed: {fast_return_allowed if fast_return_allowed is not None else 'unknown'}"
+            reason_str = f", reason: {reason}" if reason else ""
+            seq_str = f", after_seq: {after_seq}, latest_seq: {current_latest_seq}" if after_seq is not None else ""
+            log_line = f"[{_now()}] msg_wait - agent_id: {agent_id}, name: {row['name']}, wait_seconds: {wait_seconds}{fast_return_str}{reason_str}{seq_str}\n"
+            with open("msg_wait.log", "a", encoding="utf-8") as f:
+                f.write(log_line)
+        except Exception as e:
+            logger.error(f"Failed to write msg_wait log: {e}")
+
     try:
         # Best-effort: if this call comes from MCP SSE request context, bind the
         # current transport session to this agent so UI can classify transport

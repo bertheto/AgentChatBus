@@ -29,14 +29,39 @@ async def test_msg_wait_no_admin_prompt_when_no_agent_online():
                 "after_seq": 0,
                 "timeout_ms": 1,
                 "return_format": "json",
-                # Simulate stale/unverified caller identity: not an online registered agent.
-                "agent_id": "ghost-agent",
-                "token": "ghost-token",
             },
         )
 
         payload = json.loads(out[0].text)
         assert "coordination_prompt" not in payload
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_msg_wait_rejects_invalid_explicit_credentials():
+    db = await _setup_db()
+    try:
+        thread = await crud.thread_create(db, "msg-wait-invalid-creds")
+        agent = await crud.agent_register(db, ide="VS Code", model="GPT-5.3-Codex")
+
+        out = await handle_msg_wait(
+            db,
+            {
+                "thread_id": thread.id,
+                "after_seq": 0,
+                "timeout_ms": 1,
+                "return_format": "json",
+                "agent_id": agent.id,
+                "token": "wrong-token",
+            },
+        )
+
+        payload = json.loads(out[0].text)
+        assert payload["error"] == "InvalidCredentials"
+
+        states = await crud.thread_wait_states_grouped(db)
+        assert thread.id not in states or agent.id not in states.get(thread.id, {})
     finally:
         await db.close()
 

@@ -894,14 +894,33 @@ async def handle_msg_wait(db, arguments: dict[str, Any]) -> list[types.Content]:
     explicit_token = arguments.get("token")
     connection_agent_id, connection_token = src.mcp_server.get_connection_agent()
 
-    agent_id = explicit_agent_id or connection_agent_id
-    token = explicit_token or connection_token
+    explicit_creds_supplied = explicit_agent_id is not None or explicit_token is not None
+    if explicit_creds_supplied:
+        if not explicit_agent_id or not explicit_token:
+            return [types.TextContent(type="text", text=json.dumps({
+                "error": "InvalidCredentials",
+                "detail": "msg_wait requires both agent_id and token when explicit credentials are supplied.",
+            }))]
+        agent_id = explicit_agent_id
+        token = explicit_token
+    else:
+        agent_id = connection_agent_id
+        token = connection_token
+
+    verified_agent = False
+    if agent_id and token:
+        verified_agent = await crud.agent_verify_token(db, agent_id, token)
+        if not verified_agent:
+            return [types.TextContent(type="text", text=json.dumps({
+                "error": "InvalidCredentials",
+                "detail": "Invalid agent_id/token for msg_wait.",
+            }))]
 
     # If caller passed explicit credentials on an SSE request, bind this agent
     # to the current connection session so transport status can reflect SSE.
     # Without this, agents that only call msg_wait with explicit agent_id/token
     # may appear as online+waiting but not SSE-connected.
-    if agent_id and token:
+    if verified_agent:
         src.mcp_server.set_connection_agent(agent_id, token)
 
     logger.info(f"[msg_wait] explicit: agent_id={explicit_agent_id}, connection: agent_id={connection_agent_id}, final_agent_id={agent_id}, for_agent={for_agent}")
@@ -920,16 +939,50 @@ async def handle_msg_wait(db, arguments: dict[str, Any]) -> list[types.Content]:
     # - entering msg_wait writes/refreshes (thread_id, agent_id)
     # - receiving a message or posting a message removes that wait marker
     # - coordinator reads DB markers to evaluate timeout conditions
-    if agent_id:
+    if verified_agent:
         await crud.thread_wait_enter(db, thread_id, agent_id, timeout_ms)
+
+    wants_sync_only = False
+    issued_token_count: int | None = None
+    current_latest_seq = await crud.thread_latest_seq(db, thread_id)
+    
+    if verified_agent:
+        async with db.execute(
+            "SELECT COUNT(*) FROM reply_tokens "
+            "WHERE thread_id = ? AND agent_id = ? AND status = 'issued'",
+            (thread_id, agent_id),
+        ) as cur:
+            row = await cur.fetchone()
+            issued_token_count = row[0] if row else 0
+            # Only force return for sync if the agent is actually behind.
+            # If they are at the latest seq, they can safely wait; they'll get
+            # a token when they eventually wake up.
+            if issued_token_count == 0 and after_seq < current_latest_seq:
+                wants_sync_only = True
+    
+    fast_return_allowed = bool(wants_sync_only)
+    
+    # ── Diagnostic Logs ───────────────────────────────────────────────────────
+    reason = "normal"
+    if wants_sync_only:
+        reason = f"no_issued_tokens_and_behind(total_issued={issued_token_count if agent_id else 'N/A'}, after_seq={after_seq}, latest={current_latest_seq})"
+    elif verified_agent and issued_token_count == 0:
+        reason = f"no_issued_tokens_but_caught_up(latest={current_latest_seq})"
+    
+    logger.info(
+        f"[msg_wait_debug] agent_id={agent_id} thread_id={thread_id} "
+        f"after_seq={after_seq} current_latest_seq={current_latest_seq} "
+        f"fast_return_allowed={fast_return_allowed} reason={reason}"
+    )
+    # ─────────────────────────────────────────────────────────────────────────
 
     # Refresh every 20 seconds to stay online during long-poll waits.
     HEARTBEAT_INTERVAL = 20.0
 
     async def _refresh_heartbeat() -> None:
-        if agent_id and token:
+        if verified_agent:
             try:
-                await crud.agent_msg_wait(db, agent_id, token)
+                await crud.agent_msg_wait(db, agent_id, token, wait_seconds=timeout_s, fast_return_allowed=fast_return_allowed, reason=f"{reason} (heartbeat)", after_seq=after_seq, current_latest_seq=current_latest_seq)
                 logger.debug(f"[msg_wait] heartbeat refreshed for agent_id={agent_id}")
             except Exception as e:
                 logger.warning(f"[msg_wait] Failed to refresh heartbeat for {agent_id}: {e}")
@@ -943,38 +996,17 @@ async def handle_msg_wait(db, arguments: dict[str, Any]) -> list[types.Content]:
         except Exception:
             pass
 
-    if agent_id and token:
+    if verified_agent:
         try:
-            result = await crud.agent_msg_wait(db, agent_id, token)
+            result = await crud.agent_msg_wait(db, agent_id, token, wait_seconds=timeout_s, fast_return_allowed=fast_return_allowed, reason=reason, after_seq=after_seq, current_latest_seq=current_latest_seq)
             logger.info(f"[msg_wait] activity recorded: agent_id={agent_id}, result={result}")
         except Exception as e:
             logger.warning(f"[msg_wait] Failed to record activity for {agent_id}: {e}")
+    elif agent_id or token:
+        logger.warning(f"[msg_wait] Invalid credentials rejected: agent_id={agent_id}, token={'***' if token else None}")
     else:
         logger.warning(f"[msg_wait] No credentials available: agent_id={agent_id}, token={'***' if token else None}")
 
-    wants_sync_only = False
-    pending_bus_connect_token: str | None = None
-    if agent_id:
-        pending_bus_connect_token = await crud.reply_token_find_pending_bus_connect(
-            db,
-            thread_id=thread_id,
-            agent_id=agent_id,
-        )
-
-        async with db.execute(
-            "SELECT COUNT(*) FROM reply_tokens "
-            "WHERE thread_id = ? AND agent_id = ? AND status = 'issued'",
-            (thread_id, agent_id),
-        ) as cur:
-            row = await cur.fetchone()
-            if row and row[0] == 0:
-                wants_sync_only = True
-
-    if pending_bus_connect_token:
-        logger.info(
-            f"[msg_wait] immediate-return-eligible reason=bus_connect_token_pending "
-            f"thread_id={thread_id} agent_id={agent_id} after_seq={after_seq}"
-        )
     if wants_sync_only:
         logger.info(
             f"[msg_wait] immediate-return-eligible reason=no_issued_token "
@@ -992,7 +1024,7 @@ async def handle_msg_wait(db, arguments: dict[str, Any]) -> list[types.Content]:
                     filtered = [m for m in msgs if _metadata_targets(m, for_agent)]
                     if filtered:
                         # Exit wait state only when returning a message to caller.
-                        if agent_id:
+                        if verified_agent:
                             await crud.thread_wait_exit(db, thread_id, agent_id)
                             await crud.agent_msg_received(db, agent_id)
                         logger.info(
@@ -1006,7 +1038,7 @@ async def handle_msg_wait(db, arguments: dict[str, Any]) -> list[types.Content]:
                     local_after_seq = max(local_after_seq, max(m.seq for m in msgs))
                 else:
                     # No for_agent filter: any message wakes this waiter.
-                    if agent_id:
+                    if verified_agent:
                         await crud.thread_wait_exit(db, thread_id, agent_id)
                         await crud.agent_msg_received(db, agent_id)
                     logger.info(
@@ -1015,20 +1047,9 @@ async def handle_msg_wait(db, arguments: dict[str, Any]) -> list[types.Content]:
                     )
                     return msgs
 
-            # Priority: messages first, then bus_connect token fast-return,
-            # then generic no-issued-token fast-return.
-            if pending_bus_connect_token:
-                if agent_id:
-                    await crud.thread_wait_exit(db, thread_id, agent_id)
-                await crud.reply_token_mark_fast_returned(db, pending_bus_connect_token)
-                logger.info(
-                    f"[msg_wait] return reason=sync_only_bus_connect_token_pending "
-                    f"thread_id={thread_id} agent_id={agent_id}"
-                )
-                return []
-
+            # Priority: messages first, then generic no-issued-token fast-return.
             if wants_sync_only:
-                if agent_id:
+                if verified_agent:
                     await crud.thread_wait_exit(db, thread_id, agent_id)
                 logger.info(
                     f"[msg_wait] return reason=sync_only_no_issued_token "
@@ -1055,7 +1076,7 @@ async def handle_msg_wait(db, arguments: dict[str, Any]) -> list[types.Content]:
     token_payload = await crud.issue_reply_token(
         db,
         thread_id=thread_id,
-        agent_id=agent_id,
+        agent_id=agent_id if verified_agent else None,
         source="msg_wait",
     )
     
