@@ -363,4 +363,107 @@
     const api = _resolveApi();
     submitThreadSettings(api);
   };
+
+  window.runDiagnostics = async function (btn) {
+    const resultsEl = document.getElementById("diagnostics-results");
+    const copyBtn = document.getElementById("btn-copy-diagnostics");
+    if (!resultsEl || !copyBtn) return;
+
+    btn.disabled = true;
+    btn.innerHTML = 'Running... <span id="diag-btn-emoji">⏳</span>';
+    resultsEl.style.display = "block";
+    resultsEl.textContent = "Connecting to backend...\n";
+    copyBtn.style.display = "none";
+
+    let allOk = true;
+
+    try {
+      const api = _resolveApi();
+      const start = performance.now();
+      const res = await api("/api/system/diagnostics");
+      const rtt = Math.round(performance.now() - start);
+
+      let out = "";
+
+      out += "========================================================\n"
+      out += "                   SYSTEM OVERVIEW                      \n"
+      out += "========================================================\n"
+      out += `App Directory: ${res.app_dir}\n`;
+      out += `Database Path: ${res.db_path}\n`;
+
+      const upHours = Math.floor(res.uptime_seconds / 3600);
+      const upMins = Math.floor((res.uptime_seconds % 3600) / 60);
+      const upSecs = res.uptime_seconds % 60;
+      out += `Server Uptime: ${upHours}h ${upMins}m ${upSecs}s\n`;
+      out += `Server Time  : ${res.server_time_utc}\n\n`;
+
+      out += `SQLite Threads : ${res.total_threads}\n`;
+      out += `SQLite Messages: ${res.total_messages}\n\n`;
+
+      out += "========================================================\n"
+      out += "                 TRANSPORT & SERVICES                   \n"
+      out += "========================================================\n"
+      out += `[DB] SQLite Check: ${res.db_ok ? "✅ OK" : "❌ FAIL"} (${res.db_latency_ms}ms)\n`;
+      if (!res.db_ok) allOk = false;
+
+      out += `[MCP] Service Check: ${res.mcp_ok ? "✅ OK" : "❌ FAIL"}\n`;
+      out += `      Tools    : ${res.mcp_tools_count}\n`;
+      out += `      Prompts  : ${res.mcp_prompts_count}\n`;
+      out += `      Resources: ${res.mcp_resources_count}\n\n`;
+      if (!res.mcp_ok) allOk = false;
+
+      out += `[NET] TCP SSE Streams: ${res.active_sse_connections}\n`;
+      out += `      SSE Loopback Test: ${res.sse_simulated_ok ? "✅ OK" : "❌ FAIL"}\n`;
+      if (!res.sse_simulated_ok) allOk = false;
+
+      out += `[AGT] Registered Agents: ${res.online_agents_total} Online\n`;
+      out += `      SSE Transport: ${res.sse_agents_count}\n`;
+      out += `      StdIO Transport: ${res.stdio_agents_count}\n`;
+
+      let uiConnected = false;
+      if (window.AcbSSE && typeof window.AcbSSE.isConnected === 'function') {
+        uiConnected = window.AcbSSE.isConnected();
+      } else if (window.AcbSSE) {
+        uiConnected = window.AcbSSE.connected;
+      }
+
+      out += `\n[UI] SSE Event Stream: ${uiConnected ? "✅ CONNECTED" : "❌ DISCONNECTED"}\n\n`;
+      if (!uiConnected) allOk = false;
+
+      out += "========================================================\n"
+      out += "                    DIAGNOSTIC LOGS                     \n"
+      out += "========================================================\n"
+      if (res.logs && Array.isArray(res.logs)) {
+        res.logs.forEach(l => {
+          out += `> ${l}\n`;
+        });
+      }
+
+      resultsEl.textContent = out;
+      copyBtn.style.display = "block";
+    } catch (err) {
+      resultsEl.textContent += `\n❌ Error: ${err.message || err}`;
+      allOk = false;
+    } finally {
+      btn.disabled = false;
+      btn.innerHTML = `Run Diagnostics <span id="diag-btn-emoji">${allOk ? "✅" : "❌"}</span>`;
+    }
+  };
+
+  window.copyDiagnosticsReport = function (btn) {
+    const resultsEl = document.getElementById("diagnostics-results");
+    if (!resultsEl) return;
+
+    const text = resultsEl.textContent;
+    const report = "### AgentChatBus Diagnostics Report\n\n```text\n" + text + "\n```\n\n**User Agent**: " + navigator.userAgent + "\n**URL**: " + window.location.href;
+
+    navigator.clipboard.writeText(report).then(() => {
+      const orig = btn.textContent;
+      btn.textContent = "Copied!";
+      setTimeout(() => { btn.textContent = orig; }, 2000);
+    }).catch(err => {
+      console.error("Failed to copy", err);
+      alert("Failed to copy to clipboard");
+    });
+  };
 })();

@@ -111,6 +111,28 @@
 
     const pane = document.getElementById('pane-' + tabId);
     if (pane) pane.classList.add('active');
+
+    const saveBtn = document.getElementById("btn-settings-save");
+    const msg = document.getElementById("settings-message");
+    if (saveBtn) {
+      if (tabId === 'diagnostics') {
+        saveBtn.disabled = true;
+        saveBtn.style.opacity = "0.5";
+        saveBtn.style.cursor = "not-allowed";
+        if (msg) {
+          msg.textContent = "Settings cannot be saved from the Diagnostics tab.";
+          msg.style.display = "block";
+          msg.style.color = "var(--text-3)";
+        }
+      } else {
+        saveBtn.disabled = false;
+        saveBtn.style.opacity = "1";
+        saveBtn.style.cursor = "pointer";
+        if (msg) {
+          msg.style.display = "none";
+        }
+      }
+    }
   };
 
   class AcbModalShell extends HTMLElement {
@@ -151,6 +173,8 @@
                 <div id="nav-attention" class="settings-nav-item" onclick="switchSettingsTab('attention')">Attention</div>
                 <div id="nav-network" class="settings-nav-item" onclick="switchSettingsTab('network')">Network</div>
                 <div id="nav-ui" class="settings-nav-item" onclick="switchSettingsTab('ui')">UI</div>
+                <div style="flex-grow: 1;"></div>
+                <div id="nav-diagnostics" class="settings-nav-item" onclick="switchSettingsTab('diagnostics')">Diagnostics</div>
               </div>
               <div class="settings-content">
                 <div id="pane-agent" class="settings-tab-pane active">
@@ -175,6 +199,17 @@
                   <div class="settings-section-title">PREFERENCES</div>
                   <div class="settings-card">
                     ${renderUiPreferences()}
+                  </div>
+                </div>
+                <div id="pane-diagnostics" class="settings-tab-pane">
+                  <div class="settings-section-title">SYSTEM HEALTH</div>
+                  <div class="settings-card diag-card">
+                    <div class="diag-subtitle" style="margin-bottom: 12px; font-size: 13px; color: var(--text-2);">
+                      Run a self-test to verify Database, MCP Tools, and Agent connectivity.
+                    </div>
+                    <button class="btn-primary diag-run-btn" id="btn-run-diagnostics" onclick="window.runDiagnostics(this)" style="width: 100%; margin-bottom: 12px;">Run Diagnostics <span id="diag-btn-emoji"></span></button>
+                    <div id="diagnostics-results" class="diag-terminal" style="display: none; background: #0c0c0c; color: #00ff00; font-family: monospace; padding: 12px; border-radius: 6px; font-size: 12px; white-space: pre-wrap; line-height: 1.5;"></div>
+                    <button class="btn-secondary diag-copy-btn" id="btn-copy-diagnostics" onclick="window.copyDiagnosticsReport(this)" style="width: 100%; display: none; margin-top: 12px;">Copy Diagnostic Report</button>
                   </div>
                 </div>
               </div>

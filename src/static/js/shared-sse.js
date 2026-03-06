@@ -1,5 +1,8 @@
 (function () {
+  let _isConnected = false;
+
   function setConnectedUI(connected) {
+    _isConnected = connected;
     const dot = document.getElementById("status-dot");
     const label = document.getElementById("status-label");
     if (!dot || !label) return;
@@ -20,8 +23,9 @@
     } = deps;
 
     const es = new EventSource("/events");
-    es.onopen = () => setConnected(true);
+    es.onopen = () => { _isConnected = true; setConnected(true); };
     es.onerror = () => {
+      _isConnected = false;
       setConnected(false);
       setTimeout(() => startSSE(deps), 3000);
       es.close();
@@ -75,5 +79,6 @@
   window.AcbSSE = {
     setConnectedUI,
     startSSE,
+    isConnected: () => _isConnected,
   };
 })();

@@ -13,6 +13,9 @@ import logging
 import os
 import time
 import uuid
+
+_server_start_time = time.time()
+
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1243,6 +1246,158 @@ async def api_thread_agents(thread_id: str):
             "is_sse_connected": is_agent_sse_connected(a.id),
         })
     return result
+
+
+@app.get("/api/system/diagnostics")
+async def api_system_diagnostics(request: Request):
+    """System health check endpoint for frontend diagnostics."""
+    from src.mcp_server import is_agent_sse_connected, list_tools, list_prompts, list_resources
+    import time
+    
+    start_time = time.time()
+    logs = [f"[{datetime.now(timezone.utc).isoformat()}] Starting system diagnostics..."]
+    
+    # Environment Info
+    app_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    db_path_abs = os.path.abspath(DB_PATH)
+    uptime_seconds = int(time.time() - _server_start_time)
+    
+    logs.append(f"App Directory: {app_dir}")
+    logs.append(f"Database Path: {db_path_abs}")
+    logs.append(f"Server Uptime: {uptime_seconds} seconds")
+    
+    db_ok = False
+    db_latency_ms = 0
+    total_threads = 0
+    total_messages = 0
+    
+    logs.append("Checking database connection and statistics...")
+    try:
+        db_start = time.time()
+        db = await asyncio.wait_for(get_db(), timeout=DB_TIMEOUT)
+        
+        # Ping
+        async with db.execute("SELECT 1") as cursor:
+            await cursor.fetchone()
+        
+        # Threads Count
+        async with db.execute("SELECT COUNT(*) FROM threads") as cursor:
+            row = await cursor.fetchone()
+            if row: total_threads = row[0]
+            
+        # Messages Count
+        async with db.execute("SELECT COUNT(*) FROM messages") as cursor:
+            row = await cursor.fetchone()
+            if row: total_messages = row[0]
+            
+        db_latency_ms = int((time.time() - db_start) * 1000)
+        db_ok = True
+        logs.append(f"Database check OK. Latency: {db_latency_ms}ms")
+        logs.append(f"Found {total_threads} threads and {total_messages} messages.")
+    except Exception as e:
+        logger.error(f"Diagnostics DB check failed: {e}")
+        logs.append(f"Database check FAIL: {str(e)}")
+        db_latency_ms = -1
+        
+    mcp_ok = False
+    mcp_tools_count = 0
+    mcp_prompts_count = 0
+    mcp_resources_count = 0
+    logs.append("Checking MCP Service components (Tools, Prompts, Resources)...")
+    try:
+        t_start = time.time()
+        tools = await list_tools()
+        prompts = await list_prompts()
+        resources = await list_resources()
+        mcp_tools_count = len(tools)
+        mcp_prompts_count = len(prompts)
+        mcp_resources_count = len(resources)
+        if isinstance(tools, list) and isinstance(prompts, list) and isinstance(resources, list):
+            mcp_ok = True
+        mcp_lat = int((time.time() - t_start) * 1000)
+        logs.append(f"MCP Service OK ({mcp_lat}ms). Tools: {mcp_tools_count}, Prompts: {mcp_prompts_count}, Resources: {mcp_resources_count}")
+    except Exception as e:
+        logger.error(f"Diagnostics MCP check failed: {e}")
+        logs.append(f"MCP Service FAIL: {str(e)}")
+        
+    online_agents_total = 0
+    sse_agents_count = 0
+    stdio_agents_count = 0
+    logs.append("Retrieving active Agent endpoints...")
+    try:
+        if db_ok:
+            agents = await asyncio.wait_for(crud.agent_list(db), timeout=DB_TIMEOUT)
+            for a in agents:
+                if a.is_online:
+                    online_agents_total += 1
+                    if is_agent_sse_connected(a.id):
+                        sse_agents_count += 1
+                    else:
+                        stdio_agents_count += 1
+            logs.append(f"Agents online: {online_agents_total} (SSE: {sse_agents_count}, StdIO: {stdio_agents_count})")
+    except Exception as e:
+        logger.error(f"Diagnostics agent list failed: {e}")
+        logs.append(f"Agent list retrieval FAIL: {str(e)}")
+
+    # Simulate an SSE client connecting to /events
+    logs.append("Initiating SSE Loopback Test (TCP -> /events)...")
+    sse_simulated_ok = False
+    try:
+        host = request.url.hostname or "127.0.0.1"
+        port = request.url.port or 80
+        logs.append(f"Connecting to {host}:{port} ...")
+        
+        loopback_start = time.time()
+        reader, writer = await asyncio.wait_for(asyncio.open_connection(host, port), timeout=2.0)
+        http_req = f"GET /events HTTP/1.1\r\nHost: {host}:{port}\r\nConnection: close\r\n\r\n"
+        writer.write(http_req.encode())
+        await writer.drain()
+        
+        # Read the HTTP header response
+        resp_line = await asyncio.wait_for(reader.readline(), timeout=2.0)
+        resp_str = resp_line.decode().strip()
+        
+        loop_lat = int((time.time() - loopback_start) * 1000)
+        
+        if "200" in resp_str or "OK" in resp_str:
+            sse_simulated_ok = True
+            logs.append(f"SSE Handshake OK ({loop_lat}ms). Server responded: {resp_str}")
+        else:
+            logs.append(f"SSE Handshake Failed. Server responded: {resp_str}")
+            
+        writer.close()
+        await writer.wait_closed()
+    except Exception as e:
+        logger.error(f"Diagnostics SSE simulation failed: {e}")
+        logs.append(f"SSE Loopback Exception: {str(e)}")
+
+    active_sse_connections = len(_live_mcp_sse_streams)
+    logs.append(f"Current live TCP SSE streams: {active_sse_connections}")
+    
+    total_lat = int((time.time() - start_time) * 1000)
+    logs.append(f"[{datetime.now(timezone.utc).isoformat()}] Diagnostics complete. Total time: {total_lat}ms")
+    
+    return {
+        "db_ok": db_ok,
+        "db_latency_ms": db_latency_ms,
+        "mcp_ok": mcp_ok,
+        "mcp_tools_count": mcp_tools_count,
+        "mcp_prompts_count": mcp_prompts_count,
+        "mcp_resources_count": mcp_resources_count,
+        "active_sse_connections": active_sse_connections,
+        "sse_simulated_ok": sse_simulated_ok,
+        "online_agents_total": online_agents_total,
+        "sse_agents_count": sse_agents_count,
+        "stdio_agents_count": stdio_agents_count,
+        "server_time_utc": datetime.now(timezone.utc).isoformat(),
+        "total_latency_ms": total_lat,
+        "app_dir": app_dir,
+        "db_path": db_path_abs,
+        "uptime_seconds": uptime_seconds,
+        "total_threads": total_threads,
+        "total_messages": total_messages,
+        "logs": logs
+    }
 
 
 @app.get("/api/settings")

@@ -56,3 +56,6 @@ frontend/coverage/
 .tmp-*
 
 *.link
+
+*tmp*
+*temp*
