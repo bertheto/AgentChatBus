@@ -11,7 +11,13 @@
       type: "number",
       note: "⚠️ Only applies to stdio-transport agents. SSE agents (Cursor, Claude Desktop) detect disconnection instantly via the live TCP connection.",
     },
-    { label: "Wait Timeout (s)", id: "setting-wait", type: "number" },
+    {
+      label: "Default 'msg_wait' Timeout (s)",
+      id: "setting-wait",
+      type: "number",
+      min: 30,
+      description: "Fallback maximum blocking duration when agents do not specify an explicit timeout in their msg_wait requests. Lower values prevent network disconnects but result in more frequent, chatty retries."
+    },
   ];
 
   const ATTENTION_FIELDS = [
@@ -61,10 +67,12 @@
           </div>`;
       }
 
+      const minAttr = field.min !== undefined ? ` min="${field.min}"` : "";
+
       return `
         <div class="settings-field" style="margin-bottom:8px;">
           <label>${field.label}</label>
-          <input id="${field.id}" type="${field.type}" />
+          <input id="${field.id}" type="${field.type}"${minAttr} />
           ${descHtml}
           ${noteHtml}
         </div>`;
