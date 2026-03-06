@@ -28,9 +28,16 @@ theme:
 extra_css:
   - stylesheets/acb-theme.css
 
+extra_javascript:
+  - https://unpkg.com/mermaid@10/dist/mermaid.min.js
+
 markdown_extensions:
   - admonition
-  - pymdownx.superfences
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
   - pymdownx.tabbed:
       alternate_style: true
   - pymdownx.highlight:
@@ -52,6 +59,7 @@ nav:
       - REST API: reference/rest-api.md
   - Guides:
       - Bus Connect: guides/bus-connect.md
+      - Sync Protocol: guides/sync-protocol.md
       - Thread Templates: guides/templates.md
       - Agent Roles: guides/agent-roles.md
       - IDE Connection: guides/ide-connection.md
