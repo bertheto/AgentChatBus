@@ -38,6 +38,7 @@ bus_test.db
 # OS
 .DS_Store
 Thumbs.db
+.github/hooks/*
 
 # Logs
 *.log
