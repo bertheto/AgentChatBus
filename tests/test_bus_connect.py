@@ -6,7 +6,7 @@ from mcp import types
 
 from src.db import crud
 from src.db.database import init_schema
-from src.tools.dispatch import handle_bus_connect, handle_msg_post, handle_msg_wait
+from src.tools.dispatch import handle_bus_connect, handle_msg_list, handle_msg_post, handle_msg_wait
 import src.mcp_server
 
 @pytest.fixture(autouse=True)
@@ -417,6 +417,173 @@ async def test_msg_post_invalid_token_does_not_claim_new_messages_arrived():
     assert "REMINDER" in err_payload
     assert "CRITICAL_REMINDER" not in err_payload
     assert "new_messages_1st_read" not in err_payload
+
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_two_agents_can_chat_multiple_rounds_via_bus_connect_and_msg_wait():
+    db = await aiosqlite.connect(":memory:")
+    db.row_factory = aiosqlite.Row
+    await init_schema(db)
+
+    thread_name = "Realistic Multi Agent Chat"
+
+    connect_a = await handle_bus_connect(
+        db,
+        {
+            "thread_name": thread_name,
+            "ide": "VS Code",
+            "model": "GPT-5.3-Codex",
+        },
+    )
+    payload_a = json.loads(connect_a[0].text)
+    thread_id = payload_a["thread"]["thread_id"]
+    agent_a_id = payload_a["agent"]["agent_id"]
+    agent_a_token = payload_a["agent"]["token"]
+
+    post_a1 = await handle_msg_post(
+        db,
+        {
+            "thread_id": thread_id,
+            "author": agent_a_id,
+            "content": "A1: hello from agent A",
+            "expected_last_seq": payload_a["current_seq"],
+            "reply_token": payload_a["reply_token"],
+            "role": "assistant",
+        },
+    )
+    post_a1_payload = json.loads(post_a1[0].text)
+    assert post_a1_payload["seq"] == 1
+
+    connect_b = await handle_bus_connect(
+        db,
+        {
+            "thread_name": thread_name,
+            "ide": "VS Code",
+            "model": "GPT-5.3-Codex",
+        },
+    )
+    payload_b = json.loads(connect_b[0].text)
+    agent_b_id = payload_b["agent"]["agent_id"]
+    agent_b_token = payload_b["agent"]["token"]
+
+    assert payload_b["thread"]["thread_id"] == thread_id
+    assert any(m.get("content") == "A1: hello from agent A" for m in payload_b["messages"])
+    assert payload_b["current_seq"] == 1
+
+    post_b1 = await handle_msg_post(
+        db,
+        {
+            "thread_id": thread_id,
+            "author": agent_b_id,
+            "content": "B1: hi A, I joined the thread",
+            "expected_last_seq": payload_b["current_seq"],
+            "reply_token": payload_b["reply_token"],
+            "role": "assistant",
+        },
+    )
+    post_b1_payload = json.loads(post_b1[0].text)
+    assert post_b1_payload["seq"] == 2
+
+    wait_a1 = await handle_msg_wait(
+        db,
+        {
+            "thread_id": thread_id,
+            "after_seq": 1,
+            "timeout_ms": 50,
+            "return_format": "json",
+            "agent_id": agent_a_id,
+            "token": agent_a_token,
+        },
+    )
+    wait_a1_payload = json.loads(wait_a1[0].text)
+    assert [m["content"] for m in wait_a1_payload["messages"]] == ["B1: hi A, I joined the thread"]
+    assert wait_a1_payload["current_seq"] == 2
+
+    post_a2 = await handle_msg_post(
+        db,
+        {
+            "thread_id": thread_id,
+            "author": agent_a_id,
+            "content": "A2: let's discuss the patch plan",
+            "expected_last_seq": wait_a1_payload["current_seq"],
+            "reply_token": wait_a1_payload["reply_token"],
+            "role": "assistant",
+        },
+    )
+    post_a2_payload = json.loads(post_a2[0].text)
+    assert post_a2_payload["seq"] == 3
+
+    wait_b1 = await handle_msg_wait(
+        db,
+        {
+            "thread_id": thread_id,
+            "after_seq": 2,
+            "timeout_ms": 50,
+            "return_format": "json",
+            "agent_id": agent_b_id,
+            "token": agent_b_token,
+        },
+    )
+    wait_b1_payload = json.loads(wait_b1[0].text)
+    assert [m["content"] for m in wait_b1_payload["messages"]] == ["A2: let's discuss the patch plan"]
+    assert wait_b1_payload["current_seq"] == 3
+
+    post_b2 = await handle_msg_post(
+        db,
+        {
+            "thread_id": thread_id,
+            "author": agent_b_id,
+            "content": "B2: agreed, I will handle the tests",
+            "expected_last_seq": wait_b1_payload["current_seq"],
+            "reply_token": wait_b1_payload["reply_token"],
+            "role": "assistant",
+        },
+    )
+    post_b2_payload = json.loads(post_b2[0].text)
+    assert post_b2_payload["seq"] == 4
+
+    wait_a2 = await handle_msg_wait(
+        db,
+        {
+            "thread_id": thread_id,
+            "after_seq": 3,
+            "timeout_ms": 50,
+            "return_format": "json",
+            "agent_id": agent_a_id,
+            "token": agent_a_token,
+        },
+    )
+    wait_a2_payload = json.loads(wait_a2[0].text)
+    assert [m["content"] for m in wait_a2_payload["messages"]] == ["B2: agreed, I will handle the tests"]
+    assert wait_a2_payload["current_seq"] == 4
+
+    listed = await handle_msg_list(
+        db,
+        {
+            "thread_id": thread_id,
+            "after_seq": 0,
+            "limit": 20,
+            "include_system_prompt": False,
+            "return_format": "json",
+        },
+    )
+    listed_payload = json.loads(listed[0].text)
+
+    chat_messages = [m for m in listed_payload if m["role"] == "assistant"]
+    assert [m["content"] for m in chat_messages] == [
+        "A1: hello from agent A",
+        "B1: hi A, I joined the thread",
+        "A2: let's discuss the patch plan",
+        "B2: agreed, I will handle the tests",
+    ]
+    assert [m["author_id"] for m in chat_messages] == [
+        agent_a_id,
+        agent_b_id,
+        agent_a_id,
+        agent_b_id,
+    ]
 
     await db.close()
 
