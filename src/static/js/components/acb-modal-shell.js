@@ -249,20 +249,20 @@
             
             <div class="settings-content" style="background:var(--bg-base); padding: 24px; display:flex; flex-direction:column; gap:20px;">
               <div class="settings-field">
-                <label for="ts-timeout-seconds">Inactivity Intervention Delay (seconds)</label>
+                <label for="ts-timeout-seconds">Admin Takeover Confirmation Delay (seconds)</label>
                 <input id="ts-timeout-seconds" type="number" min="30" value="60" />
                 <div class="settings-field-description">
                   Wait duration after <strong>ALL</strong> participating online agents have entered <code>msg_wait</code> (indicating an idle conversation) before the system triggers a coordination intervention or requests human assistance. Minimum 30s.
-                  <span id="ts-intervention-example" style="color:var(--accent); cursor:help; text-decoration:underline dotted; margin-left:4px;">Hover for example</span>
+                  <span id="ts-intervention-example" style="color:var(--accent); cursor:help; text-decoration:underline dotted; margin-left:4px;">Click for example</span>
                 </div>
               </div>
 
               <div class="settings-field">
-                <label for="ts-switch-timeout-seconds">Switch Confirmation Delay (seconds)</label>
+                <label for="ts-switch-timeout-seconds">Admin Switch Confirmation Delay (seconds)</label>
                 <input id="ts-switch-timeout-seconds" type="number" min="30" value="60" />
                 <div class="settings-field-description">
                   Wait duration before triggering an administrator switch confirmation if the current administrator is offline while other agents are waiting. Minimum 30s.
-                  <span id="ts-switch-intervention-example" style="color:var(--accent); cursor:help; text-decoration:underline dotted; margin-left:4px;">Hover for example</span>
+                  <span id="ts-switch-intervention-example" style="color:var(--accent); cursor:help; text-decoration:underline dotted; margin-left:4px;">Click for example</span>
                 </div>
               </div>
               
@@ -330,7 +330,8 @@
       const attach = (id, title, note, cardId, hydrateFn) => {
         const link = this.querySelector(id);
         if (!link) return;
-        link.onmouseenter = () => {
+        link.onclick = (e) => {
+          e.preventDefault();
           if (!window.AcbTooltip) return;
           const html = `
             <div style="padding: 12px; width: 540px; font-family: var(--font-inter);">
@@ -341,7 +342,7 @@
               </div>
             </div>
           `;
-          window.AcbTooltip.showRich(link, html, { maxWidth: '580px' });
+          window.AcbTooltip.showRich(link, html, { maxWidth: '580px', interactive: true });
           setTimeout(() => hydrateFn(document.getElementById(cardId)), 10);
         };
         link.onmouseleave = () => {
