@@ -142,9 +142,9 @@
       const onlineText = onlineCount
         ? `Online participants at trigger time: ${onlineCount}.`
         : "Online participants at trigger time: unavailable.";
-      const visibilityText = visibility === "human_only"
-        ? "Visibility: human only. Agents cannot read or receive this card."
-        : "Visibility: human decision required.";
+      const visibilityLine = visibility === "human_only"
+        ? ""
+        : `<div class="msg-sys-admin-body">Visibility: human decision required.</div>`;
       const humanOnlyHint = visibility === "human_only"
         ? `
           <div class="msg-sys-admin-human-note" role="note" aria-label="Human-only notice">
@@ -165,7 +165,7 @@
         <div class="msg-sys-admin-title">${this._esc(cardTitle)}</div>
         <div class="msg-sys-admin-body">${this._esc(reasonText)} ${this._esc(onlineText)}</div>
         <div class="msg-sys-admin-body">${this._esc(message.content || "")}</div>
-        <div class="msg-sys-admin-body">${this._esc(visibilityText)}</div>
+        ${visibilityLine}
         ${humanOnlyHint}
         <div class="msg-sys-admin-body">${subjectLine}</div>
         <div class="msg-sys-admin-actions">
