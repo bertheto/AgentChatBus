@@ -1034,6 +1034,24 @@ async def _get_new_messages_since(
         limit=limit,
         include_system_prompt=False,
     )
+    visible_msgs: list[Message] = []
+    for m in msgs:
+        meta = None
+        if isinstance(m.metadata, str) and m.metadata.strip():
+            try:
+                meta = json.loads(m.metadata)
+            except Exception:
+                meta = None
+        elif isinstance(m.metadata, dict):
+            meta = m.metadata
+
+        if isinstance(meta, dict):
+            visibility = str(meta.get("visibility") or "").strip().lower()
+            audience = str(meta.get("audience") or "").strip().lower()
+            if visibility == "human_only" or audience == "human":
+                continue
+        visible_msgs.append(m)
+
     return [
         {
             "msg_id": m.id,
@@ -1043,7 +1061,7 @@ async def _get_new_messages_since(
             "content": m.content,
             "created_at": m.created_at.isoformat(),
         }
-        for m in msgs
+        for m in visible_msgs
     ]
 
 

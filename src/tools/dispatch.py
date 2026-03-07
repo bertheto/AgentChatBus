@@ -538,9 +538,16 @@ async def handle_thread_get(db, arguments: dict[str, Any]) -> list[types.TextCon
 
 async def handle_msg_post(db, arguments: dict[str, Any]) -> list[types.TextContent]:
     thread_id = arguments["thread_id"]
-    
-    # Get agent_id from connection context for wait state management
-    connection_agent_id, _ = src.mcp_server.get_connection_agent()
+
+    author_candidate = arguments.get("author")
+    author_agent_id: str | None = None
+    if isinstance(author_candidate, str) and author_candidate:
+        try:
+            author_agent = await crud.agent_get(db, author_candidate)
+            if author_agent is not None:
+                author_agent_id = author_agent.id
+        except Exception:
+            author_agent_id = None
 
     try:
         msg = await crud.msg_post(
@@ -557,8 +564,8 @@ async def handle_msg_post(db, arguments: dict[str, Any]) -> list[types.TextConte
         )
         
         # Agent posted a message - exit wait state for this thread
-        if connection_agent_id:
-            await crud.thread_wait_exit(db, thread_id, connection_agent_id)
+        if author_agent_id:
+            await crud.thread_wait_exit(db, thread_id, author_agent_id)
     except RateLimitExceeded as e:
         return [types.TextContent(type="text", text=json.dumps({
             "error": "Rate limit exceeded",
@@ -569,23 +576,11 @@ async def handle_msg_post(db, arguments: dict[str, Any]) -> list[types.TextConte
     except (MissingSyncFieldsError, SeqMismatchError, ReplyTokenInvalidError, ReplyTokenExpiredError, ReplyTokenReplayError) as e:
         error_type = type(e).__name__
 
-        # Invalidate issued tokens to force next msg_wait to return a fresh sync context quickly.
-        # Preferred source is connection-bound agent_id. If that is unavailable,
-        # fallback to author only when author is a valid registered agent_id.
-        invalidate_agent_id = connection_agent_id
-        if not invalidate_agent_id:
-            author_candidate = arguments.get("author")
-            if isinstance(author_candidate, str) and author_candidate:
-                try:
-                    author_agent = await crud.agent_get(db, author_candidate)
-                    if author_agent is not None:
-                        invalidate_agent_id = author_agent.id
-                except Exception:
-                    invalidate_agent_id = None
-
-        if invalidate_agent_id:
-            await crud.reply_tokens_invalidate_for_agent(db, thread_id, invalidate_agent_id)
-            await crud.msg_wait_refresh_request_set(db, thread_id, invalidate_agent_id, reason=error_type)
+        # Refresh-request ownership must follow the validated author agent.
+        # Using connection context here can corrupt another agent's wait state.
+        if author_agent_id:
+            await crud.reply_tokens_invalidate_for_agent(db, thread_id, author_agent_id)
+            await crud.msg_wait_refresh_request_set(db, thread_id, author_agent_id, reason=error_type)
 
         if isinstance(e, SeqMismatchError):
             return [types.TextContent(type="text", text=json.dumps({

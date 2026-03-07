@@ -366,6 +366,13 @@ async def test_msg_post_seq_mismatch_returns_first_read_messages():
     await crud._msg_create_system(
         db,
         thread.id,
+        "human-only hidden update",
+        metadata={"visibility": "human_only", "ui_type": "admin_switch_confirmation_required"},
+        clear_auto_admin=False,
+    )
+    await crud._msg_create_system(
+        db,
+        thread.id,
         "sixth update",
         clear_auto_admin=False,
     )
@@ -387,6 +394,7 @@ async def test_msg_post_seq_mismatch_returns_first_read_messages():
     assert err_payload["action"] == "READ_MESSAGES_THEN_CALL_MSG_WAIT"
     assert "CRITICAL_REMINDER" in err_payload
     assert len(err_payload["new_messages_1st_read"]) >= 5
+    assert all(m["content"] != "human-only hidden update" for m in err_payload["new_messages_1st_read"])
 
     await db.close()
 
@@ -417,6 +425,105 @@ async def test_msg_post_invalid_token_does_not_claim_new_messages_arrived():
     assert "REMINDER" in err_payload
     assert "CRITICAL_REMINDER" not in err_payload
     assert "new_messages_1st_read" not in err_payload
+
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_msg_post_success_clears_wait_state_for_author_not_connection_agent():
+    db = await aiosqlite.connect(":memory:")
+    db.row_factory = aiosqlite.Row
+    await init_schema(db)
+
+    thread = await crud.thread_create(db, topic="Author Owns Success State")
+    author_agent = await crud.agent_register(db, ide="VS Code", model="GPT-5.3-Codex")
+    other_agent = await crud.agent_register(db, ide="VS Code", model="GPT-5.3-Codex")
+
+    sync = await crud.issue_reply_token(db, thread.id, author_agent.id)
+    await crud.thread_wait_enter(db, thread.id, author_agent.id, 300000)
+    await crud.thread_wait_enter(db, thread.id, other_agent.id, 300000)
+
+    src.mcp_server._current_agent_id.set(other_agent.id)
+    src.mcp_server._current_agent_token.set(other_agent.token)
+    src.mcp_server.set_connection_agent(other_agent.id, other_agent.token)
+
+    posted = await handle_msg_post(
+        db,
+        {
+            "thread_id": thread.id,
+            "author": author_agent.id,
+            "content": "author posts successfully",
+            "expected_last_seq": sync["current_seq"],
+            "reply_token": sync["reply_token"],
+            "role": "assistant",
+        },
+    )
+    posted_payload = json.loads(posted[0].text)
+    assert posted_payload["seq"] == 1
+
+    states = await crud.thread_wait_states_grouped(db)
+    assert author_agent.id not in states.get(thread.id, {})
+    assert other_agent.id in states.get(thread.id, {})
+
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_msg_post_failure_refresh_request_follows_author_not_connection_agent():
+    db = await aiosqlite.connect(":memory:")
+    db.row_factory = aiosqlite.Row
+    await init_schema(db)
+
+    thread = await crud.thread_create(db, topic="Author Owns Failure State")
+    author_agent = await crud.agent_register(db, ide="VS Code", model="GPT-5.3-Codex")
+    other_agent = await crud.agent_register(db, ide="VS Code", model="GPT-5.3-Codex")
+
+    sync = await crud.issue_reply_token(db, thread.id, author_agent.id)
+    await crud.msg_post(
+        db,
+        thread.id,
+        author=author_agent.id,
+        content="seed",
+        expected_last_seq=sync["current_seq"],
+        reply_token=sync["reply_token"],
+        role="assistant",
+    )
+
+    waited = await handle_msg_wait(
+        db,
+        {
+            "thread_id": thread.id,
+            "after_seq": 1,
+            "timeout_ms": 1,
+            "return_format": "json",
+            "agent_id": author_agent.id,
+            "token": author_agent.token,
+        },
+    )
+    wait_payload = json.loads(waited[0].text)
+
+    src.mcp_server._current_agent_id.set(other_agent.id)
+    src.mcp_server._current_agent_token.set(other_agent.token)
+    src.mcp_server.set_connection_agent(other_agent.id, other_agent.token)
+
+    failed = await handle_msg_post(
+        db,
+        {
+            "thread_id": thread.id,
+            "author": author_agent.id,
+            "content": "stale author post",
+            "expected_last_seq": 0,
+            "reply_token": wait_payload["reply_token"],
+            "role": "assistant",
+        },
+    )
+    failed_payload = json.loads(failed[0].text)
+    assert failed_payload["error"] == "SeqMismatchError"
+
+    author_refresh = await crud.msg_wait_refresh_request_get(db, thread.id, author_agent.id)
+    other_refresh = await crud.msg_wait_refresh_request_get(db, thread.id, other_agent.id)
+    assert author_refresh is not None
+    assert other_refresh is None
 
     await db.close()
 
