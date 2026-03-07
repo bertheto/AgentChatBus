@@ -16,6 +16,48 @@
     },
   };
 
+  /**
+   * Common dialog positioning logic - positions dialog near click coordinate
+   * @param {HTMLElement} dialogElement - The dialog element to position
+   * @param {number|null} clickX - X coordinate of click (null to center)
+   * @param {number|null} clickY - Y coordinate of click (null to center)
+   * @param {number} dialogWidth - Width of dialog
+   * @param {number} dialogHeight - Height of dialog
+   */
+  function positionDialogNearClick(dialogElement, clickX, clickY, dialogWidth, dialogHeight) {
+    if (!dialogElement || clickX === null || clickY === null) {
+      // Center the dialog (default behavior)
+      dialogElement.style.position = '';
+      dialogElement.style.left = '';
+      dialogElement.style.top = '';
+      dialogElement.style.margin = '';
+      return;
+    }
+
+    const padding = 16;
+    let left = clickX;
+    let top = clickY;
+
+    // If the right edge overflows, shift left
+    if (left + dialogWidth > window.innerWidth - padding) {
+      left = window.innerWidth - dialogWidth - padding;
+    }
+
+    // If the bottom edge overflows, shift up
+    if (top + dialogHeight > window.innerHeight - padding) {
+      top = window.innerHeight - dialogHeight - padding;
+    }
+
+    // Clamp to left and top boundaries
+    left = Math.max(padding, left);
+    top = Math.max(padding, top);
+
+    dialogElement.style.position = 'fixed';
+    dialogElement.style.left = `${left}px`;
+    dialogElement.style.top = `${top}px`;
+    dialogElement.style.margin = '0';
+  }
+
   function getOverlay(configKey) {
     const cfg = MODAL_CONFIGS[configKey];
     if (!cfg) return null;
@@ -339,6 +381,7 @@
   }
 
   window.AcbModals = {
+    positionDialogNearClick,
     openThreadModal,
     closeThreadModal,
     submitThreadModal,

@@ -2344,6 +2344,69 @@ acb-confirm-dialog .confirm-actions {
   background: #b91c1c;
 }
 
+/* ── Input dialog ───────────────────── */
+acb-input-dialog dialog {
+  background: var(--bg-card);
+  border: 1px solid var(--border-light);
+  border-radius: 14px;
+  padding: 24px 28px;
+  width: 420px;
+  max-width: 90vw;
+  box-shadow: var(--shadow);
+  color: var(--text-1);
+  margin: auto;
+}
+
+acb-input-dialog dialog::backdrop {
+  background: rgba(0, 0, 0, .55);
+}
+
+acb-input-dialog .input-title {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 0 0 12px;
+}
+
+acb-input-dialog .input-message {
+  font-size: 13px;
+  color: var(--text-2);
+  margin: 0 0 16px;
+  line-height: 1.5;
+}
+
+acb-input-dialog .input-field {
+  width: 100%;
+  padding: 8px 12px;
+  font-size: 13px;
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  background: var(--bg-panel);
+  color: var(--text-1);
+  font-family: inherit;
+  margin: 0 0 20px;
+  box-sizing: border-box;
+  transition: border-color .15s, background .15s;
+}
+
+acb-input-dialog .input-field:focus {
+  outline: none;
+  border-color: var(--accent);
+  background: var(--bg-panel);
+}
+
+acb-input-dialog .input-field::placeholder {
+  color: var(--text-3);
+}
+
+acb-input-dialog .input-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
 #footer-link {
   display: inline-flex;
   align-items: center;

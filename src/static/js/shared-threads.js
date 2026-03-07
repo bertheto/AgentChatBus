@@ -166,9 +166,28 @@
     return null;
   }
 
-  async function closeThread({ threadId, api, refreshThreads }) {
+  async function closeThread({ threadId, api, refreshThreads, x = null, y = null }) {
     if (!threadId) return;
-    const summary = prompt("Optional summary for this thread (leave blank to skip):");
+    
+    const inputDialog = document.getElementById('input-dialog');
+    if (!inputDialog) {
+      console.error('[closeThread] Input dialog not found');
+      return;
+    }
+
+    const summary = await inputDialog.show({
+      title: 'Close Thread',
+      message: 'Optional summary for this thread (leave blank to skip):',
+      placeholder: 'Enter summary...',
+      value: '',
+      confirmText: 'Close',
+      x,
+      y,
+    });
+
+    // User cancelled the dialog
+    if (summary === null) return;
+
     await api(`/api/threads/${threadId}/close`, {
       method: "POST",
       body: JSON.stringify({ summary: summary || null }),
@@ -227,9 +246,9 @@
   }) {
     const ctx = getContextMenuThread();
     if (!ctx) return;
-    const id = ctx.id;
+    const { id, _clickX = null, _clickY = null } = ctx;
     hideThreadContextMenu();
-    await closeThread(id);
+    await closeThread(id, _clickX, _clickY);
   }
 
   async function exportThread({ threadId, topic }) {

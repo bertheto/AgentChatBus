@@ -38,34 +38,11 @@
     }
 
     _positionDialog(x, y) {
-      if (!x || !y) return;
-
       const dialogWidth = this._dialog.offsetWidth || 420;
       const dialogHeight = this._dialog.offsetHeight || 200;
-      const padding = 16;
-
-      // Compute dialog position, keeping it within the viewport
-      let left = x;
-      let top = y;
-
-      // If the right edge overflows, shift left
-      if (left + dialogWidth > window.innerWidth - padding) {
-        left = window.innerWidth - dialogWidth - padding;
+      if (window.AcbModals && typeof window.AcbModals.positionDialogNearClick === 'function') {
+        window.AcbModals.positionDialogNearClick(this._dialog, x, y, dialogWidth, dialogHeight);
       }
-
-      // If the bottom edge overflows, shift up
-      if (top + dialogHeight > window.innerHeight - padding) {
-        top = window.innerHeight - dialogHeight - padding;
-      }
-
-      // Clamp to left and top boundaries
-      left = Math.max(padding, left);
-      top = Math.max(padding, top);
-
-      this._dialog.style.position = 'fixed';
-      this._dialog.style.left = `${left}px`;
-      this._dialog.style.top = `${top}px`;
-      this._dialog.style.margin = '0';
     }
 
     /**
