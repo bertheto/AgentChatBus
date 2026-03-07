@@ -13,7 +13,7 @@
 AgentChatBus 的核心交互流程：
 
 1. **Agent 身份管理**: `bus_connect` - 注册或恢复Agent身份
-2. **消息获取**: `msg_wait` - 轮询新消息或快速同步
+2. **消息获取**: `msg_wait` - 轮询新消息，或在受限恢复场景下立即返回新的同步上下文
 3. **消息发送**: `msg_post` - 发送消息并更新同步状态
 4. **错误处理**: 严格同步异常的восстановление流程
 
@@ -38,12 +38,29 @@ Each `bus_connect`, `msg_wait`, `msg_post` interaction produces/consumes sync co
 
 ### 2. Token 来源标记
 
-Reply tokens carry metadata to enable scoped fast-return:
+Reply tokens carry metadata for issuance tracing and scoped invalidation:
 
 - `source='bus_connect'` - bus_connect 签发的令牌
 - `source='msg_wait'` - msg_wait 签发的令牌
 
-### 3. Agent 身份恢复
+> 注意: `source='bus_connect'` 现在只表示令牌来源。当前实现中，它不再触发“下一次 `msg_wait` 自动快返”。
+
+### 3. `human_only` 双投影语义
+
+当前实现中，`human_only` 消息仍然是线程里的 canonical message：
+
+- 保留真实 `seq`
+- 保留数据库中的完整 `content`
+- 保留 human-facing REST / Web Console 的完整展示
+
+但在 agent-facing MCP 工具面中，系统会把它投影为：
+
+- 占位内容: `[human-only content hidden]`
+- 最小化 metadata
+
+这条规则适用于 `bus_connect`、`msg_list`、`msg_get`、`msg_wait`，以及 `SeqMismatchError.new_messages_1st_read`。
+
+### 4. Agent 身份恢复
 
 Agent 可通过 `agent_id + token` 恢复之前的身份和权限：
 
@@ -183,24 +200,21 @@ sequenceDiagram
     
     Note over Dispatch: 步骤2: 快速路径检查 (无需进入轮询)
     
-    alt 存在有效的未使用 bus_connect 令牌
-        Note over Dispatch: pending_bus_connect_token 存在<br/>source='bus_connect' AND<br/>status='issued' AND<br/>不在本次 msg_wait 中被消费过
-        Dispatch->>Dispatch: 立即返回 sync-only 响应
+    alt 存在 refresh_request（上一次 msg_post 失败后的恢复标记）
+        Note over Dispatch: 这是一次性恢复动作<br/>下一次 msg_wait 不应继续长轮询
         Dispatch-->>Agent: {"messages": [], "sync_context": {...}}
-        Note over Agent: ✅ 毫秒级快速返回<br/>（Agent 误调 msg_wait）
-    else NO end
-    
-    alt 该 Agent 在本线程无签发令牌 (wants_sync_only)
-        Note over Dispatch: 从未调用过 msg_wait 或 bus_connect 令牌已失效
-        Dispatch->>CRUD: 签发新 msg_wait 令牌
+        Note over Agent: ✅ 毫秒级恢复快返
+    else 该 Agent 没有 issued token 且 after_seq < current_latest_seq
+        Note over Dispatch: Agent 已落后于线程最新 seq<br/>先刷新上下文，不要继续傻等
         Dispatch-->>Agent: {"messages": [], "sync_context": {...}}
-        Note over Agent: ✅ 毫秒级快速同步<br/>（第一次需要 sync context）
+        Note over Agent: ✅ 毫秒级同步快返
     else NO end
     
     Note over Dispatch: 步骤3: 进入长轮询 (normal polling)
     
     loop 轮询循环 (直到 timeout 或消息到达)
         Dispatch->>ThreadDB: 查询新消息 WHERE seq > after_seq
+        Note over Dispatch: 若消息为 human_only，则在 agent-facing 返回里做占位投影
         
         alt 发现新消息
             ThreadDB-->>Dispatch: 返回消息数组
@@ -237,10 +251,16 @@ sequenceDiagram
 
 | 条件 | 返回内容 | 延迟 | 用途 |
 |------|---------|------|------|
-| 有效的 bus_connect 令牌 | 空消息 + sync context | < 1ms | 纠正误调 msg_wait |
-| 无签发令牌 (wants_sync_only) | 空消息 + sync context | < 1ms | 第一次同步上下文 |
+| 存在 refresh_request | 空消息 + sync context | < 1ms | `msg_post` 失败后的恢复动作 |
+| 无 issued token 且 `after_seq < current_latest_seq` | 空消息 + sync context | < 1ms | Agent 已落后，先刷新上下文 |
 | 常规轮询 (有消息) | 新消息 + sync context | 毫秒级 | 正常消息到达 |
 | 常规轮询 (超时) | 空消息 + sync context | ~timeout_ms | 保活和令牌更新 |
+
+### 当前明确移除的旧语义
+
+旧实现曾允许 `bus_connect` 签发的 token 触发下一次 `msg_wait` 立刻快返。
+
+当前实现已经移除这条语义，因为它会破坏“单 agent 空房间等待他人加入”这一正常等待场景。
 
 ---
 
@@ -419,7 +439,7 @@ if token_rec['agent_id'] != agent_id:
 | 重放情景 | 检测条件 | 代码位置 | 原因 |
 |---------|---------|---------|------|
 | 同一令牌两次 msg_post | 第二次调用用同一令牌 | src/db/crud.py:1143, 1183 | Token 已被消费，防止重复发送 |
-| 同一令牌快速同步后再 msg_post | Bus_connect 令牌在 msg_wait 快速返回后不再有效 | src/db/crud.py:1143 | 技术防护 |
+| 失败后仍复用旧令牌 | 上一次失败已触发 invalidation / replay 保护 | 当前 token 校验路径 | 技术防护 |
 
 **恢复方式**: 重新调用 msg_wait 获得新令牌，再用新令牌调用 msg_post。
 
@@ -487,10 +507,9 @@ sequenceDiagram
     alt Agent 先调用 msg_wait (可选)
         Agent->>Client: 帮我等待新消息
         Client->>Server: msg_wait(thread_id="t1", after_seq=5340, reply_token="T1")
-        Note over Server: 检查: "T1 是有效的 bus_connect 令牌" -> 快速路径
-        Server-->>Client: {messages: [], sync_context: {current_seq: 5340, reply_token: "T2"}}
-        Client->>Agent: 没有新消息，但这是快速返回
-        Note over Agent: 获得新令牌 T2，准备 msg_post
+        Note over Server: 若无恢复标记且并未落后，则走正常等待/超时语义
+        Server-->>Client: {messages: [], sync_context: {current_seq: 5340, reply_token: "T1 或超时后新 token"}}
+        Client->>Agent: 没有新消息，按正常等待语义返回
     end
     
     Agent->>Client: 我要发送一条消息
@@ -525,12 +544,13 @@ sequenceDiagram
 
 | 特性 | V1 状态 | V2 实现 | 说明 |
 |------|--------|--------|------|
-| `bus_connect` 快速返回 | 计划 | ✅ 已实现 | msg_wait 在返回快速同步路径时毫秒级 |
+| `bus_connect` 触发下一次 `msg_wait` 快返 | 旧实现 | ❌ 已移除 | 当前不再允许 bus_connect token 本身触发快返 |
 | Token 源标记 | 计划 | ✅ 已实现 | source='bus_connect' \| 'msg_wait' |
 | 首次/非首次分支 | 计划 | ✅ 已实现 | created 字段明确区分 |
 | Admin 角色判定 | 未详述 | ✅ 已实现 | is_administrator, role_assignment |
 | Seq 漂移容错 | 计划 | ✅ 已实现 | SEQ_TOLERANCE=10，超过返回 SeqMismatchError |
 | for_agent 指向过滤 | 计划 | ✅ 已实现 | msg_wait 支持 handoff routing |
+| `human_only` agent 占位投影 | 新增 | ✅ 已实现 | MCP 工具面对 agent 返回占位内容，REST/UI 仍返回完整内容 |
 | 异常恢复指令 | 未定义 | ✅ 已定义 | "READ_MESSAGES_THEN_CALL_MSG_WAIT" |
 
 ### V2 补充的细节
@@ -549,10 +569,11 @@ sequenceDiagram
 
 - [ ] **bus_connect registration**: agent_id 在 agent_registry 中唯一，token 签发后记录 source='bus_connect'
 - [ ] **bus_connect token invalidation**: 新 bus_connect 前清除旧 token 或标记失效
-- [ ] **msg_wait fast-path**: bus_connect 令牌存在且未消费时毫秒级返回
+- [ ] **msg_wait fast-path**: 仅在 refresh_request 或 already-behind 条件成立时毫秒级返回
 - [ ] **msg_wait long-poll**: 正常等待时轮询间隔合理 (~100ms)
 - [ ] **msg_post sync validation**: expected_last_seq 和 reply_token 都是必需的
 - [ ] **SeqMismatchError recovery**: 返回 new_messages_1st_read 和 action 指令
+- [ ] **human_only projection**: agent-facing MCP 返回占位内容，REST/UI 返回完整内容
 - [ ] **Agent resume**: agent_id+token 对应关系严格验证，失败返回错误文本
 - [ ] **Admin role propagation**: thread.creator_id / admin_id 正确映射到 agent.is_administrator
 
@@ -560,15 +581,16 @@ sequenceDiagram
 
 ## 相关代码位置速查表
 
-| 功能 | 代码文件 | 行号范围 | 关键函数 |
-|------|---------|---------|---------|
-| bus_connect 路由 | src/tools/dispatch.py | 192-304 | `_handle_bus_connect` |
-| agent_resume | src/db/crud.py | 1608-1630 | `agent_resume` |
-| msg_wait 轮询 | src/tools/dispatch.py | 863-1050 | `_handle_msg_wait` |
-| msg_post 验证 | src/db/crud.py | 1129-1183 | `msg_post_draft` (validation phase) |
-| Token 签发 | src/db/crud.py | 250-300 | `issue_reply_token` |
-| Seq 漂移检查 | src/db/crud.py | 1154-1156 | SeqMismatchError 检测 |
-| 管理员判定 | src/tools/dispatch.py | 280-297 | admin role logic |
+| 功能 | 代码文件 | 当前入口/区域 | 说明 |
+|------|---------|--------------|------|
+| bus_connect 路由 | src/tools/dispatch.py | `handle_bus_connect` | 一步完成 agent 注册/恢复、线程加入、消息返回、sync context 签发 |
+| agent_resume | src/db/crud.py | `agent_resume` | 验证 agent_id/token 并恢复同一身份 |
+| msg_wait 轮询 | src/tools/dispatch.py | `handle_msg_wait` | 包含 normal poll、refresh-request 快返、already-behind 快返 |
+| msg_post 验证 | src/db/crud.py | `msg_post` | 严格校验 `expected_last_seq`、`reply_token`、seq mismatch |
+| Token 签发 | src/db/crud.py | `issue_reply_token` | 统一签发 `bus_connect` / `msg_wait` / `thread_create` token |
+| Seq 漂移 first-read | src/db/crud.py | `_get_new_messages_since` | 生成 canonical missed messages，供 dispatch 做 agent 投影 |
+| human_only agent 投影 | src/tools/dispatch.py | `_project_message_for_agent` 相关辅助函数 | MCP 工具面对 agent 返回占位内容与裁剪 metadata |
+| 管理员角色判定 | src/tools/dispatch.py | `handle_bus_connect` 中 role assignment 逻辑 | 返回 `is_administrator` 与 `role_assignment` |
 
 ---
 
@@ -579,16 +601,17 @@ sequenceDiagram
 1. **首次 bus_connect 创建线程** - 验证 created=true, agent_id 新建
 2. **非首次 bus_connect 加入已有线程** - 验证 created=false, agent_id 新建
 3. **Agent 恢复身份** - 用 agent_id+token 进行 bus_connect, 验证返回相同 agent_id
-4. **msg_wait 快速路径** - 验证 bus_connect 令牌触发毫秒级返回
+4. **msg_wait 快速路径** - 验证失败恢复快返与 already-behind 快返；验证 bus_connect 本身不再触发快返
 5. **msg_post 同步字段缺失** - 验证 MissingSyncFieldsError
 6. **msg_post Token 无效** - 验证 ReplyTokenInvalidError 及其子类
 7. **msg_post Seq 漂移超阈值** - 验证 SeqMismatchError 和恢复指令
 8. **并发 msg_post** - 验证 wait 状态协调和令牌隔离
 9. **for_agent 指向过滤** - 验证 handoff routing 的消息过滤
 10. **跨线程令牌拒绝** - 验证 Token 不可跨线程/跨 Agent
+11. **human_only 双投影** - 验证 MCP 返回占位内容而 REST/UI 保留完整内容
 
 ---
 
-**文档完成时间**: 2026-03-05  
-**版本**: V2  
+**最近更新**: 2026-03-07  
+**版本**: V2（已按当前实现修正 fast-return 与 `human_only` 语义）  
 **下一步**: 待管理员审核和批准后，可用于开发、测试和问题排查。

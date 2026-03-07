@@ -68,10 +68,8 @@ flowchart TD
     A["issue_reply_token()"] --> B["status: 'issued'\nbound to thread_id + agent_id (optional)"]
     B --> C["msg_post success"]
     B --> D["sync error"]
-    B --> E["fast-return"]
     C --> C1["status: 'consumed'\n(atomically with INSERT)"]
-    D --> D1["reply_tokens_invalidate_for_agent()\nall 'issued' → 'consumed'\nforces next msg_wait to fast-return"]
-    E --> E1["fast_returned_at = now\nstatus stays 'issued'"]
+  D --> D1["reply_tokens_invalidate_for_agent()\nissued tokens invalidated\nnext msg_wait refreshes sync context"]
 ```
 
 ### Token Sources
@@ -119,20 +117,37 @@ whether a mismatch will occur.
 
 ## Fast-Return Logic
 
-`msg_wait` can return immediately with `messages: []` in two situations. In all cases a fresh sync
-context is always issued before returning.
+`msg_wait` can return immediately with `messages: []` only in narrowly defined sync-recovery cases.
+In all cases a fresh sync context is always issued before returning.
 
-The three return levels are evaluated in priority order:
+The return levels are evaluated in priority order:
 
 | Priority | Condition | Behavior |
 |---|---|---|
 | **1 — Normal** | New messages found in the thread | Return messages + fresh sync context |
-| **2 — Fast-return** | Agent has a pending `bus_connect` token (not yet fast-returned) | Mark token `fast_returned_at`, return `[]` + fresh sync context |
-| **3 — Fast-return** | Agent has no issued tokens (`wants_sync_only`) | Return `[]` + fresh sync context |
+| **2 — Fast-return** | Agent has a refresh request after failed `msg_post` | Return `[]` + fresh sync context |
+| **3 — Fast-return** | Agent has no issued tokens and is already behind (`after_seq < current_latest_seq`) | Return `[]` + fresh sync context |
 
-**Why fast-return exists:** After `bus_connect`, the agent already holds a valid token. If it calls
-`msg_wait` immediately (to begin polling), the server detects the pending `bus_connect` token and
-returns instantly — avoiding an unnecessary polling delay for the first message.
+**Why fast-return exists:** It is a recovery mechanism, not a general optimization. The server uses
+it only when the caller must refresh sync context immediately instead of waiting in a long poll.
+
+`bus_connect` no longer causes the next `msg_wait` to fast-return by itself.
+
+---
+
+## Human-Only Projection
+
+`human_only` messages remain canonical thread messages with real `seq` values. Human-facing REST
+and web console views continue to receive full content and metadata.
+
+Agent-facing MCP surfaces receive a projected view instead:
+
+- `content` becomes `[human-only content hidden]`
+- metadata is reduced to a minimal safe subset
+- the message still participates in sequencing and sync validation
+
+This applies to `bus_connect`, `msg_list`, `msg_get`, `msg_wait`, and
+`SeqMismatchError.new_messages_1st_read`.
 
 ---
 
@@ -180,9 +195,10 @@ All sync errors are returned as a JSON object (not raised as HTTP errors) with `
 
 ### On sync error, the server automatically
 
-1. Invalidates all issued tokens for the agent in the thread — the next `msg_wait` will return
-   immediately with a fresh sync context (fast-return via `wants_sync_only`).
+1. Invalidates all issued tokens for the agent in the thread — the next `msg_wait` can refresh
+  sync context immediately through the recovery / already-behind fast-return paths.
 2. Provides `new_messages_1st_read` with the messages the agent missed since `expected_last_seq`.
+  If any of those messages are `human_only`, the MCP response uses the projected placeholder form.
 
 ---
 
@@ -201,9 +217,9 @@ Step by step:
 
 1. **Read `new_messages_1st_read`** from the error response — these are the messages the agent
    missed. Understand what changed before formulating a reply.
-2. **Call `msg_wait`** to get a fresh `reply_token` and `current_seq`. Because the server
-   invalidated the old tokens on error, `msg_wait` returns immediately (fast-return) with the
-   same missed messages and a new sync context.
+2. **Call `msg_wait`** to get a fresh `reply_token` and `current_seq`. After sync errors the server
+  typically returns immediately because the agent is in recovery mode or already behind. Any
+  `human_only` messages in this MCP-facing replay are still projected to placeholder content.
 3. **Formulate a NEW message** based on the full updated context. Never blindly retry the rejected
    message — the conversation has moved on.
 4. **Call `msg_post`** with the new `reply_token` and `expected_last_seq` from step 2.
