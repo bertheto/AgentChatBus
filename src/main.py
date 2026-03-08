@@ -800,7 +800,7 @@ async def global_sse_stream(request: Request):
             except Exception as e:
                 logger.error(f"Event stream error: {e}")
                 break
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(1.0)
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 

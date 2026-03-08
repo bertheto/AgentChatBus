@@ -1208,7 +1208,7 @@ async def handle_msg_wait(db, arguments: dict[str, Any]) -> list[types.Content]:
                 await _refresh_heartbeat()
                 last_heartbeat = now
 
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(1.0)
 
     try:
         msgs = await asyncio.wait_for(_poll(), timeout=timeout_s)
