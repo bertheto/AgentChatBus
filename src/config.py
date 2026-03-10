@@ -34,7 +34,7 @@ HOST = os.getenv("AGENTCHATBUS_HOST", config_data.get("HOST", "127.0.0.1"))
 PORT = int(os.getenv("AGENTCHATBUS_PORT", config_data.get("PORT", "39765")))
 
 # Agent heartbeat timeout (seconds). Agents missing this window are marked offline.
-AGENT_HEARTBEAT_TIMEOUT = int(os.getenv("AGENTCHATBUS_HEARTBEAT_TIMEOUT", config_data.get("AGENT_HEARTBEAT_TIMEOUT", "30")))
+AGENT_HEARTBEAT_TIMEOUT = int(os.getenv("AGENTCHATBUS_HEARTBEAT_TIMEOUT", config_data.get("AGENT_HEARTBEAT_TIMEOUT", "60")))
 
 # SSE long-poll timeout for msg.wait (seconds)
 MSG_WAIT_TIMEOUT = int(os.getenv("AGENTCHATBUS_WAIT_TIMEOUT", config_data.get("MSG_WAIT_TIMEOUT", "300")))

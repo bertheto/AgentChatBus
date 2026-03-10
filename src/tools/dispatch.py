@@ -1145,8 +1145,10 @@ async def handle_msg_wait(db, arguments: dict[str, Any]) -> list[types.Content]:
     )
     # ─────────────────────────────────────────────────────────────────────────
 
-    # Refresh every 20 seconds to stay online during long-poll waits.
-    HEARTBEAT_INTERVAL = 20.0
+    # Refresh every 40 seconds to stay online during long-poll waits.
+    # LLM-based agents regularly take >20s to respond; 20s was too aggressive
+    # and caused unnecessary heartbeat DB writes. Paired with AGENT_HEARTBEAT_TIMEOUT=60s.
+    HEARTBEAT_INTERVAL = 40.0
 
     async def _refresh_heartbeat() -> None:
         if verified_agent:
