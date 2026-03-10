@@ -48,6 +48,23 @@ import os
 
 logger = logging.getLogger(__name__)
 AGENT_HUMAN_ONLY_PLACEHOLDER = "[human-only content hidden]"
+
+# Per-thread asyncio.Event registry for event-driven msg_wait wake-ups.
+# When msg_post succeeds, the corresponding event is set so that all waiters
+# on that thread wake up immediately instead of waiting for the 1s poll tick.
+# Keys are thread_id strings. Access is safe within a single asyncio event loop
+# (SSE mode — single uvicorn process). The 1s asyncio.sleep fallback in _poll()
+# ensures correctness even if an event is missed (e.g. during hot-module reload).
+_thread_events: dict[str, asyncio.Event] = {}
+
+
+def _get_thread_event(thread_id: str) -> asyncio.Event:
+    """Return (or create) the asyncio.Event for a given thread_id."""
+    if thread_id not in _thread_events:
+        _thread_events[thread_id] = asyncio.Event()
+    return _thread_events[thread_id]
+
+
 AGENT_HUMAN_ONLY_METADATA_KEYS = {
     "visibility",
     "audience",
@@ -794,6 +811,12 @@ async def handle_msg_post(db, arguments: dict[str, Any]) -> list[types.TextConte
             result["handoff_target"] = meta["handoff_target"]
         if ENABLE_STOP_REASON and meta.get("stop_reason"):
             result["stop_reason"] = meta["stop_reason"]
+
+    # Notify any msg_wait callers on this thread that a new message is available.
+    # This allows event-driven wake-up instead of waiting for the 1s poll tick.
+    if thread_id in _thread_events:
+        _thread_events[thread_id].set()
+
     return [types.TextContent(type="text", text=json.dumps(result))]
 
 def _filter_metadata_fields(meta_str: str | None) -> str | None:
@@ -1162,6 +1185,7 @@ async def handle_msg_wait(db, arguments: dict[str, Any]) -> list[types.Content]:
     async def _poll():
         last_heartbeat = asyncio.get_event_loop().time()
         local_after_seq = after_seq
+        event = _get_thread_event(thread_id)
         while True:
             raw_msgs = await crud.msg_list(db, thread_id, after_seq=local_after_seq, include_system_prompt=False)
             msgs = _project_messages_for_agent(raw_msgs)
@@ -1208,7 +1232,15 @@ async def handle_msg_wait(db, arguments: dict[str, Any]) -> list[types.Content]:
                 await _refresh_heartbeat()
                 last_heartbeat = now
 
-            await asyncio.sleep(1.0)
+            # Event-driven wake-up: wait for msg_post to signal this thread's event.
+            # Falls back to a 1s timeout so correctness is preserved even if the
+            # event fires before we start waiting (spurious-wakeup-safe: the outer
+            # while-True loop re-checks crud.msg_list after every wake-up).
+            event.clear()
+            try:
+                await asyncio.wait_for(event.wait(), timeout=1.0)
+            except asyncio.TimeoutError:
+                pass
 
     try:
         msgs = await asyncio.wait_for(_poll(), timeout=timeout_s)
