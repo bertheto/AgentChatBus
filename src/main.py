@@ -671,7 +671,9 @@ sse_transport = SseServerTransport("/mcp/messages/")
 _live_mcp_sse_streams: dict[str, float] = {}
 
 
-class _SseCompletedResponse:
+from fastapi import Response
+
+class _SseCompletedResponse(Response):
     """
     Sentinel returned from mcp_sse_endpoint after connect_sse() exits.
 
@@ -691,9 +693,10 @@ class _SseCompletedResponse:
 
 @app.get("/mcp/sse")
 async def mcp_sse_endpoint(request: Request):
-    """MCP SSE endpoint consumed by MCP clients (Claude Desktop, Cursor, …)."""
-    from src.mcp_server import init_session_id, pop_agent_for_session, mark_sse_connected, mark_sse_disconnected
+    """MCP SSE endpoint consumed by legacy MCP clients (Claude Desktop, etc.)."""
+    from src.mcp_server import init_session_id, pop_agent_for_session, mark_sse_connected, mark_sse_disconnected, _session_language
     from src.db import crud
+    from src.mcp_server import server as mcp_server
     
     # Track real `/mcp/sse` stream connection lifetime.
     stream_id = str(uuid.uuid4())
@@ -732,6 +735,86 @@ async def mcp_sse_endpoint(request: Request):
     finally:
         _live_mcp_sse_streams.pop(stream_id, None)
         mark_sse_disconnected(session_id)  # always remove from live-connection set
+    return _SseCompletedResponse()
+
+_streamable_transports = {}
+
+@app.post("/mcp/sse")
+async def mcp_streamable_http_endpoint(request: Request):
+    """MCP Streamable HTTP endpoint consumed by new MCP clients (Cursor V2)."""
+    try:
+        from mcp.server.streamable_http import StreamableHTTPServerTransport, MCP_SESSION_ID_HEADER
+    except ImportError:
+        from fastapi import Response
+        return Response("Streamable HTTP requires latest mcp-sdk", status_code=501)
+
+    from src.mcp_server import init_session_id, pop_agent_for_session, mark_sse_connected, mark_sse_disconnected, _session_id, _session_language
+    from src.db import crud
+    from src.mcp_server import server as mcp_server
+    
+    session_id = None
+    for k, v in request.headers.items():
+        if k.lower() == MCP_SESSION_ID_HEADER.lower():
+            session_id = v
+            break
+
+    if not session_id:
+        session_id = init_session_id()
+        mark_sse_connected(session_id)
+        
+        stream_id = str(uuid.uuid4())
+        _live_mcp_sse_streams[stream_id] = time.time()
+        
+        transport = StreamableHTTPServerTransport(mcp_session_id=session_id)
+        _streamable_transports[session_id] = transport
+        logger.debug(f"New MCP Streamable HTTP connection: session_id={session_id[:8]}")
+        
+        lang = request.query_params.get("lang")
+        ready_event = asyncio.Event()
+        
+        async def run_server(sid: str, l: str | None, tid: str):
+            _session_id.set(sid)
+            if l:
+                _session_language.set(l)
+            try:
+                async with transport.connect() as (read_stream, write_stream):
+                    ready_event.set()
+                    await mcp_server.run(
+                        read_stream, write_stream, mcp_server.create_initialization_options()
+                    )
+            except Exception as exc:
+                # If we crash before yielding, make sure we awake the endpoint so it returns 500
+                ready_event.set()
+                agent_id, token = pop_agent_for_session(sid)
+                if agent_id and token:
+                    try:
+                        db = await get_db()
+                        await crud.agent_unregister(db, agent_id, token)
+                        logger.info(f"Agent {agent_id} marked offline (Streamable HTTP disconnect)")
+                    except Exception as db_err:
+                        logger.warning(f"Failed to mark agent {agent_id} offline: {db_err}")
+                else:
+                    logger.debug("MCP Streamable HTTP session ended: %s: %s", type(exc).__name__, exc)
+            finally:
+                _live_mcp_sse_streams.pop(tid, None)
+                _streamable_transports.pop(sid, None)
+                mark_sse_disconnected(sid)
+                
+        asyncio.create_task(run_server(session_id, lang, stream_id))
+        await ready_event.wait()
+    else:
+        transport = _streamable_transports.get(session_id)
+        if not transport:
+            from fastapi import Response
+            return Response("Invalid or expired session ID", status_code=404)
+        
+    _session_id.set(session_id)
+    
+    try:
+        await transport.handle_request(request.scope, request.receive, request._send)
+    except Exception as e:
+        logger.error(f"Streamable HTTP handle_request error: {e}")
+        
     return _SseCompletedResponse()
 
 
