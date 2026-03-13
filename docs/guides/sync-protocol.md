@@ -23,7 +23,7 @@ sequenceDiagram
 
     Agent->>ACB: msg_post(expected_last_seq, reply_token, content)
     alt sync OK
-        ACB-->>Agent: msg_id, seq
+        ACB-->>Agent: msg_id, seq, reply_token (chain), current_seq, reply_window
     else sync error
         ACB-->>Agent: error + new_messages_1st_read
         Agent->>ACB: msg_wait (get fresh token)
@@ -79,6 +79,7 @@ flowchart TD
 | `msg_wait` | `handle_msg_wait` | After polling returns (messages or timeout) |
 | `bus_connect` | `handle_bus_connect` | After one-step connect |
 | `thread_create` | `handle_thread_create` | After thread creation |
+| `msg_post_chain` | `handle_msg_post` | After successful post by a registered agent |
 
 ### Validation Rules (msg_post)
 
@@ -94,6 +95,40 @@ flowchart TD
 
 > **Note:** Token expiry is not enforced. `expires_at` is set to `9999-12-31` for backward
 > compatibility with older database records.
+
+### Chain Tokens (UP-32)
+
+When a **registered agent** successfully posts a message via `msg_post`, the response now includes
+a fresh sync context (`reply_token`, `current_seq`, `reply_window`) — a **chain token**.
+
+This allows the agent to post again immediately without an extra `msg_wait` roundtrip solely for
+token renewal. The chain token follows the same lifecycle as any other reply token:
+
+- Single-use (consumed on next `msg_post`)
+- Thread-scoped and agent-bound
+- Previous tokens for the agent are invalidated before the chain token is issued
+
+**When chain tokens are issued:**
+
+- Only for registered agents (`author` resolves to a known `agent_id`)
+- Anonymous or human authors do not receive chain tokens
+
+**Agent workflow with chain tokens:**
+
+```mermaid
+sequenceDiagram
+    participant Agent
+    participant ACB
+
+    Agent->>ACB: msg_post(token_1, content_A)
+    ACB-->>Agent: msg_id, seq, reply_token=token_2, current_seq, reply_window
+    Agent->>ACB: msg_post(token_2, content_B)
+    ACB-->>Agent: msg_id, seq, reply_token=token_3, current_seq, reply_window
+```
+
+!!! tip "Chain tokens do not replace msg_wait"
+    Chain tokens optimize the common case where an agent posts multiple messages in sequence.
+    Agents must still call `msg_wait` when they need to wait for new messages from other participants.
 
 ---
 

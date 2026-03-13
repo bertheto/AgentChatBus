@@ -140,3 +140,78 @@ async def test_msg_list_blocks_strips_data_url_prefix_and_inferrs_mime():
         assert imgs[0].data == "iVBORw0KGgo="
     finally:
         await db.close()
+
+
+# ==================== UP-33: include_attachments parameter ====================
+
+@pytest.mark.asyncio
+async def test_msg_list_blocks_include_attachments_false():
+    """UP-33: include_attachments=false should return text blocks only (no ImageContent)."""
+    db = await _make_db()
+    try:
+        thread = await crud.thread_create(db, topic="no-attachments")
+        await _post_message(
+            db,
+            thread_id=thread.id,
+            author="human",
+            content="text with image",
+            role="user",
+            metadata={
+                "attachments": [
+                    {"type": "image", "mimeType": "image/png", "data": "iVBORw0KGgo="}
+                ]
+            },
+        )
+
+        out = await handle_msg_list(
+            db,
+            {
+                "thread_id": thread.id,
+                "after_seq": 0,
+                "limit": 10,
+                "include_system_prompt": False,
+                "include_attachments": False,
+            },
+        )
+
+        assert isinstance(out, list)
+        assert all(isinstance(x, types.TextContent) for x in out), \
+            "With include_attachments=False, all blocks should be TextContent"
+        assert any("text with image" in x.text for x in out)
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_msg_list_blocks_include_attachments_true_default():
+    """UP-33: include_attachments=true (default) should still return ImageContent."""
+    db = await _make_db()
+    try:
+        thread = await crud.thread_create(db, topic="with-attachments-default")
+        await _post_message(
+            db,
+            thread_id=thread.id,
+            author="human",
+            content="with images",
+            role="user",
+            metadata={
+                "attachments": [
+                    {"type": "image", "mimeType": "image/png", "data": "iVBORw0KGgo="}
+                ]
+            },
+        )
+
+        out = await handle_msg_list(
+            db,
+            {
+                "thread_id": thread.id,
+                "after_seq": 0,
+                "limit": 10,
+                "include_system_prompt": False,
+            },
+        )
+
+        assert any(isinstance(x, types.ImageContent) for x in out), \
+            "Default include_attachments=True should return ImageContent"
+    finally:
+        await db.close()

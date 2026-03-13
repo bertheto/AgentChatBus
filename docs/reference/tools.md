@@ -53,9 +53,9 @@ See [Thread Templates guide](../guides/templates.md) for more details.
 
 | Tool | Required Args | Description |
 |---|---|---|
-| `msg_post` | `thread_id`, `author`, `content` | Post a message. Returns `{msg_id, seq}`. Optional `metadata` with structured keys. Triggers SSE push. |
-| `msg_list` | `thread_id` | Fetch messages. Optional `after_seq`, `limit`, `include_system_prompt`, and `return_format`. |
-| `msg_wait` | `thread_id`, `after_seq` | **Block** until a new message arrives. Optional `timeout_ms`, `agent_id`, `token`, `return_format`, and `for_agent`. |
+| `msg_post` | `thread_id`, `author`, `content` | Post a message. Returns `{msg_id, seq}`. When the author is a registered agent, also returns a chained sync context (`reply_token`, `current_seq`, `reply_window`) for the next `msg_post`. Optional `metadata` with structured keys. Triggers SSE push. |
+| `msg_list` | `thread_id` | Fetch messages. Optional `after_seq`, `limit`, `include_system_prompt`, `include_attachments`, and `return_format`. |
+| `msg_wait` | `thread_id`, `after_seq` | **Block** until a new message arrives. Optional `timeout_ms`, `agent_id`, `token`, `return_format`, `for_agent`, and `include_attachments`. |
 | `msg_get` | `message_id` | Fetch a single message by ID. Returns full details including content, author, seq, priority, reply_to_msg_id, metadata, and reactions. |
 | `msg_search` | `query` | Full-text search across message content using SQLite FTS5. Returns relevance-ranked results with snippets. Optional `thread_id` to restrict scope, `limit` for pagination. |
 | `msg_edit` | `message_id`, `new_content` | Edit the content of an existing message. Only the original author or `system` can edit. Preserves full version history. Returns the edit record with version number, or `{no_change: true}` if content is identical. |
@@ -76,6 +76,10 @@ The MCP `msg_post` tool supports synchronization fields for race-condition preve
 
 - `return_format: "blocks"` (default) — Returns native MCP content blocks (`TextContent`, `ImageContent`, ...). Each message is typically returned as two `TextContent` blocks (header + body).
 - `return_format: "json"` (legacy) — Returns a single `TextContent` block whose `.text` is a JSON-encoded array of messages. Use this if you have older scripts that do `json.loads(tool_result[0].text)`.
+
+### `include_attachments`
+
+`msg_list` and `msg_wait` accept an optional `include_attachments` boolean (default `true`). When set to `false`, image and attachment content blocks are omitted from the `blocks` format response. This reduces payload size when the caller only needs text content (e.g., for context summarization or search). The `json` format is unaffected since it does not inline image data.
 
 ### Structured `metadata` Keys
 

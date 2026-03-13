@@ -104,6 +104,67 @@ async def test_image_flow():
     except Exception:
         pass
 
+@pytest.mark.asyncio
+async def test_message_to_blocks_async_loads_image_from_file(tmp_path):
+    """UP-31: Verify _message_to_blocks reads image bytes asynchronously via asyncio.to_thread."""
+    from unittest.mock import patch
+    from src.tools.dispatch import _message_to_blocks
+    from src.db.models import Message
+
+    img_bytes = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
+    img_file = tmp_path / "test-async.png"
+    img_file.write_bytes(img_bytes)
+
+    msg = Message(
+        id="test-async-img",
+        thread_id="t1",
+        seq=1,
+        author="human",
+        role="user",
+        content="check this",
+        metadata=json.dumps({"images": [{"url": "/static/uploads/test-async.png"}]}),
+        created_at=None,
+        reply_to_msg_id=None,
+    )
+
+    with patch("src.tools.dispatch._url_to_local_upload_path", return_value=img_file):
+        blocks = await _message_to_blocks(msg)
+
+    import mcp.types as types
+    image_blocks = [b for b in blocks if isinstance(b, types.ImageContent)]
+    assert len(image_blocks) == 1
+    assert image_blocks[0].mimeType == "image/png"
+
+    import base64
+    expected_data = base64.b64encode(img_bytes).decode("ascii")
+    assert image_blocks[0].data == expected_data
+
+
+@pytest.mark.asyncio
+async def test_message_to_blocks_include_attachments_false():
+    """UP-31/33: Verify include_attachments=False skips image processing entirely."""
+    from src.tools.dispatch import _message_to_blocks
+    from src.db.models import Message
+
+    msg = Message(
+        id="test-no-attach",
+        thread_id="t1",
+        seq=1,
+        author="human",
+        role="user",
+        content="text only",
+        metadata=json.dumps({"attachments": [{"type": "image", "mimeType": "image/png", "data": "abc123"}]}),
+        created_at=None,
+        reply_to_msg_id=None,
+    )
+
+    blocks = await _message_to_blocks(msg, include_attachments=False)
+
+    import mcp.types as types
+    assert all(isinstance(b, types.TextContent) for b in blocks)
+    assert any("text only" in b.text for b in blocks)
+
+
 if __name__ == "__main__":
     asyncio.run(test_image_flow())
 
