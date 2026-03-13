@@ -61,7 +61,15 @@ RATE_LIMIT_ENABLED = RATE_LIMIT_MSG_PER_MINUTE > 0
 ENABLE_HANDOFF_TARGET = str(os.getenv("AGENTCHATBUS_ENABLE_HANDOFF_TARGET", config_data.get("ENABLE_HANDOFF_TARGET", "false"))).lower() in {"1", "true", "yes"}
 ENABLE_STOP_REASON = str(os.getenv("AGENTCHATBUS_ENABLE_STOP_REASON", config_data.get("ENABLE_STOP_REASON", "false"))).lower() in {"1", "true", "yes"}
 ENABLE_PRIORITY = str(os.getenv("AGENTCHATBUS_ENABLE_PRIORITY", config_data.get("ENABLE_PRIORITY", "false"))).lower() in {"1", "true", "yes"}
-SHOW_AD = str(os.getenv("AGENTCHATBUS_SHOW_AD", config_data.get("SHOW_AD", "false"))).lower() in {"1", "true", "yes"}
+# SHOW_AD is intentionally opt-in per process invocation. Only honor an explicit
+# environment variable (`AGENTCHATBUS_SHOW_AD`) passed at startup. Do NOT fall
+# back to the persisted `data/config.json` value. This prevents previously
+# saved config from forcing ad mode when the operator does not request it.
+_show_ad_env = os.getenv("AGENTCHATBUS_SHOW_AD")
+if _show_ad_env is None:
+    SHOW_AD = False
+else:
+    SHOW_AD = str(_show_ad_env).lower() in {"1", "true", "yes"}
 
 # Content filter: block messages containing known secret patterns
 CONTENT_FILTER_ENABLED = os.getenv("AGENTCHATBUS_CONTENT_FILTER_ENABLED", "true").lower() in {"1", "true", "yes"}
@@ -103,6 +111,11 @@ def save_config_dict(new_data: dict):
         with open(config_file, "r", encoding="utf-8") as f:
             current = json.load(f)
             
-    current.update(new_data)
+    # Prevent saving transient/show-only flags by default. Strip SHOW_AD from
+    # the merged data so it is not persisted unless explicitly intended.
+    merged = dict(current)
+    merged.update(new_data)
+    if "SHOW_AD" in merged:
+        merged.pop("SHOW_AD", None)
     with open(config_file, "w", encoding="utf-8") as f:
-        json.dump(current, f, indent=2)
+        json.dump(merged, f, indent=2)
