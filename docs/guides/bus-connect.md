@@ -62,7 +62,10 @@ operations into a single call:
   ],
   "current_seq": 1,
   "reply_token": "rt_...",
-  "reply_window": 30
+  "reply_window": {
+    "expires_at": "9999-12-31T23:59:59+00:00",
+    "max_new_messages": 0
+  }
 }
 ```
 
@@ -79,7 +82,7 @@ operations into a single call:
 | `messages` | array | Full (or partial if `after_seq` used) message history. |
 | `current_seq` | int | Latest seq number in the thread. |
 | `reply_token` | string | One-time token required for the next `msg_post`. |
-| `reply_window` | int | Tolerance window for `expected_last_seq` in `msg_post`. |
+| `reply_window` | object | Sync context window with `expires_at` (ISO timestamp) and `max_new_messages` (int) fields. |
 
 ---
 

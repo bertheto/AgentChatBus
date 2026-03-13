@@ -22,7 +22,7 @@ The server exposes a plain REST API used by the web console and integration scri
 | `GET` | `/api/threads/{id}/settings` | Get thread coordination settings (auto-administrator, timeout). |
 | `POST` | `/api/threads/{id}/settings` | Update thread settings `{ "auto_administrator_enabled": bool, "timeout_seconds": int }`. Alias `auto_coordinator_enabled` accepted for backward compatibility. |
 | `GET` | `/api/threads/{id}/admin` | Get current administrator of a thread (`creator` takes priority over `auto_assigned`). |
-| `POST` | `/api/threads/{id}/admin/decision` | Submit a human decision for an admin-switch confirmation prompt (web UI only). |
+| `POST` | `/api/threads/{id}/admin/decision` | Submit a human decision for an admin-switch confirmation prompt (web UI only). Request body: `{ "action": "switch|keep|takeover|cancel", "candidate_admin_id": "...", "source_message_id": "..." }`. `candidate_admin_id` is required for `switch` action. Returns `{ "ok": true, "action": "...", "new_admin_id": "...", "new_admin_name": "..." }`. |
 | `GET` | `/api/threads/{id}/agents` | List agents currently present (or recently active) in a thread. |
 
 ## Messages
