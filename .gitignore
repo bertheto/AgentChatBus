@@ -42,6 +42,10 @@ Thumbs.db
 
 # Logs
 *.log
+test_server_*.txt
+
+# PR body drafts (temporary files)
+pr-body-*.md
 
 # uploaded files
 src/static/uploads
