@@ -249,3 +249,134 @@ async def test_concurrent_token_consumption_race():
         
     finally:
         await db.close()
+
+
+# ==================== UP-32: Chain reply_token in msg_post response ====================
+
+@pytest.mark.asyncio
+async def test_chain_token_returned_in_msg_post():
+    """UP-32: msg_post with a registered agent should return a chain reply_token."""
+    import json
+    from src.tools.dispatch import handle_msg_post
+
+    db = await _make_db()
+    try:
+        thread = await crud.thread_create(db, topic="chain-token")
+        agent = await crud.agent_register(db, ide="Cursor", model="test-model", display_name=None)
+        sync = await crud.issue_reply_token(db, thread_id=thread.id, agent_id=agent.id)
+
+        result = await handle_msg_post(db, {
+            "thread_id": thread.id,
+            "author": agent.id,
+            "content": "first message",
+            "expected_last_seq": sync["current_seq"],
+            "reply_token": sync["reply_token"],
+        })
+
+        assert len(result) == 1
+        payload = json.loads(result[0].text)
+        assert "msg_id" in payload
+        assert "reply_token" in payload, "msg_post should return a chain reply_token for agents"
+        assert "current_seq" in payload
+        assert "reply_window" in payload
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_chain_token_usable_for_next_post():
+    """UP-32: The chained reply_token from msg_post should be usable for the next msg_post."""
+    import json
+    from src.tools.dispatch import handle_msg_post
+
+    db = await _make_db()
+    try:
+        thread = await crud.thread_create(db, topic="chain-usable")
+        agent = await crud.agent_register(db, ide="Cursor", model="test-model", display_name=None)
+        sync = await crud.issue_reply_token(db, thread_id=thread.id, agent_id=agent.id)
+
+        result1 = await handle_msg_post(db, {
+            "thread_id": thread.id,
+            "author": agent.id,
+            "content": "message 1",
+            "expected_last_seq": sync["current_seq"],
+            "reply_token": sync["reply_token"],
+        })
+        payload1 = json.loads(result1[0].text)
+        chain_token = payload1["reply_token"]
+        chain_seq = payload1["current_seq"]
+
+        result2 = await handle_msg_post(db, {
+            "thread_id": thread.id,
+            "author": agent.id,
+            "content": "message 2",
+            "expected_last_seq": chain_seq,
+            "reply_token": chain_token,
+        })
+        payload2 = json.loads(result2[0].text)
+        assert "msg_id" in payload2
+        assert "reply_token" in payload2, "Second post should also chain a token"
+        assert payload2["reply_token"] != chain_token, "Each chain should issue a new token"
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_chain_token_original_consumed():
+    """UP-32: After chaining, the original token should be consumed (replay rejected)."""
+    import json
+    from src.tools.dispatch import handle_msg_post
+
+    db = await _make_db()
+    try:
+        thread = await crud.thread_create(db, topic="chain-consumed")
+        agent = await crud.agent_register(db, ide="Cursor", model="test-model", display_name=None)
+        sync = await crud.issue_reply_token(db, thread_id=thread.id, agent_id=agent.id)
+
+        result1 = await handle_msg_post(db, {
+            "thread_id": thread.id,
+            "author": agent.id,
+            "content": "message 1",
+            "expected_last_seq": sync["current_seq"],
+            "reply_token": sync["reply_token"],
+        })
+        payload1 = json.loads(result1[0].text)
+        assert "msg_id" in payload1
+
+        result2 = await handle_msg_post(db, {
+            "thread_id": thread.id,
+            "author": agent.id,
+            "content": "replay attempt",
+            "expected_last_seq": payload1["current_seq"],
+            "reply_token": sync["reply_token"],
+        })
+        payload2 = json.loads(result2[0].text)
+        assert "error" in payload2, "Original token should be rejected after chain"
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_no_chain_token_for_anonymous_author():
+    """UP-32: msg_post without a registered agent should NOT return chain token fields."""
+    import json
+    from src.tools.dispatch import handle_msg_post
+
+    db = await _make_db()
+    try:
+        thread = await crud.thread_create(db, topic="no-chain-anon")
+        sync = await crud.issue_reply_token(db, thread_id=thread.id)
+
+        result = await handle_msg_post(db, {
+            "thread_id": thread.id,
+            "author": "anonymous-user",
+            "content": "anon message",
+            "expected_last_seq": sync["current_seq"],
+            "reply_token": sync["reply_token"],
+        })
+
+        payload = json.loads(result[0].text)
+        assert "msg_id" in payload
+        assert "reply_token" not in payload, "Anonymous author should not get chain token"
+    finally:
+        await db.close()

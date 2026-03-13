@@ -347,7 +347,7 @@ async def init_schema(db: aiosqlite.Connection) -> None:
             expires_at  TEXT NOT NULL,
             consumed_at TEXT,
             status      TEXT NOT NULL CHECK (status IN ('issued', 'consumed', 'expired')),
-            source      TEXT NOT NULL DEFAULT 'msg_wait' CHECK (source IN ('bus_connect', 'msg_wait', 'thread_create')),
+            source      TEXT NOT NULL DEFAULT 'msg_wait' CHECK (source IN ('bus_connect', 'msg_wait', 'thread_create', 'msg_post_chain')),
             fast_returned_at TEXT
         );
 
@@ -649,7 +649,7 @@ async def init_schema(db: aiosqlite.Connection) -> None:
         db,
         "reply_tokens",
         "source",
-        "TEXT NOT NULL DEFAULT 'msg_wait' CHECK (source IN ('bus_connect', 'msg_wait', 'thread_create'))",
+        "TEXT NOT NULL DEFAULT 'msg_wait' CHECK (source IN ('bus_connect', 'msg_wait', 'thread_create', 'msg_post_chain'))",
     )
     await _add_column_if_missing(db, "reply_tokens", "fast_returned_at", "TEXT")
     try:
@@ -661,6 +661,49 @@ async def init_schema(db: aiosqlite.Connection) -> None:
         logger.info("Migration: ensured reply_tokens source/fast-return columns + index exist")
     except Exception as e:
         logger.error(f"Migration failed for reply_tokens source/fast-return index: {e}")
+
+    # Migration (UP-32): Widen source CHECK to include 'msg_post_chain'.
+    # SQLite cannot ALTER CHECK constraints, so we recreate the table if needed.
+    try:
+        test_ok = True
+        try:
+            await db.execute(
+                "INSERT INTO reply_tokens (token, thread_id, agent_id, issued_at, expires_at, consumed_at, status, source, fast_returned_at) "
+                "VALUES ('__migration_probe__', '__probe__', NULL, '', '', NULL, 'consumed', 'msg_post_chain', NULL)"
+            )
+            await db.execute("DELETE FROM reply_tokens WHERE token = '__migration_probe__'")
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            test_ok = False
+
+        if not test_ok:
+            await db.execute("""
+                CREATE TABLE reply_tokens_new (
+                    token       TEXT PRIMARY KEY,
+                    thread_id   TEXT NOT NULL REFERENCES threads(id),
+                    agent_id    TEXT,
+                    issued_at   TEXT NOT NULL,
+                    expires_at  TEXT NOT NULL,
+                    consumed_at TEXT,
+                    status      TEXT NOT NULL CHECK (status IN ('issued', 'consumed', 'expired')),
+                    source      TEXT NOT NULL DEFAULT 'msg_wait' CHECK (source IN ('bus_connect', 'msg_wait', 'thread_create', 'msg_post_chain')),
+                    fast_returned_at TEXT
+                )
+            """)
+            await db.execute(
+                "INSERT INTO reply_tokens_new SELECT token, thread_id, agent_id, issued_at, expires_at, consumed_at, status, source, fast_returned_at FROM reply_tokens"
+            )
+            await db.execute("DROP TABLE reply_tokens")
+            await db.execute("ALTER TABLE reply_tokens_new RENAME TO reply_tokens")
+            await db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_reply_tokens_agent_thread_source_status "
+                "ON reply_tokens(thread_id, agent_id, source, status)"
+            )
+            await db.commit()
+            logger.info("Migration (UP-32): Recreated reply_tokens table with msg_post_chain source")
+    except Exception as e:
+        logger.error(f"Migration (UP-32) failed for reply_tokens source check: {e}")
 
     # Migration: Create reactions table if it does not exist (UP-13)
     # Safe for existing DBs — CREATE TABLE IF NOT EXISTS + CREATE UNIQUE INDEX IF NOT EXISTS

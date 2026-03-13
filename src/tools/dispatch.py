@@ -237,7 +237,7 @@ def _url_to_local_upload_path(url: str) -> Path | None:
     return candidate
 
 
-def _message_to_blocks(m: Message) -> list[types.Content]:
+async def _message_to_blocks(m: Message, include_attachments: bool = True) -> list[types.Content]:
     m = _project_message_for_agent(m)
     author = m.author_name or m.author
     created = m.created_at.isoformat() if getattr(m, "created_at", None) else ""
@@ -250,6 +250,9 @@ def _message_to_blocks(m: Message) -> list[types.Content]:
 
     if m.content:
         blocks.append(types.TextContent(type="text", text=m.content))
+
+    if not include_attachments:
+        return blocks
 
     meta = _safe_json_loads(m.metadata)
     if isinstance(meta, dict):
@@ -282,12 +285,11 @@ def _message_to_blocks(m: Message) -> list[types.Content]:
                     mime_type = "image/png"
 
                 if not data:
-                    # Support URL-backed uploads from web UI metadata, e.g. {"url": "/static/uploads/.."}
                     if isinstance(url, str):
                         local_path = _url_to_local_upload_path(url)
                         if local_path and local_path.exists():
                             try:
-                                raw = local_path.read_bytes()
+                                raw = await asyncio.to_thread(local_path.read_bytes)
                                 data = base64.b64encode(raw).decode("ascii")
                                 guessed_mime = mimetypes.guess_type(local_path.name)[0]
                                 if not mime_type and guessed_mime:
@@ -297,7 +299,6 @@ def _message_to_blocks(m: Message) -> list[types.Content]:
                                 logger.warning(f"[_message_to_blocks] Failed to read {local_path}: {e}")
                                 data = None
 
-                    # If still no embeddable bytes, keep image reference visible as text.
                     if not data and isinstance(url, str):
                         blocks.append(types.TextContent(type="text", text=f"[image] {url}"))
                         continue
@@ -812,6 +813,17 @@ async def handle_msg_post(db, arguments: dict[str, Any]) -> list[types.TextConte
         if ENABLE_STOP_REASON and meta.get("stop_reason"):
             result["stop_reason"] = meta["stop_reason"]
 
+    # Chain token: issue a fresh reply_token so the agent can post again
+    # without an extra msg_wait roundtrip solely for token renewal.
+    if author_agent_id:
+        await crud.reply_tokens_invalidate_for_agent(db, thread_id, author_agent_id)
+        chain_sync = await crud.issue_reply_token(
+            db, thread_id=thread_id, agent_id=author_agent_id, source="msg_post_chain",
+        )
+        result["reply_token"] = chain_sync["reply_token"]
+        result["current_seq"] = chain_sync["current_seq"]
+        result["reply_window"] = chain_sync["reply_window"]
+
     # Notify any msg_wait callers on this thread that a new message is available.
     # This allows event-driven wake-up instead of waiting for the 1s poll tick.
     if thread_id in _thread_events:
@@ -848,11 +860,12 @@ async def handle_msg_list(db, arguments: dict[str, Any]) -> list[types.Content]:
     real_ids = [m.id for m in msgs if not m.id.startswith("sys-")]
     reactions_map = await crud.msg_reactions_bulk(db, real_ids)
 
+    include_attachments = arguments.get("include_attachments", True)
     return_format = arguments.get("return_format", "blocks")
     if return_format == "blocks":
         blocks: list[types.Content] = []
         for m in msgs:
-            blocks.extend(_message_to_blocks(m))
+            blocks.extend(await _message_to_blocks(m, include_attachments=include_attachments))
         return blocks
 
     def _filter_msg(m):
@@ -1319,6 +1332,7 @@ async def handle_msg_wait(db, arguments: dict[str, Any]) -> list[types.Content]:
     if coordination_prompt:
         envelope["coordination_prompt"] = coordination_prompt
 
+    include_attachments = arguments.get("include_attachments", True)
     return_format = arguments.get("return_format", "blocks")
     if return_format == "blocks":
         blocks: list[types.Content] = []
@@ -1334,7 +1348,7 @@ async def handle_msg_wait(db, arguments: dict[str, Any]) -> list[types.Content]:
                 **coordination_prompt,
             })))
         for m in msgs:
-            blocks.extend(_message_to_blocks(m))
+            blocks.extend(await _message_to_blocks(m, include_attachments=include_attachments))
         return blocks
 
     return [types.TextContent(type="text", text=json.dumps(envelope))]

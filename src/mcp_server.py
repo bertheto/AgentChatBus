@@ -443,6 +443,11 @@ async def list_tools() -> list[types.Tool]:
                         "default": True,
                         "description": "If true and after_seq=0, prepend a synthetic system prompt row.",
                     },
+                    "include_attachments": {
+                        "type": "boolean",
+                        "default": True,
+                        "description": "If false, omit image/attachment content from blocks format (text-only). Reduces payload size when images are not needed.",
+                    },
                 },
                 "required": ["thread_id"],
             },
@@ -497,6 +502,11 @@ async def list_tools() -> list[types.Tool]:
                     "for_agent":   {
                         "type": "string",
                         "description": "Only return messages where metadata.handoff_target matches this agent ID. Useful for directed handoff routing.",
+                    },
+                    "include_attachments": {
+                        "type": "boolean",
+                        "default": True,
+                        "description": "If false, omit image/attachment content from blocks format (text-only). Reduces payload size when images are not needed.",
                     },
                 },
                 "required": ["thread_id", "after_seq"],
