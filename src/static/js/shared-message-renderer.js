@@ -236,39 +236,107 @@
 
         // ── Mermaid diagram rendering ──
         if (tok.lang === "mermaid" && window.mermaid) {
+          let currentCode = codeText;
           const mermaidBlock = document.createElement("div");
           mermaidBlock.className = "mermaid-block";
 
+          const toolbarDiv = document.createElement("div");
+          toolbarDiv.className = "mermaid-toolbar";
+
           const diagramDiv = document.createElement("div");
           diagramDiv.className = "mermaid";
-          diagramDiv.textContent = codeText;
-          mermaidBlock.appendChild(diagramDiv);
+          diagramDiv.textContent = currentCode;
+
+          const sourceCode = document.createElement("code");
+
+          // Orientation toggle (if graph/flowchart with direction)
+          let currentOrientationMatch = currentCode.trim().match(/^(graph|flowchart)\s+(TD|TB|LR|RL)\b/i);
+          if (currentOrientationMatch) {
+            const orientationBtn = document.createElement("button");
+            orientationBtn.type = "button";
+            orientationBtn.className = "mermaid-btn";
+            let dir = currentOrientationMatch[2].toUpperCase();
+            orientationBtn.textContent = ["LR", "RL"].includes(dir) ? "Vertical" : "Horizontal";
+            
+            orientationBtn.addEventListener("click", async (e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              const match = currentCode.trim().match(/^(graph|flowchart)\s+(TD|TB|LR|RL)\b/i);
+              if (!match) return;
+              const oldDir = match[2].toUpperCase();
+              const dirMap = { 'TD': 'LR', 'TB': 'LR', 'LR': 'TD', 'RL': 'TB' };
+              const newDir = dirMap[oldDir] || 'LR';
+              
+              const newText = ["LR", "RL"].includes(newDir) ? "Vertical" : "Horizontal";
+              orientationBtn.textContent = newText;
+              
+              currentCode = currentCode.replace(new RegExp(`^(\\s*${match[1]})\\s+${oldDir}\\b`, 'i'), `$1 ${newDir}`);
+              
+              // Update source code view if visible
+              sourceCode.textContent = currentCode;
+              
+              diagramDiv.innerHTML = ""; // Clear old diagram
+              diagramDiv.textContent = currentCode;
+              diagramDiv.removeAttribute("data-processed");
+              diagramDiv.classList.remove("mermaid-error");
+              
+              try {
+                await mermaid.run({ nodes: [diagramDiv] });
+              } catch {
+                if (!diagramDiv.querySelector("svg")) {
+                  diagramDiv.classList.add("mermaid-error");
+                  diagramDiv.setAttribute("data-processed", "true");
+                }
+              }
+            });
+            toolbarDiv.appendChild(orientationBtn);
+          }
+
+          // Copy button
+          const copyBtn = document.createElement("button");
+          copyBtn.type = "button";
+          copyBtn.className = "mermaid-btn";
+          copyBtn.textContent = "Copy";
+          copyBtn.addEventListener("click", async (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const original = copyBtn.textContent;
+            const ok = await window.AcbUtils.copyTextWithFallback(currentCode);
+            copyBtn.textContent = ok ? "Copied" : "Failed";
+            if (ok) copyBtn.disabled = true;
+            setTimeout(() => {
+              copyBtn.textContent = original;
+              copyBtn.disabled = false;
+            }, 1200);
+          });
+          toolbarDiv.appendChild(copyBtn);
 
           // Source toggle button
-          const toggleBtn = document.createElement("button");
-          toggleBtn.type = "button";
-          toggleBtn.className = "mermaid-source-toggle";
-          toggleBtn.textContent = "Source";
-          toggleBtn.setAttribute("aria-label", "Toggle mermaid source");
-
+          const sourceToggleBtn = document.createElement("button");
+          sourceToggleBtn.type = "button";
+          sourceToggleBtn.className = "mermaid-btn";
+          sourceToggleBtn.textContent = "Source";
+          
           const sourceDiv = document.createElement("div");
           sourceDiv.className = "mermaid-source";
           sourceDiv.style.display = "none";
           const sourcePre = document.createElement("pre");
-          const sourceCode = document.createElement("code");
-          sourceCode.textContent = codeText;
+          
+          sourceCode.textContent = currentCode;
           sourcePre.appendChild(sourceCode);
           sourceDiv.appendChild(sourcePre);
 
-          toggleBtn.addEventListener("click", (e) => {
+          sourceToggleBtn.addEventListener("click", (e) => {
             e.preventDefault();
             e.stopPropagation();
             const hidden = sourceDiv.style.display === "none";
             sourceDiv.style.display = hidden ? "block" : "none";
-            toggleBtn.textContent = hidden ? "Diagram" : "Source";
+            sourceToggleBtn.textContent = hidden ? "Diagram" : "Source";
           });
+          toolbarDiv.appendChild(sourceToggleBtn);
 
-          mermaidBlock.appendChild(toggleBtn);
+          mermaidBlock.appendChild(toolbarDiv);
+          mermaidBlock.appendChild(diagramDiv);
           mermaidBlock.appendChild(sourceDiv);
           containerEl.appendChild(mermaidBlock);
           continue;
