@@ -457,6 +457,11 @@
 
   async function renderMermaidBlocks(root) {
     if (!window.mermaid) return;
+    
+    // Always sync theme right before parsing
+    const mermaidTheme = document.body.getAttribute('data-theme') === 'light' ? 'default' : 'dark';
+    mermaid.initialize({ startOnLoad: false, theme: mermaidTheme, securityLevel: 'strict' });
+
     const container = root || document;
     const nodes = container.querySelectorAll(".mermaid:not([data-processed])");
     if (!nodes.length) return;
@@ -473,6 +478,42 @@
     }
   }
 
+  async function reRenderAllMermaidBlocks() {
+    if (!window.mermaid) return;
+    const blocks = document.querySelectorAll(".mermaid-block");
+    if (!blocks.length) return;
+
+    // Force theme initialization
+    const mermaidTheme = document.body.getAttribute('data-theme') === 'light' ? 'default' : 'dark';
+    mermaid.initialize({ startOnLoad: false, theme: mermaidTheme, securityLevel: 'strict' });
+
+    const nodesToRun = [];
+    blocks.forEach(block => {
+      const diagramDiv = block.querySelector(".mermaid");
+      const sourceCode = block.querySelector(".mermaid-source code");
+      if (diagramDiv && sourceCode) {
+        diagramDiv.innerHTML = "";
+        diagramDiv.textContent = sourceCode.textContent;
+        diagramDiv.removeAttribute("data-processed");
+        diagramDiv.classList.remove("mermaid-error");
+        nodesToRun.push(diagramDiv);
+      }
+    });
+
+    if (nodesToRun.length) {
+      try {
+        await mermaid.run({ nodes: nodesToRun });
+      } catch {
+        nodesToRun.forEach(el => {
+          if (!el.querySelector("svg")) {
+            el.classList.add("mermaid-error");
+            el.setAttribute("data-processed", "true");
+          }
+        });
+      }
+    }
+  }
+
   window.AcbMessageRenderer = {
     normalizeMessageText,
     tokenizeMessage,
@@ -480,6 +521,7 @@
     renderTextWithMarkdown,
     renderMessageContent,
     renderMermaidBlocks,
+    reRenderAllMermaidBlocks,
     esc,
     inlineMd,
     renderMarkdownToHTML,

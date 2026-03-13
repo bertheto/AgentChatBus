@@ -14,6 +14,11 @@
       btn.setAttribute("aria-label", btn.title);
     }
     localStorage.setItem("agentchatbus-theme", effectiveTheme);
+
+    // Re-render any existing mermaid diagrams with the new theme
+    if (window.AcbMessageRenderer && window.AcbMessageRenderer.reRenderAllMermaidBlocks) {
+      window.AcbMessageRenderer.reRenderAllMermaidBlocks();
+    }
   }
 
   function applySavedTheme() {
