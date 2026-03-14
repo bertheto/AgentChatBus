@@ -44,6 +44,7 @@ const busServerManager_1 = require("./busServerManager");
 const setupProvider_1 = require("./providers/setupProvider");
 const mcpLogProvider_1 = require("./providers/mcpLogProvider");
 const settingsProvider_1 = require("./providers/settingsProvider");
+const statusPanel_1 = require("./views/statusPanel");
 let apiClient;
 let mcpLogProvider;
 let settingsProvider;
@@ -146,6 +147,9 @@ function initializeMainViews(context, serverManager) {
         if (thread && apiClient) {
             chatPanel_1.ChatPanel.createOrShow(thread, apiClient);
         }
+    }), vscode.commands.registerCommand('agentchatbus.showStatus', () => {
+        const metadata = serverManager.getStatusMetadata();
+        statusPanel_1.StatusPanel.createOrShow(metadata);
     }), vscode.commands.registerCommand('agentchatbus.copyThreadId', (item) => {
         if (item?.thread?.id) {
             vscode.env.clipboard.writeText(item.thread.id);

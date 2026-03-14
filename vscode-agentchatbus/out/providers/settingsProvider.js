@@ -45,6 +45,7 @@ class SettingsProvider {
         if (element)
             return [];
         return [
+            new SettingItem("Server Status", "View detailed server and environment diagnostics", "info", "agentchatbus.showStatus"),
             new SettingItem("Open Web Console", "Open the AgentChatBus dashboard in your browser", "browser", "agentchatbus.openWebConsole"),
             new SettingItem("Server Settings", "Configure AgentChatBus server parameters", "settings-gear", "agentchatbus.serverSettings")
         ];

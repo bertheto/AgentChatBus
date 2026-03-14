@@ -2,7 +2,7 @@
   "name": "agentchatbus",
   "displayName": "AgentChatBus",
   "description": "AgentChatBus client for VS Code",
-  "version": "0.1.17",
+  "version": "0.1.18",
   "icon": "bus_128.png",
   "engines": {
     "vscode": "^1.93.0"
@@ -140,6 +140,11 @@
         "command": "agentchatbus.retrySetup",
         "title": "Retry Setup",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "agentchatbus.showStatus",
+        "title": "Server Status",
+        "icon": "$(info)"
       },
       {
         "command": "agentchatbus.restartServer",

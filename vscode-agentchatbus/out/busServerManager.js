@@ -43,6 +43,8 @@ class BusServerManager {
     serverProcess = null;
     setupProvider = null;
     mcpLogProvider = null;
+    lastStartTime = null;
+    serverMetadata = {};
     constructor() {
         this.outputChannel = vscode.window.createOutputChannel('AgentChatBus Server');
     }
@@ -139,6 +141,17 @@ class BusServerManager {
             return false;
         }
     }
+    getStatusMetadata() {
+        return {
+            pid: this.serverProcess?.pid,
+            startTime: this.lastStartTime?.toISOString(),
+            ...this.serverMetadata,
+            platform: process.platform,
+            arch: process.arch,
+            nodeVersion: process.version,
+            vscodeVersion: vscode.version
+        };
+    }
     async startServer() {
         this.log('Scanning environment for AgentChatBus...', 'search');
         const projectRoot = await this.findProjectRootAsync();
@@ -195,6 +208,8 @@ class BusServerManager {
         if (cwd) {
             env.PYTHONPATH = cwd;
         }
+        this.serverMetadata = { command, args, cwd, env };
+        this.lastStartTime = new Date();
         try {
             this.serverProcess = child_process.spawn(command, args, {
                 cwd: cwd || process.cwd(),

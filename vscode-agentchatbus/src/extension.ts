@@ -8,6 +8,7 @@ import { BusServerManager } from './busServerManager';
 import { SetupProvider } from './providers/setupProvider';
 import { McpLogProvider } from './providers/mcpLogProvider';
 import { SettingsProvider } from './providers/settingsProvider';
+import { StatusPanel } from './views/statusPanel';
 
 let apiClient: AgentChatBusApiClient | undefined;
 let mcpLogProvider: McpLogProvider | undefined;
@@ -154,6 +155,10 @@ function initializeMainViews(context: vscode.ExtensionContext, serverManager: Bu
             if (thread && apiClient) {
                 ChatPanel.createOrShow(thread, apiClient);
             }
+        }),
+        vscode.commands.registerCommand('agentchatbus.showStatus', () => {
+            const metadata = serverManager.getStatusMetadata();
+            StatusPanel.createOrShow(metadata);
         }),
         vscode.commands.registerCommand('agentchatbus.copyThreadId', (item: ThreadItem) => {
             if (item?.thread?.id) {
