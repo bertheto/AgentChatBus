@@ -8,7 +8,7 @@ export class AgentsTreeProvider implements vscode.TreeDataProvider<AgentItem> {
 
     constructor(private apiClient: AgentChatBusApiClient) {
         apiClient.onSseEvent.event((e) => {
-            if (e.event_type && e.event_type.startsWith('agent.')) {
+            if (e.type && e.type.startsWith('agent.')) {
                 this.refresh();
             }
         });

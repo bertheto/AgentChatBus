@@ -42,10 +42,7 @@ class ThreadsTreeProvider {
     constructor(apiClient) {
         this.apiClient = apiClient;
         apiClient.onSseEvent.event((e) => {
-            if (e.event_type && e.event_type.startsWith('thread.')) {
-                this.refresh();
-            }
-            else if (e.event_type === 'msg.posted') {
+            if (e.type && (e.type.startsWith('thread.') || e.type === 'msg.new')) {
                 this.refresh();
             }
         });

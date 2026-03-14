@@ -8,10 +8,8 @@ export class ThreadsTreeProvider implements vscode.TreeDataProvider<ThreadItem> 
 
     constructor(private apiClient: AgentChatBusApiClient) {
         apiClient.onSseEvent.event((e) => {
-            if (e.event_type && e.event_type.startsWith('thread.')) {
+            if (e.type && (e.type.startsWith('thread.') || e.type === 'msg.new')) {
                 this.refresh();
-            } else if (e.event_type === 'msg.posted') {
-                 this.refresh();
             }
         });
     }
