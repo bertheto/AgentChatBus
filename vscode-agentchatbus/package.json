@@ -2,7 +2,7 @@
   "name": "agentchatbus",
   "displayName": "AgentChatBus",
   "description": "AgentChatBus client for VS Code",
-  "version": "0.1.16",
+  "version": "0.1.17",
   "icon": "bus_128.png",
   "engines": {
     "vscode": "^1.93.0"
@@ -112,6 +112,31 @@
         "title": "Open Thread"
       },
       {
+        "command": "agentchatbus.archiveThread",
+        "title": "Archive Thread",
+        "icon": "$(archive)"
+      },
+      {
+        "command": "agentchatbus.unarchiveThread",
+        "title": "Unarchive Thread",
+        "icon": "$(history)"
+      },
+      {
+        "command": "agentchatbus.deleteThread",
+        "title": "Delete Thread",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "agentchatbus.changeThreadStatus",
+        "title": "Change Status...",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "agentchatbus.copyThreadId",
+        "title": "Copy Thread ID",
+        "icon": "$(copy)"
+      },
+      {
         "command": "agentchatbus.retrySetup",
         "title": "Retry Setup",
         "icon": "$(refresh)"
@@ -168,6 +193,33 @@
           "command": "agentchatbus.clearMcpLogs",
           "when": "view == agentchatbus.mcpLogs",
           "group": "navigation@3"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "agentchatbus.changeThreadStatus",
+          "when": "view == agentchatbus.threads",
+          "group": "1_status"
+        },
+        {
+          "command": "agentchatbus.archiveThread",
+          "when": "view == agentchatbus.threads && viewItem != thread:archived",
+          "group": "2_lifecycle"
+        },
+        {
+          "command": "agentchatbus.unarchiveThread",
+          "when": "view == agentchatbus.threads && viewItem == thread:archived",
+          "group": "2_lifecycle"
+        },
+        {
+          "command": "agentchatbus.copyThreadId",
+          "when": "view == agentchatbus.threads",
+          "group": "3_util"
+        },
+        {
+          "command": "agentchatbus.deleteThread",
+          "when": "view == agentchatbus.threads",
+          "group": "4_destructive"
         }
       ]
     }

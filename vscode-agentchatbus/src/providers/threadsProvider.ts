@@ -65,9 +65,10 @@ export class ThreadItem extends vscode.TreeItem {
         if (thread.status === 'done' || thread.status === 'closed') icon = 'check';
         if (thread.status === 'archived') icon = 'archive';
         
-        this.tooltip = `Status: ${thread.status}`;
+        this.tooltip = `ID: ${thread.id}\nStatus: ${thread.status}`;
         this.description = thread.status;
         this.iconPath = new vscode.ThemeIcon(icon);
+        this.contextValue = `thread:${thread.status}`;
         this.command = {
             command: 'agentchatbus.openThread',
             title: 'Open Thread',

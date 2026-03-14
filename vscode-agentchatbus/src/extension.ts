@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { AgentChatBusApiClient } from './api/client';
-import { ThreadsTreeProvider } from './providers/threadsProvider';
+import { ThreadsTreeProvider, ThreadItem } from './providers/threadsProvider';
 import { AgentsTreeProvider } from './providers/agentsProvider';
 import { ChatPanel } from './views/chatPanel';
 import type { Thread } from './api/types';
@@ -153,6 +153,62 @@ function initializeMainViews(context: vscode.ExtensionContext, serverManager: Bu
         vscode.commands.registerCommand('agentchatbus.openThread', (thread: Thread) => {
             if (thread && apiClient) {
                 ChatPanel.createOrShow(thread, apiClient);
+            }
+        }),
+        vscode.commands.registerCommand('agentchatbus.copyThreadId', (item: ThreadItem) => {
+            if (item?.thread?.id) {
+                vscode.env.clipboard.writeText(item.thread.id);
+                vscode.window.showInformationMessage(`Copied Thread ID: ${item.thread.id}`);
+            }
+        }),
+        vscode.commands.registerCommand('agentchatbus.deleteThread', async (item: ThreadItem) => {
+            if (!item?.thread?.id || !apiClient) return;
+            const confirmed = await vscode.window.showWarningMessage(
+                `Are you sure you want to PERMANENTLY delete thread "${item.thread.topic}"? This cannot be undone.`,
+                { modal: true },
+                'Delete'
+            );
+            if (confirmed === 'Delete') {
+                const ok = await apiClient.deleteThread(item.thread.id);
+                if (ok) {
+                    vscode.window.showInformationMessage('Thread deleted.');
+                    threadsProvider.refresh();
+                } else {
+                    vscode.window.showErrorMessage('Failed to delete thread.');
+                }
+            }
+        }),
+        vscode.commands.registerCommand('agentchatbus.archiveThread', async (item: ThreadItem) => {
+            if (!item?.thread?.id || !apiClient) return;
+            const ok = await apiClient.archiveThread(item.thread.id);
+            if (ok) {
+                threadsProvider.refresh();
+            } else {
+                vscode.window.showErrorMessage('Failed to archive thread.');
+            }
+        }),
+        vscode.commands.registerCommand('agentchatbus.unarchiveThread', async (item: ThreadItem) => {
+            if (!item?.thread?.id || !apiClient) return;
+            const ok = await apiClient.unarchiveThread(item.thread.id);
+            if (ok) {
+                threadsProvider.refresh();
+            } else {
+                vscode.window.showErrorMessage('Failed to unarchive thread.');
+            }
+        }),
+        vscode.commands.registerCommand('agentchatbus.changeThreadStatus', async (item: ThreadItem) => {
+            if (!item?.thread?.id || !apiClient) return;
+            const statuses = ['discuss', 'implement', 'review', 'done', 'closed'];
+            const result = await vscode.window.showQuickPick(statuses, {
+                placeHolder: `Change status for "${item.thread.topic}" (current: ${item.thread.status})`
+            });
+            if (result && result !== item.thread.status) {
+                const ok = await apiClient.setThreadState(item.thread.id, result);
+                if (ok) {
+                    threadsProvider.refresh();
+                } else {
+                    vscode.window.showErrorMessage('Failed to change thread status.');
+                }
             }
         })
     );

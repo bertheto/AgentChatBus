@@ -110,6 +110,36 @@ export class AgentChatBusApiClient {
         return data.agents || data; // handle depending on array vs object wrap
     }
 
+    async deleteThread(threadId: string): Promise<boolean> {
+        const response = await fetch(`${this.baseUrl}/api/threads/${threadId}`, {
+            method: 'DELETE'
+        });
+        return response.ok;
+    }
+
+    async archiveThread(threadId: string): Promise<boolean> {
+        const response = await fetch(`${this.baseUrl}/api/threads/${threadId}/archive`, {
+            method: 'POST'
+        });
+        return response.ok;
+    }
+
+    async unarchiveThread(threadId: string): Promise<boolean> {
+        const response = await fetch(`${this.baseUrl}/api/threads/${threadId}/unarchive`, {
+            method: 'POST'
+        });
+        return response.ok;
+    }
+
+    async setThreadState(threadId: string, state: string): Promise<boolean> {
+        const response = await fetch(`${this.baseUrl}/api/threads/${threadId}/state`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ state })
+        });
+        return response.ok;
+    }
+
     connectSSE(): void {
         this.disconnectSSE();
         const url = `${this.baseUrl}/events`;
