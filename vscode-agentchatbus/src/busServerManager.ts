@@ -29,9 +29,6 @@ export class BusServerManager {
         if (this.setupProvider) {
             this.setupProvider.addLog(message, icon, description);
         }
-        if (this.mcpLogProvider) {
-            this.mcpLogProvider.addLog(message);
-        }
     }
 
     async ensureServerRunning(): Promise<boolean> {

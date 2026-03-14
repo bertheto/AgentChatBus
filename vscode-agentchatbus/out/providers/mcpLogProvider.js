@@ -73,7 +73,10 @@ class McpLogProvider {
         if (element)
             return [];
         if (!this.isManaged && this.logs.length === 0) {
-            return [new LogLineItem("Server managed externally / Logs not available", -1)];
+            return [new LogLineItem("Ready (Managed Externally)", -1)];
+        }
+        if (this.logs.length === 0) {
+            return [new LogLineItem("Waiting for logs...", -2)];
         }
         return this.logs.map((log, index) => new LogLineItem(log, index));
     }
@@ -88,8 +91,12 @@ class LogLineItem extends vscode.TreeItem {
         this.index = index;
         this.tooltip = message;
         if (index === -1) {
-            this.description = "Logs are only available when the server is started by this extension.";
-            this.iconPath = new vscode.ThemeIcon('info');
+            this.description = "Extension cannot capture logs for external processes.";
+            this.iconPath = new vscode.ThemeIcon('info', new vscode.ThemeColor('descriptionForeground'));
+            return;
+        }
+        if (index === -2) {
+            this.iconPath = new vscode.ThemeIcon('sync~spin');
             return;
         }
         if (message.includes('ERROR') || message.includes('Exception') || message.includes('failed')) {
