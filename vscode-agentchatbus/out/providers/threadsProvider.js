@@ -39,6 +39,7 @@ class ThreadsTreeProvider {
     apiClient;
     _onDidChangeTreeData = new vscode.EventEmitter();
     onDidChangeTreeData = this._onDidChangeTreeData.event;
+    _statusFilter = new Set(['discuss', 'implement', 'review', 'done', 'closed']);
     constructor(apiClient) {
         this.apiClient = apiClient;
         apiClient.onSseEvent.event((e) => {
@@ -46,6 +47,13 @@ class ThreadsTreeProvider {
                 this.refresh();
             }
         });
+    }
+    setStatusFilter(statuses) {
+        this._statusFilter = new Set(statuses);
+        this.refresh();
+    }
+    getStatusFilter() {
+        return Array.from(this._statusFilter);
     }
     refresh() {
         this._onDidChangeTreeData.fire();
@@ -59,6 +67,8 @@ class ThreadsTreeProvider {
         }
         try {
             let threads = await this.apiClient.getThreads();
+            // Filter by status
+            threads = threads.filter(t => this._statusFilter.has(t.status));
             // Sort by created_at desc as a proxy for activity
             threads.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
             return threads.map(t => new ThreadItem(t));

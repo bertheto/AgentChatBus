@@ -5,6 +5,7 @@ import type { Thread } from '../api/types';
 export class ThreadsTreeProvider implements vscode.TreeDataProvider<ThreadItem> {
     private _onDidChangeTreeData: vscode.EventEmitter<ThreadItem | undefined | void> = new vscode.EventEmitter<ThreadItem | undefined | void>();
     readonly onDidChangeTreeData: vscode.Event<ThreadItem | undefined | void> = this._onDidChangeTreeData.event;
+    private _statusFilter: Set<string> = new Set(['discuss', 'implement', 'review', 'done', 'closed']);
 
     constructor(private apiClient: AgentChatBusApiClient) {
         apiClient.onSseEvent.event((e) => {
@@ -12,6 +13,15 @@ export class ThreadsTreeProvider implements vscode.TreeDataProvider<ThreadItem> 
                 this.refresh();
             }
         });
+    }
+
+    setStatusFilter(statuses: string[]) {
+        this._statusFilter = new Set(statuses);
+        this.refresh();
+    }
+
+    getStatusFilter(): string[] {
+        return Array.from(this._statusFilter);
     }
 
     refresh(): void {
@@ -29,6 +39,9 @@ export class ThreadsTreeProvider implements vscode.TreeDataProvider<ThreadItem> 
 
         try {
             let threads = await this.apiClient.getThreads();
+            
+            // Filter by status
+            threads = threads.filter(t => this._statusFilter.has(t.status));
             
             // Sort by created_at desc as a proxy for activity
             threads.sort((a,b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());

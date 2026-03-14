@@ -2,7 +2,7 @@
   "name": "agentchatbus",
   "displayName": "AgentChatBus",
   "description": "AgentChatBus client for VS Code",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "icon": "bus_128.png",
   "engines": {
     "vscode": "^1.90.0"
@@ -59,6 +59,11 @@
         "icon": "$(refresh)"
       },
       {
+        "command": "agentchatbus.filterThreads",
+        "title": "Filter Threads",
+        "icon": "$(filter)"
+      },
+      {
         "command": "agentchatbus.openThread",
         "title": "Open Thread"
       }
@@ -68,7 +73,12 @@
         {
           "command": "agentchatbus.refreshThreads",
           "when": "view == agentchatbus.threads",
-          "group": "navigation"
+          "group": "navigation@1"
+        },
+        {
+          "command": "agentchatbus.filterThreads",
+          "when": "view == agentchatbus.threads",
+          "group": "navigation@2"
         },
         {
           "command": "agentchatbus.refreshAgents",

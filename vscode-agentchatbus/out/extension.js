@@ -47,7 +47,22 @@ function activate(context) {
     const threadsProvider = new threadsProvider_1.ThreadsTreeProvider(apiClient);
     const agentsProvider = new agentsProvider_1.AgentsTreeProvider(apiClient);
     context.subscriptions.push(vscode.window.registerTreeDataProvider('agentchatbus.threads', threadsProvider), vscode.window.registerTreeDataProvider('agentchatbus.agents', agentsProvider));
-    context.subscriptions.push(vscode.commands.registerCommand('agentchatbus.refreshThreads', () => threadsProvider.refresh()), vscode.commands.registerCommand('agentchatbus.refreshAgents', () => agentsProvider.refresh()), vscode.commands.registerCommand('agentchatbus.openThread', (thread) => {
+    context.subscriptions.push(vscode.commands.registerCommand('agentchatbus.refreshThreads', () => threadsProvider.refresh()), vscode.commands.registerCommand('agentchatbus.refreshAgents', () => agentsProvider.refresh()), vscode.commands.registerCommand('agentchatbus.filterThreads', async () => {
+        const statuses = ['discuss', 'implement', 'review', 'done', 'closed', 'archived'];
+        const currentFilter = threadsProvider.getStatusFilter();
+        const items = statuses.map(s => ({
+            label: s.charAt(0).toUpperCase() + s.slice(1),
+            status: s,
+            picked: currentFilter.includes(s)
+        }));
+        const result = await vscode.window.showQuickPick(items, {
+            canPickMany: true,
+            placeHolder: 'Select thread statuses to display'
+        });
+        if (result) {
+            threadsProvider.setStatusFilter(result.map(i => i.status));
+        }
+    }), vscode.commands.registerCommand('agentchatbus.openThread', (thread) => {
         if (thread) {
             chatPanel_1.ChatPanel.createOrShow(thread, apiClient);
         }

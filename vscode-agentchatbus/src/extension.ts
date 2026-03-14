@@ -22,6 +22,25 @@ export function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(
         vscode.commands.registerCommand('agentchatbus.refreshThreads', () => threadsProvider.refresh()),
         vscode.commands.registerCommand('agentchatbus.refreshAgents', () => agentsProvider.refresh()),
+        vscode.commands.registerCommand('agentchatbus.filterThreads', async () => {
+            const statuses = ['discuss', 'implement', 'review', 'done', 'closed', 'archived'];
+            const currentFilter = threadsProvider.getStatusFilter();
+            
+            const items = statuses.map(s => ({
+                label: s.charAt(0).toUpperCase() + s.slice(1),
+                status: s,
+                picked: currentFilter.includes(s)
+            }));
+
+            const result = await vscode.window.showQuickPick(items, {
+                canPickMany: true,
+                placeHolder: 'Select thread statuses to display'
+            });
+
+            if (result) {
+                threadsProvider.setStatusFilter(result.map(i => i.status));
+            }
+        }),
         vscode.commands.registerCommand('agentchatbus.openThread', (thread: Thread) => {
             if (thread) {
                 ChatPanel.createOrShow(thread, apiClient);
