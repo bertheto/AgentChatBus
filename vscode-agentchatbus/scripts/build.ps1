@@ -43,13 +43,19 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 # 3. Package
+$distDir = Join-Path $ExtensionRoot "dist"
+New-Item -ItemType Directory -Force -Path $distDir | Out-Null
+
+$pkgInfo = Get-Content "package.json" | ConvertFrom-Json
+$vsixPath = Join-Path $distDir "agentchatbus-$($pkgInfo.version).vsix"
+
 Write-Host "Packaging VSIX..." -ForegroundColor Yellow
-& npx vsce package
+& npx vsce package --out $vsixPath
 if ($LASTEXITCODE -ne 0) {
     Write-Error "Packaging failed."
     exit $LASTEXITCODE
 }
 
-$pkgInfo = Get-Content "package.json" | ConvertFrom-Json
-Write-Host "`nSuccessfully built: agentchatbus-$($pkgInfo.version).vsix" -ForegroundColor Green
-Write-Host "To install: code --install-extension agentchatbus-$($pkgInfo.version).vsix"
+Write-Host "`nSuccessfully built: $vsixPath" -ForegroundColor Green
+Write-Host "To install in VS Code: code --install-extension `"$vsixPath`""
+Write-Host "To install in Cursor: cursor --install-extension `"$vsixPath`""

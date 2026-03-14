@@ -158,6 +158,7 @@ class BusServerManager {
     }
     getStatusMetadata() {
         const serverUrl = this.getServerUrl();
+        const lm = this.getLanguageModelNamespace();
         return {
             pid: this.serverProcess?.pid,
             startTime: this.lastStartTime?.toISOString(),
@@ -167,7 +168,7 @@ class BusServerManager {
             nodeVersion: process.version,
             vscodeVersion: vscode.version,
             mcp: {
-                apiAvailable: typeof vscode.lm?.registerMcpServerDefinitionProvider === 'function',
+                apiAvailable: typeof lm?.registerMcpServerDefinitionProvider === 'function',
                 providerRegistered: this.mcpProviderRegistered,
                 providerId: BusServerManager.MCP_PROVIDER_ID,
                 providerLabel: BusServerManager.MCP_PROVIDER_LABEL,
@@ -177,6 +178,9 @@ class BusServerManager {
                 requiredVscodeVersion: '^1.110.0'
             }
         };
+    }
+    getLanguageModelNamespace() {
+        return vscode.lm;
     }
     async startServer() {
         this.log('Scanning environment for AgentChatBus...', 'search');
@@ -370,6 +374,11 @@ class BusServerManager {
         return null;
     }
     async registerMcpProvider(context) {
+        const lm = this.getLanguageModelNamespace();
+        if (!lm?.registerMcpServerDefinitionProvider) {
+            this.log('VS Code MCP provider API is unavailable in this editor build.', 'warning');
+            return;
+        }
         const provider = {
             onDidChangeMcpServerDefinitions: this.mcpDefinitionsChanged.event,
             provideMcpServerDefinitions: () => {
@@ -384,7 +393,7 @@ class BusServerManager {
             }
         };
         context.subscriptions.push(this.mcpDefinitionsChanged);
-        context.subscriptions.push(vscode.lm.registerMcpServerDefinitionProvider(BusServerManager.MCP_PROVIDER_ID, provider));
+        context.subscriptions.push(lm.registerMcpServerDefinitionProvider(BusServerManager.MCP_PROVIDER_ID, provider));
         this.mcpProviderRegistered = true;
         this.log('Registered AgentChatBus MCP definition provider.', 'plug');
     }

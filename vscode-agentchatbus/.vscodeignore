@@ -1,16 +1,22 @@
 .vscode/**
 .github/**
-tsconfig.json
-.vscodeignore
-.gitignore
+.history/**
 scripts/**
 src/**
+test/**
+tsconfig.json
+build.bat
+build.sh
+.gitignore
+.vscodeignore
+
+# Exclude all node_modules except production dependencies
 node_modules/**
 !node_modules/eventsource/**
-out/test/**
-build.bat
-LICENSE
-# But KEEP these:
+
+# Include only needed runtime files
 !out/**
 !resources/**
 !package.json
+!LICENSE.md
+!README.md

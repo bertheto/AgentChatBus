@@ -6,10 +6,10 @@
   "name": "agentchatbus",
   "displayName": "AgentChatBus",
   "description": "AgentChatBus client for VS Code",
-  "version": "0.1.26",
-  "icon": "bus_128.png",
+  "version": "0.1.29",
+  "icon": "resources/bus_128.png",
   "engines": {
-    "vscode": "^1.110.0"
+    "vscode": "^1.105.0"
   },
   "categories": [
     "Other"
@@ -260,7 +260,7 @@
     "watch": "tsc -watch -p ./"
   },
   "devDependencies": {
-    "@types/vscode": "^1.110.0",
+    "@types/vscode": "^1.105.0",
     "@types/node": "20.x",
     "@types/eventsource": "^1.1.15",
     "typescript": "^5.4.5"

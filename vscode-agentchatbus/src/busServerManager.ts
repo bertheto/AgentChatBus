@@ -152,6 +152,7 @@ export class BusServerManager {
 
     getStatusMetadata() {
         const serverUrl = this.getServerUrl();
+        const lm = this.getLanguageModelNamespace();
         return {
             pid: this.serverProcess?.pid,
             startTime: this.lastStartTime?.toISOString(),
@@ -161,7 +162,7 @@ export class BusServerManager {
             nodeVersion: process.version,
             vscodeVersion: vscode.version,
             mcp: {
-                apiAvailable: typeof vscode.lm?.registerMcpServerDefinitionProvider === 'function',
+                apiAvailable: typeof lm?.registerMcpServerDefinitionProvider === 'function',
                 providerRegistered: this.mcpProviderRegistered,
                 providerId: BusServerManager.MCP_PROVIDER_ID,
                 providerLabel: BusServerManager.MCP_PROVIDER_LABEL,
@@ -171,6 +172,10 @@ export class BusServerManager {
                 requiredVscodeVersion: '^1.110.0'
             }
         };
+    }
+
+    private getLanguageModelNamespace(): { registerMcpServerDefinitionProvider?: typeof vscode.lm.registerMcpServerDefinitionProvider } | undefined {
+        return (vscode as unknown as { lm?: typeof vscode.lm }).lm;
     }
 
     private async startServer(): Promise<boolean> {
@@ -386,6 +391,12 @@ export class BusServerManager {
     }
 
     async registerMcpProvider(context: vscode.ExtensionContext): Promise<void> {
+        const lm = this.getLanguageModelNamespace();
+        if (!lm?.registerMcpServerDefinitionProvider) {
+            this.log('VS Code MCP provider API is unavailable in this editor build.', 'warning');
+            return;
+        }
+
         const provider: vscode.McpServerDefinitionProvider<vscode.McpHttpServerDefinition> = {
             onDidChangeMcpServerDefinitions: this.mcpDefinitionsChanged.event,
             provideMcpServerDefinitions: () => {
@@ -403,7 +414,7 @@ export class BusServerManager {
 
         context.subscriptions.push(this.mcpDefinitionsChanged);
         context.subscriptions.push(
-            vscode.lm.registerMcpServerDefinitionProvider(BusServerManager.MCP_PROVIDER_ID, provider)
+            lm.registerMcpServerDefinitionProvider(BusServerManager.MCP_PROVIDER_ID, provider)
         );
         this.mcpProviderRegistered = true;
         this.log('Registered AgentChatBus MCP definition provider.', 'plug');

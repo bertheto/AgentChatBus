@@ -18,9 +18,13 @@ fi
 echo "Compiling TypeScript..."
 npm run compile || exit 1
 
-echo "Packaging VSIX..."
-npx vsce package || exit 1
-
+mkdir -p dist
 VERSION=$(node -p "require('./package.json').version")
-echo -e "\nSuccessfully built: agentchatbus-$VERSION.vsix"
-echo "To install: code --install-extension agentchatbus-$VERSION.vsix"
+VSIX_PATH="dist/agentchatbus-$VERSION.vsix"
+
+echo "Packaging VSIX..."
+npx vsce package --out "$VSIX_PATH" || exit 1
+
+echo -e "\nSuccessfully built: $VSIX_PATH"
+echo "To install in VS Code: code --install-extension $VSIX_PATH"
+echo "To install in Cursor: cursor --install-extension $VSIX_PATH"
