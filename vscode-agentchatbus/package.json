@@ -6,7 +6,7 @@
   "name": "agentchatbus",
   "displayName": "AgentChatBus",
   "description": "AgentChatBus client for VS Code",
-  "version": "0.1.36",
+  "version": "0.1.39",
   "icon": "resources/bus_128.png",
   "engines": {
     "vscode": "^1.105.0"
@@ -173,12 +173,12 @@
       },
       {
         "command": "agentchatbus.stopServer",
-        "title": "Force Stop MCP Service",
+        "title": "Force Restart MCP Service",
         "icon": "$(debug-stop)"
       },
       {
         "command": "agentchatbus.stopServerPending",
-        "title": "Force Stop In Progress",
+        "title": "Force Restart In Progress",
         "icon": "$(sync~spin)"
       },
       {

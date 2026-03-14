@@ -229,11 +229,11 @@ export class BusServerManager {
     }
 
     async stopServer(): Promise<boolean> {
-        this.log('Force stop requested...', 'debug-stop');
+        this.log('Force restart requested...', 'debug-stop');
         this.setLastStopFailureMessage(null);
 
         if (this.serverStopping) {
-            const message = 'Force stop is already in progress.';
+            const message = 'Force restart is already in progress.';
             this.setLastStopFailureMessage(message);
             this.log(message, 'warning');
             return false;
@@ -242,29 +242,41 @@ export class BusServerManager {
         this.setServerStopping(true);
         let success = false;
         try {
+            if (this.mcpLogProvider) {
+                this.mcpLogProvider.clear();
+                this.mcpLogProvider.setIsManaged(false);
+                this.mcpLogProvider.setStatusMessage('Force restarting MCP service. Stopping current process...');
+            }
+
+            const pidBeforeShutdown = await this.resolveServerPid();
+            if (pidBeforeShutdown) {
+                this.log(`Resolved target PID before force restart: ${pidBeforeShutdown}.`, 'info');
+            }
+
             const apiAccepted = await this.requestApiShutdown(true);
             if (apiAccepted) {
-                this.log('Force-shutdown API request was accepted. Waiting for server to stop...', 'debug-stop');
+                this.log('Force-shutdown API request was accepted. Waiting for server process to exit...', 'debug-stop');
             } else {
                 this.log('Force-shutdown API request was not accepted. Falling back to process kill if needed...', 'warning');
             }
 
-            const stoppedByApi = await this.waitForServerShutdown(4000);
+            const stoppedByApi = await this.waitForServerShutdown(4000, pidBeforeShutdown);
             if (stoppedByApi) {
-                this.handleServerStopped('force-shutdown API');
-                success = true;
-                return true;
+                this.handleServerStopped('force-shutdown API', true);
+                const restarted = await this.startAfterForceRestart();
+                success = restarted;
+                return restarted;
             }
 
-            const pid = await this.resolveServerPid();
+            const pid = pidBeforeShutdown ?? await this.resolveServerPid();
             if (!pid) {
-                const message = 'Server is still running, but no PID could be resolved for kill fallback.';
+                const message = 'Server did not exit after force-shutdown API, and no PID could be resolved for kill fallback.';
                 this.setLastStopFailureMessage(message);
                 this.log(message, 'error');
                 return false;
             }
 
-            this.log(`Server still responding after API force-shutdown. Attempting kill fallback for PID ${pid}...`, 'debug-stop');
+            this.log(`Server process is still alive after API force-shutdown. Attempting kill fallback for PID ${pid}...`, 'debug-stop');
             const killed = this.forceKillProcess(pid);
             if (!killed) {
                 const message = `Kill fallback failed for PID ${pid}.`;
@@ -273,20 +285,22 @@ export class BusServerManager {
                 return false;
             }
 
-            this.log(`Kill signal sent to PID ${pid}. Verifying shutdown...`, 'debug-stop');
-            const stoppedByKill = await this.waitForServerShutdown(4000);
+            this.log(`Kill signal sent to PID ${pid}. Verifying process exit...`, 'debug-stop');
+            const stoppedByKill = await this.waitForServerShutdown(4000, pid);
             if (stoppedByKill) {
-                this.handleServerStopped(`kill fallback (PID ${pid})`);
-                success = true;
-                return true;
+                this.handleServerStopped(`kill fallback (PID ${pid})`, true);
+                const restarted = await this.startAfterForceRestart();
+                success = restarted;
+                return restarted;
             }
 
-            const message = `Force stop failed: server still responds after kill fallback for PID ${pid}.`;
+            const message = `Force restart failed: process ${pid} is still alive after kill fallback.`;
             this.setLastStopFailureMessage(message);
             this.log(message, 'error');
             return false;
         } finally {
             if (!success) {
+                this.setServerReady(false);
                 this.setServerStopping(false);
             }
         }
@@ -575,18 +589,22 @@ export class BusServerManager {
         }
     }
 
-    private async waitForServerShutdown(timeoutMs: number): Promise<boolean> {
+    private async waitForServerShutdown(timeoutMs: number, pid?: number | null): Promise<boolean> {
         const deadline = Date.now() + timeoutMs;
         const serverUrl = this.getServerUrl();
         while (Date.now() < deadline) {
             const running = await this.checkServer(serverUrl);
-            if (!running) {
-                this.log('Server health check no longer responds. Shutdown confirmed.', 'check');
+            const processAlive = pid ? this.isProcessAlive(pid) : false;
+            if (!running && (!pid || !processAlive)) {
+                this.log('Server health check no longer responds and the target process has exited. Shutdown confirmed.', 'check');
                 return true;
+            }
+            if (!running && pid && processAlive) {
+                this.log(`Server health check is down, but PID ${pid} is still alive. Continuing shutdown verification...`, 'warning');
             }
             await new Promise(resolve => setTimeout(resolve, 500));
         }
-        this.log('Server is still responding after shutdown wait window.', 'warning');
+        this.log('Server shutdown verification window expired before full process exit.', 'warning');
         return false;
     }
 
@@ -628,13 +646,48 @@ export class BusServerManager {
         }
     }
 
-    private handleServerStopped(reason: string): void {
+    private isProcessAlive(pid: number): boolean {
+        try {
+            process.kill(pid, 0);
+            return true;
+        } catch (error) {
+            const code = (error as NodeJS.ErrnoException).code;
+            if (code === 'EPERM') {
+                return true;
+            }
+            return false;
+        }
+    }
+
+    private async startAfterForceRestart(): Promise<boolean> {
+        this.log('Starting a fresh MCP service after force restart...', 'sync~spin');
+        if (this.mcpLogProvider) {
+            this.mcpLogProvider.clear();
+            this.mcpLogProvider.setStatusMessage('Starting MCP service after force restart...');
+        }
+
+        const started = await this.startServer();
+        if (started) {
+            this.setServerReady(true);
+            this.log('Force restart completed successfully.', 'check');
+            return true;
+        }
+
+        const message = 'Force restart stopped the previous process, but failed to start a new MCP service.';
+        this.setLastStopFailureMessage(message);
+        this.log(message, 'error');
+        return false;
+    }
+
+    private handleServerStopped(reason: string, preserveReadyContext = false): void {
         this.setLastStopFailureMessage(null);
         this.serverProcess = null;
         this.stopExternalLogPolling();
         this.stopIdeHeartbeat();
         this.ideSessionToken = null;
-        this.setServerReady(false);
+        if (!preserveReadyContext) {
+            this.setServerReady(false);
+        }
         this.mcpLogProvider?.setIsManaged(false);
         void vscode.commands.executeCommand('setContext', 'agentchatbus:mcpServerActive', false);
         this.log(`Force stop completed via ${reason}.`, 'stop-circle');

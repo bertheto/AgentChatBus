@@ -133,12 +133,12 @@ function initializeMainViews(context: vscode.ExtensionContext, serverManager: Bu
             const isExternal = status.startupMode === 'external-service';
             const confirmed = await vscode.window.showWarningMessage(
                 isExternal
-                    ? 'Force stop the externally managed AgentChatBus service? The extension will try force-shutdown via API, verify shutdown, then kill the server process if it still survives.'
-                    : 'Force stop AgentChatBus Server? This will immediately terminate the MCP service managed by the extension.',
+                    ? 'Force restart the externally managed AgentChatBus service? The extension will try force-shutdown via API, verify process exit, then kill the process if needed before starting a fresh service.'
+                    : 'Force restart AgentChatBus Server? This will force the current MCP process down and immediately start a fresh one.',
                 { modal: true },
-                'Force Stop'
+                'Force Restart'
             );
-            if (confirmed === 'Force Stop') {
+            if (confirmed === 'Force Restart') {
                 const stopped = await serverManager.stopServer();
                 if (!stopped) {
                     const failure = serverManager.getLastStopFailureMessage();
@@ -153,7 +153,7 @@ function initializeMainViews(context: vscode.ExtensionContext, serverManager: Bu
             }
         }),
         vscode.commands.registerCommand('agentchatbus.stopServerPending', () => {
-            vscode.window.showInformationMessage('Force stop is already in progress. Waiting for shutdown verification or kill fallback.');
+            vscode.window.showInformationMessage('Force restart is already in progress. Waiting for shutdown verification, kill fallback, or fresh startup.');
         }),
         vscode.commands.registerCommand('agentchatbus.openFullLog', () => {
             const logs = mcpLogProvider?.getLogs() || [];
