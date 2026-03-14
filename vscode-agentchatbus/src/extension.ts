@@ -18,6 +18,8 @@ let mainViewsInitialized = false;
 export function activate(context: vscode.ExtensionContext) {
     console.log('[AgentChatBus] Activating extension...');
 
+    ChatPanel.setExtensionPath(context.extensionPath);
+
     const serverManager = new BusServerManager();
     const setupProvider = new SetupProvider();
     mcpLogProvider = new McpLogProvider();

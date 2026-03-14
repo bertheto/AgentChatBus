@@ -4,6 +4,7 @@ import type { Thread, Message } from '../api/types';
 
 export class ChatPanel {
     public static currentPanels: Map<string, ChatPanel> = new Map();
+    private static _extensionPath: string = '';
     private readonly _panel: vscode.WebviewPanel;
     private readonly _thread: Thread;
     private readonly _apiClient: AgentChatBusApiClient;
@@ -44,6 +45,10 @@ export class ChatPanel {
                 await this._loadNewMessages();
             }
         });
+    }
+
+    public static setExtensionPath(path: string) {
+        ChatPanel._extensionPath = path;
     }
 
     public static createOrShow(thread: Thread, apiClient: AgentChatBusApiClient) {
@@ -141,12 +146,20 @@ export class ChatPanel {
     }
 
     private _getHtmlForWebview() {
+        const webview = this._panel.webview;
+        
+        // Resource paths
+        const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(vscode.Uri.file(ChatPanel._extensionPath), 'resources', 'media', 'messageRenderer.js'));
+        const styleUri = webview.asWebviewUri(vscode.Uri.joinPath(vscode.Uri.file(ChatPanel._extensionPath), 'resources', 'media', 'messageRenderer.css'));
+        const mermaidUri = webview.asWebviewUri(vscode.Uri.joinPath(vscode.Uri.file(ChatPanel._extensionPath), 'resources', 'media', 'mermaid.min.js'));
+
         return `<!DOCTYPE html>
         <html lang="en">
         <head>
             <meta charset="UTF-8">
             <meta name="viewport" content="width=device-width, initial-scale=1.0">
             <title>Chat</title>
+            <link rel="stylesheet" href="${styleUri}">
             <style>
                 body {
                     font-family: var(--vscode-font-family);
@@ -157,51 +170,54 @@ export class ChatPanel {
                     height: 100vh;
                     margin: 0;
                     padding: 0;
+                    overflow: hidden;
                 }
                 #message-container {
                     flex: 1;
                     overflow-y: auto;
-                    padding: 20px;
+                    padding: 16px;
                     display: flex;
                     flex-direction: column;
-                    gap: 16px;
+                    gap: 14px;
                 }
                 .message-wrapper {
                     display: flex;
-                    gap: 12px;
-                    max-width: 85%;
+                    gap: 10px;
+                    max-width: 92%;
+                    align-items: flex-start;
                 }
                 .message-wrapper.human {
                     align-self: flex-end;
                     flex-direction: row-reverse;
                 }
                 .avatar {
-                    width: 32px;
-                    height: 32px;
+                    width: 28px;
+                    height: 28px;
                     display: flex;
                     align-items: center;
                     justify-content: center;
-                    font-size: 20px;
+                    font-size: 18px;
                     background: var(--vscode-editor-inactiveSelectionBackground);
-                    border-radius: 50%;
+                    border-radius: 6px;
                     flex-shrink: 0;
-                    margin-top: 4px;
+                    margin-top: 2px;
                 }
                 .message-content-wrapper {
                     display: flex;
                     flex-direction: column;
+                    min-width: 0;
                 }
                 .message-wrapper.human .message-content-wrapper {
                     align-items: flex-end;
                 }
                 .message {
-                    padding: 10px 14px;
-                    border-radius: 12px;
+                    padding: 8px 12px;
+                    border-radius: 10px;
                     background: var(--vscode-editor-inactiveSelectionBackground);
-                    word-wrap: break-word;
-                    white-space: pre-wrap;
                     color: var(--vscode-editor-foreground);
                     border: 1px solid var(--vscode-panel-border);
+                    font-size: 13px;
+                    line-height: 1.5;
                 }
                 .message-wrapper.human .message {
                     background: var(--vscode-button-background);
@@ -209,55 +225,69 @@ export class ChatPanel {
                     border: none;
                 }
                 .message-header {
-                    font-size: 0.8em;
+                    font-size: 11px;
                     opacity: 0.7;
-                    margin-bottom: 4px;
+                    margin-bottom: 2px;
                     display: flex;
-                    gap: 8px;
+                    gap: 6px;
                 }
                 #input-container {
-                    padding: 16px;
+                    padding: 12px;
                     background: var(--vscode-editor-background);
                     border-top: 1px solid var(--vscode-panel-border);
                     display: flex;
                     gap: 8px;
+                    align-items: flex-end;
                 }
                 #message-input {
                     flex: 1;
-                    padding: 10px;
+                    padding: 8px;
                     background: var(--vscode-input-background);
                     color: var(--vscode-input-foreground);
                     border: 1px solid var(--vscode-input-border);
-                    border-radius: 6px;
+                    border-radius: 4px;
                     font-family: var(--vscode-font-family);
+                    font-size: 13px;
                     resize: none;
+                    min-height: 20px;
+                    max-height: 150px;
                 }
-                button {
-                    padding: 8px 20px;
+                #send-button {
+                    padding: 6px 14px;
                     background: var(--vscode-button-background);
                     color: var(--vscode-button-foreground);
                     border: none;
-                    border-radius: 6px;
+                    border-radius: 4px;
                     cursor: pointer;
                     font-weight: 500;
+                    font-size: 12px;
+                    height: 32px;
                 }
-                button:hover {
+                #send-button:hover {
                     background: var(--vscode-button-hoverBackground);
                 }
             </style>
         </head>
-        <body>
+        <body data-theme="${vscode.window.activeColorTheme.kind === vscode.ColorThemeKind.Dark ? 'dark' : 'light'}">
             <div id="message-container"></div>
             <div id="input-container">
                 <textarea id="message-input" rows="1" placeholder="Type a message..."></textarea>
                 <button id="send-button">Send</button>
             </div>
 
+            <script src="${mermaidUri}"></script>
+            <script src="${scriptUri}"></script>
             <script>
                 const vscode = acquireVsCodeApi();
                 const messageContainer = document.getElementById('message-container');
                 const messageInput = document.getElementById('message-input');
                 const sendButton = document.getElementById('send-button');
+
+                // Auto-resize textarea
+                messageInput.addEventListener('input', () => {
+                    messageInput.style.height = 'auto';
+                    messageInput.style.height = Math.min(messageInput.scrollHeight, 150) + 'px';
+                });
 
                 function renderMessage(msg) {
                     const isHuman = /human/i.test(msg.author) || /human/i.test(msg.role);
@@ -287,7 +317,19 @@ export class ChatPanel {
                     
                     const content = document.createElement('div');
                     content.className = 'message';
-                    content.textContent = msg.content;
+                    
+                    // Use the consolidated renderer
+                    if (window.AcbMessageRenderer) {
+                        try {
+                            const metadata = msg.metadata || {};
+                            AcbMessageRenderer.renderMessageContent(content, msg.content, metadata);
+                        } catch (e) {
+                            console.error('Renderer error:', e);
+                            content.textContent = msg.content;
+                        }
+                    } else {
+                        content.textContent = msg.content;
+                    }
                     
                     contentWrapper.appendChild(header);
                     contentWrapper.appendChild(content);
@@ -305,23 +347,30 @@ export class ChatPanel {
                             messageContainer.innerHTML = '';
                             const msgs = Array.isArray(message.messages) ? message.messages : (message.messages.messages || []);
                             msgs.forEach(renderMessage);
+                            if (window.AcbMessageRenderer) {
+                                AcbMessageRenderer.renderMermaidBlocks(messageContainer);
+                            }
                             messageContainer.scrollTop = messageContainer.scrollHeight;
                             break;
                         case 'newMessage':
                             renderMessage(message.message);
+                            if (window.AcbMessageRenderer) {
+                                AcbMessageRenderer.renderMermaidBlocks(messageContainer);
+                            }
                             messageContainer.scrollTop = messageContainer.scrollHeight;
                             break;
                     }
                 });
 
                 function sendMessage() {
-                    const text = messageInput.value;
+                    const text = messageInput.value.trim();
                     if (text) {
                         vscode.postMessage({
                             command: 'sendMessage',
                             text: text
                         });
                         messageInput.value = '';
+                        messageInput.style.height = 'auto';
                     }
                 }
 

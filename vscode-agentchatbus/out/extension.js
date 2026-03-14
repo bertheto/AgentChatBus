@@ -51,6 +51,7 @@ let settingsProvider;
 let mainViewsInitialized = false;
 function activate(context) {
     console.log('[AgentChatBus] Activating extension...');
+    chatPanel_1.ChatPanel.setExtensionPath(context.extensionPath);
     const serverManager = new busServerManager_1.BusServerManager();
     const setupProvider = new setupProvider_1.SetupProvider();
     mcpLogProvider = new mcpLogProvider_1.McpLogProvider();
