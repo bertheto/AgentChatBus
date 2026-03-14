@@ -164,6 +164,9 @@ export class BusServerManager {
 
             // Set context that MCP server is active (started by extension)
             vscode.commands.executeCommand('setContext', 'agentchatbus:mcpServerActive', true);
+            if (this.mcpLogProvider) {
+                this.mcpLogProvider.setIsManaged(true);
+            }
 
             this.serverProcess.stdout?.on('data', (data) => {
                 const text = data.toString();
@@ -190,6 +193,9 @@ export class BusServerManager {
                 this.serverProcess = null;
                 this.setServerReady(false);
                 vscode.commands.executeCommand('setContext', 'agentchatbus:mcpServerActive', false);
+                if (this.mcpLogProvider) {
+                    this.mcpLogProvider.setIsManaged(false);
+                }
             });
 
             this.log('Waiting for health check response...', 'sync~spin');

@@ -2,7 +2,7 @@
   "name": "agentchatbus",
   "displayName": "AgentChatBus",
   "description": "AgentChatBus client for VS Code",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "icon": "bus_128.png",
   "engines": {
     "vscode": "^1.93.0"
@@ -46,7 +46,7 @@
           "id": "agentchatbus.mcpLogs",
           "name": "MCP Server Logs",
           "icon": "$(terminal)",
-          "when": "agentchatbus:serverReady && agentchatbus:mcpServerActive"
+          "when": "agentchatbus:serverReady"
         }
       ]
     },

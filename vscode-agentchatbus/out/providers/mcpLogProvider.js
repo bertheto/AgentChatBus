@@ -40,10 +40,16 @@ class McpLogProvider {
     onDidChangeTreeData = this._onDidChangeTreeData.event;
     logs = [];
     maxLogs = 500;
+    isManaged = false;
+    setIsManaged(managed) {
+        this.isManaged = managed;
+        this.refresh();
+    }
     refresh() {
         this._onDidChangeTreeData.fire();
     }
     addLog(data) {
+        this.setIsManaged(true);
         const lines = data.split(/\r?\n/).filter(line => line.trim().length > 0);
         for (const line of lines) {
             this.logs.push(line);
@@ -66,7 +72,9 @@ class McpLogProvider {
     getChildren(element) {
         if (element)
             return [];
-        // Show newest logs at the bottom (standard log behavior)
+        if (!this.isManaged && this.logs.length === 0) {
+            return [new LogLineItem("Server managed externally / Logs not available", -1)];
+        }
         return this.logs.map((log, index) => new LogLineItem(log, index));
     }
 }
@@ -79,7 +87,11 @@ class LogLineItem extends vscode.TreeItem {
         this.message = message;
         this.index = index;
         this.tooltip = message;
-        // Optional: color coding based on log level?
+        if (index === -1) {
+            this.description = "Logs are only available when the server is started by this extension.";
+            this.iconPath = new vscode.ThemeIcon('info');
+            return;
+        }
         if (message.includes('ERROR') || message.includes('Exception') || message.includes('failed')) {
             this.iconPath = new vscode.ThemeIcon('error', new vscode.ThemeColor('errorForeground'));
         }
