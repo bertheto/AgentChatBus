@@ -19,6 +19,7 @@ class IdeOwnershipManager:
     def __init__(self, owner_boot_token: str | None, heartbeat_timeout_seconds: int = 45):
         self._owner_boot_token = owner_boot_token or ""
         self._ownership_assignable = bool(self._owner_boot_token)
+        self._had_owner_once = False
         self._heartbeat_timeout = timedelta(seconds=heartbeat_timeout_seconds)
         self._sessions: dict[str, IdeSession] = {}
         self._owner_instance_id: str | None = None
@@ -48,14 +49,23 @@ class IdeOwnershipManager:
                 existing.ide_label = ide_label
                 existing.last_seen = now
 
-            if (
-                self._owner_instance_id is None
-                and self._ownership_assignable
-                and claim_owner
+            valid_boot_claim = bool(
+                claim_owner
                 and owner_boot_token
                 and secrets.compare_digest(owner_boot_token, self._owner_boot_token)
-            ):
+            )
+            implicit_reclaim = bool(
+                self._owner_instance_id is None
+                and self._ownership_assignable
+                and self._had_owner_once
+            )
+
+            if self._owner_instance_id is None and self._ownership_assignable and (valid_boot_claim or implicit_reclaim):
                 self._owner_instance_id = instance_id
+                self._had_owner_once = True
+
+            if valid_boot_claim:
+                self._had_owner_once = True
 
             return self._build_status_locked(instance_id, existing.session_token, False)
 

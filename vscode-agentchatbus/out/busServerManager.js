@@ -218,8 +218,16 @@ class BusServerManager {
     async stopExternalService() {
         const serverUrl = this.getServerUrl();
         this.log(`Requesting shutdown from external AgentChatBus service at ${serverUrl}...`, 'debug-stop');
-        if (!this.ideSessionToken) {
-            this.log('Cannot request external shutdown because this IDE session is not registered.', 'warning');
+        if (!this.ideSessionToken || !this.ideSessionState.registered) {
+            this.log('IDE session is not registered yet. Attempting registration before external shutdown...', 'info');
+            const registered = await this.ensureIdeSessionRegistered(false);
+            if (!registered) {
+                this.log('Cannot request external shutdown because IDE registration could not be established.', 'warning');
+                return false;
+            }
+        }
+        if (!this.ideSessionState.can_shutdown) {
+            this.log(`External shutdown denied because this IDE session does not own shutdown rights. Current owner=${this.ideSessionState.owner_instance_id || 'none'}.`, 'warning');
             return false;
         }
         try {
@@ -279,7 +287,7 @@ class BusServerManager {
                 else {
                     this.log(`IDE registration succeeded without owner claim. shutdownPermission=${payload.can_shutdown ? 'yes' : 'no'} owner=${payload.owner_instance_id || 'none'}`, 'plug');
                 }
-                return;
+                return true;
             }
             catch (error) {
                 const message = error instanceof Error ? error.message : String(error);
@@ -287,6 +295,13 @@ class BusServerManager {
                 await new Promise(resolve => setTimeout(resolve, 400));
             }
         }
+        this.updateIdeSessionState({
+            registered: false,
+            is_owner: false,
+            can_shutdown: false,
+        });
+        this.log('IDE registration failed after all retry attempts.', 'error');
+        return false;
     }
     startIdeHeartbeat() {
         if (!this.ideSessionToken || this.ideHeartbeatPoller) {
