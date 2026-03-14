@@ -58,6 +58,9 @@ class BusServerManager {
         if (this.setupProvider) {
             this.setupProvider.addLog(message, icon, description);
         }
+        if (this.mcpLogProvider) {
+            this.mcpLogProvider.addLog(`[Extension] ${message}`);
+        }
     }
     async ensureServerRunning() {
         this.log('Initialization sequence started.', 'info');
@@ -92,15 +95,33 @@ class BusServerManager {
     async restartServer() {
         this.log('Force restart initiated...', 'sync~spin');
         if (this.serverProcess) {
-            this.serverProcess.kill();
+            // Taskkill /F /T /PID to ensure child processes are also killed on Windows
+            if (process.platform === 'win32') {
+                try {
+                    child_process.execSync(`taskkill /pid ${this.serverProcess.pid} /f /t`);
+                }
+                catch (e) {
+                    this.serverProcess.kill();
+                }
+            }
+            else {
+                this.serverProcess.kill();
+            }
             this.serverProcess = null;
         }
         this.setServerReady(false);
         if (this.mcpLogProvider) {
             this.mcpLogProvider.clear();
-            this.mcpLogProvider.setIsManaged(false);
+            this.mcpLogProvider.setIsManaged(false); // Reset to extension logs mode
         }
-        return await this.ensureServerRunning();
+        // Wait a bit for port to free up
+        await new Promise(r => setTimeout(r, 1000));
+        const started = await this.startServer();
+        if (started) {
+            this.setServerReady(true);
+            return true;
+        }
+        return false;
     }
     setServerReady(ready) {
         vscode.commands.executeCommand('setContext', 'agentchatbus:serverReady', ready);

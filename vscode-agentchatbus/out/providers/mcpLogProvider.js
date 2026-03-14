@@ -52,7 +52,6 @@ class McpLogProvider {
         this._onDidChangeTreeData.fire();
     }
     addLog(data) {
-        this.setIsManaged(true);
         const lines = data.split(/\r?\n/).filter(line => line.trim().length > 0);
         for (const line of lines) {
             this.logs.push(line);

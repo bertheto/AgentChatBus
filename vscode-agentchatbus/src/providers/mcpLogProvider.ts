@@ -22,7 +22,6 @@ export class McpLogProvider implements vscode.TreeDataProvider<LogLineItem> {
     }
 
     addLog(data: string): void {
-        this.setIsManaged(true);
         const lines = data.split(/\r?\n/).filter(line => line.trim().length > 0);
         for (const line of lines) {
             this.logs.push(line);
