@@ -41,8 +41,16 @@ class McpLogProvider {
     logs = [];
     maxLogs = 500;
     isManaged = false;
+    statusMessage = null;
     setIsManaged(managed) {
         this.isManaged = managed;
+        if (managed) {
+            this.statusMessage = null;
+        }
+        this.refresh();
+    }
+    setStatusMessage(message) {
+        this.statusMessage = message;
         this.refresh();
     }
     getLogs() {
@@ -75,7 +83,7 @@ class McpLogProvider {
         if (element)
             return [];
         if (!this.isManaged && this.logs.length === 0) {
-            return [new LogLineItem("Ready (Managed Externally)", -1)];
+            return [new LogLineItem(this.statusMessage || "Ready (Managed Externally)", -1)];
         }
         if (this.logs.length === 0) {
             return [new LogLineItem("Waiting for logs...", -2)];
@@ -93,7 +101,7 @@ class LogLineItem extends vscode.TreeItem {
         this.index = index;
         this.tooltip = message;
         if (index === -1) {
-            this.description = "Extension cannot capture logs for external processes.";
+            this.description = "Extension is reading logs from the shared AgentChatBus log API.";
             this.iconPath = new vscode.ThemeIcon('info', new vscode.ThemeColor('descriptionForeground'));
             return;
         }

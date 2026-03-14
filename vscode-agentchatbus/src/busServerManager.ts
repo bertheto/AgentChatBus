@@ -15,6 +15,8 @@ export class BusServerManager {
     private mcpLogProvider: McpLogProvider | null = null;
     private readonly mcpDefinitionsChanged = new vscode.EventEmitter<void>();
     private mcpProviderRegistered = false;
+    private externalLogPoller: NodeJS.Timeout | null = null;
+    private externalLogCursor = 0;
     private lastStartTime: Date | null = null;
     private serverMetadata: {
         command?: string;
@@ -63,8 +65,8 @@ export class BusServerManager {
         try {
             const isRunning = await this.checkServer(serverUrl);
             if (isRunning) {
-                this.log('Server detected (Managed Externally). Logs cannot be captured.', 'warning');
-                this.log('Use the "Restart Server" button to relaunch and capture logs.', 'info');
+                this.log('Server detected (Managed Externally). Switching to shared log API.', 'warning');
+                this.startExternalLogPolling(serverUrl);
                 this.setServerReady(true);
                 return true;
             }
@@ -99,6 +101,7 @@ export class BusServerManager {
             this.serverProcess = null;
         }
         this.setServerReady(false);
+        this.stopExternalLogPolling();
         if (this.mcpLogProvider) {
             this.mcpLogProvider.clear();
             this.mcpLogProvider.setIsManaged(false); // Reset to extension logs mode
@@ -117,6 +120,51 @@ export class BusServerManager {
 
     private setServerReady(ready: boolean) {
         vscode.commands.executeCommand('setContext', 'agentchatbus:serverReady', ready);
+    }
+
+    private startExternalLogPolling(serverUrl: string): void {
+        this.stopExternalLogPolling();
+        this.externalLogCursor = 0;
+        if (this.mcpLogProvider) {
+            this.mcpLogProvider.clear();
+            this.mcpLogProvider.setIsManaged(false);
+            this.mcpLogProvider.setStatusMessage('Reading logs from shared AgentChatBus API...');
+        }
+
+        const poll = async () => {
+            try {
+                const response = await fetch(`${serverUrl.replace(/\/+$/, '')}/api/logs?after=${this.externalLogCursor}&limit=200`);
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+                const payload = await response.json() as { entries?: Array<{ id: number; line: string }>; next_cursor?: number };
+                const entries = payload.entries || [];
+                for (const entry of entries) {
+                    this.externalLogCursor = Math.max(this.externalLogCursor, entry.id);
+                    this.mcpLogProvider?.addLog(entry.line);
+                }
+                if (this.mcpLogProvider) {
+                    this.mcpLogProvider.setStatusMessage(entries.length > 0 ? null : 'Connected to shared AgentChatBus log API.');
+                }
+            } catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
+                this.mcpLogProvider?.setStatusMessage(`Shared log API unavailable: ${message}`);
+            }
+        };
+
+        void poll();
+        this.externalLogPoller = setInterval(() => {
+            void poll();
+        }, 1500);
+    }
+
+    private stopExternalLogPolling(): void {
+        if (this.externalLogPoller) {
+            clearInterval(this.externalLogPoller);
+            this.externalLogPoller = null;
+        }
+        this.externalLogCursor = 0;
+        this.mcpLogProvider?.setStatusMessage(null);
     }
 
     private getServerUrl(): string {
@@ -249,6 +297,7 @@ export class BusServerManager {
         
         this.serverMetadata = { command, args, cwd, env };
         this.lastStartTime = new Date();
+        this.stopExternalLogPolling();
 
         try {
             this.serverProcess = child_process.spawn(command, args, {
@@ -261,6 +310,7 @@ export class BusServerManager {
             vscode.commands.executeCommand('setContext', 'agentchatbus:mcpServerActive', true);
             if (this.mcpLogProvider) {
                 this.mcpLogProvider.setIsManaged(true);
+                this.mcpLogProvider.setStatusMessage(null);
             }
 
             this.serverProcess.stdout?.on('data', (data) => {
@@ -421,6 +471,7 @@ export class BusServerManager {
     }
 
     dispose() {
+        this.stopExternalLogPolling();
         if (this.serverProcess) {
             this.serverProcess.kill();
         }

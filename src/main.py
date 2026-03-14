@@ -51,6 +51,9 @@ from src.thread_creation_service import (
     CreatorAuthError,
     CreatorNotFoundError,
 )
+from src.log_buffer import get_log_entries, install_std_stream_capture
+
+install_std_stream_capture()
 
 logging.basicConfig(
     level=logging.INFO,
@@ -957,6 +960,17 @@ async def api_threads(
         "total": total,
         "has_more": has_more,
         "next_cursor": threads[-1].created_at.isoformat() if has_more else None,
+    }
+
+
+@app.get("/api/logs")
+async def api_logs(after: int = 0, limit: int = 200):
+    limit = max(1, min(limit, 1000))
+    entries = get_log_entries(after=after, limit=limit)
+    next_cursor = entries[-1]["id"] if entries else after
+    return {
+        "entries": entries,
+        "next_cursor": next_cursor,
     }
 
 

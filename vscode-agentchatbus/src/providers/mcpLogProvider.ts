@@ -7,9 +7,18 @@ export class McpLogProvider implements vscode.TreeDataProvider<LogLineItem> {
     private logs: string[] = [];
     private maxLogs: number = 500;
     private isManaged: boolean = false;
+    private statusMessage: string | null = null;
 
     setIsManaged(managed: boolean): void {
         this.isManaged = managed;
+        if (managed) {
+            this.statusMessage = null;
+        }
+        this.refresh();
+    }
+
+    setStatusMessage(message: string | null): void {
+        this.statusMessage = message;
         this.refresh();
     }
 
@@ -49,7 +58,7 @@ export class McpLogProvider implements vscode.TreeDataProvider<LogLineItem> {
         if (element) return [];
         
         if (!this.isManaged && this.logs.length === 0) {
-            return [new LogLineItem("Ready (Managed Externally)", -1)];
+            return [new LogLineItem(this.statusMessage || "Ready (Managed Externally)", -1)];
         }
         
         if (this.logs.length === 0) {
@@ -69,7 +78,7 @@ class LogLineItem extends vscode.TreeItem {
         this.tooltip = message;
         
         if (index === -1) {
-            this.description = "Extension cannot capture logs for external processes.";
+            this.description = "Extension is reading logs from the shared AgentChatBus log API.";
             this.iconPath = new vscode.ThemeIcon('info', new vscode.ThemeColor('descriptionForeground'));
             return;
         }
