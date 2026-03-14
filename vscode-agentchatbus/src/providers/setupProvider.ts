@@ -12,8 +12,15 @@ export class SetupProvider implements vscode.TreeDataProvider<SetupStep> {
 
     reset() {
         this.steps = [
-            new SetupStep('Status: Initializing...', vscode.TreeItemCollapsibleState.None, 'sync~spin')
+            new SetupStep('Starting AgentChatBus...', vscode.TreeItemCollapsibleState.None, 'play')
         ];
+        this.refresh();
+    }
+
+    addLog(message: string, icon?: string, description?: string) {
+        const step = new SetupStep(message, vscode.TreeItemCollapsibleState.None, icon);
+        step.description = description;
+        this.steps.push(step);
         this.refresh();
     }
 

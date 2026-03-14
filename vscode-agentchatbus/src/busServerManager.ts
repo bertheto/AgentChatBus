@@ -17,6 +17,13 @@ export class BusServerManager {
         this.setupProvider = provider;
     }
 
+    private log(message: string, icon?: string, description?: string) {
+        this.outputChannel.appendLine(`[AgentChatBus] ${message}`);
+        if (this.setupProvider) {
+            this.setupProvider.addLog(message, icon, description);
+        }
+    }
+
     async ensureServerRunning(): Promise<boolean> {
         const config = vscode.workspace.getConfiguration('agentchatbus');
         const autoStart = config.get<boolean>('autoStartBusServer', true);
@@ -26,16 +33,16 @@ export class BusServerManager {
             return true; 
         }
 
-        this.updateSetupSteps([{ label: 'Checking AgentChatBus Server...', icon: 'sync~spin' }]);
+        this.log('Checking if server is already running...', 'sync~spin');
 
         const isRunning = await this.checkServer(serverUrl);
         if (isRunning) {
-            this.outputChannel.appendLine('[AgentChatBus] Server is already running.');
+            this.log('Server is already running.', 'check');
             this.setServerReady(true);
             return true;
         }
 
-        this.outputChannel.appendLine('[AgentChatBus] Server not detected. Attempting to start...');
+        this.log('Server not detected. Starting setup...', 'info');
         const started = await this.startServer();
         if (started) {
             this.setServerReady(true);
@@ -47,12 +54,6 @@ export class BusServerManager {
 
     private setServerReady(ready: boolean) {
         vscode.commands.executeCommand('setContext', 'agentchatbus:serverReady', ready);
-    }
-
-    private updateSetupSteps(steps: { label: string, icon?: string, description?: string }[]) {
-        if (this.setupProvider) {
-            this.setupProvider.setSteps(steps);
-        }
     }
 
     private async checkServer(url: string): Promise<boolean> {
@@ -74,14 +75,17 @@ export class BusServerManager {
 
         // Case 1: In a project workspace
         if (projectRoot) {
-            this.updateSetupSteps([{ label: 'Found AgentChatBus project, starting from source...', icon: 'sync~spin' }]);
+            this.log('Detected project workspace.', 'folder');
             
             // Auto-detect .venv if pythonPath is default
             if (pythonPath === 'python') {
+                this.log('Searching for virtual environment...', 'search');
                 const venvPath = path.join(projectRoot, '.venv', process.platform === 'win32' ? 'Scripts' : 'bin', process.platform === 'win32' ? 'python.exe' : 'python');
                 if (fs.existsSync(venvPath)) {
                     pythonPath = venvPath;
-                    this.outputChannel.appendLine(`[AgentChatBus] Detected virtual env at: ${pythonPath}`);
+                    this.log(`Using virtual env: ${pythonPath}`, 'terminal');
+                } else {
+                    this.log('No .venv found, using system python.', 'info');
                 }
             }
 
@@ -89,18 +93,15 @@ export class BusServerManager {
         }
 
         // Case 2: Use global 'agentchatbus' command
-        this.updateSetupSteps([{ label: 'Locating agentchatbus command...', icon: 'sync~spin' }]);
+        this.log('Searching for global "agentchatbus" command...', 'search');
         const globalCmd = await this.findAgentChatBusExecutable();
         if (globalCmd) {
-            this.updateSetupSteps([{ label: 'Starting global AgentChatBus server...', icon: 'sync~spin' }]);
+            this.log(`Found global command: ${globalCmd}`, 'terminal');
             return await this.spawnServer(globalCmd, []);
         }
 
         // Case 3: Not found anywhere, offer to install
-        this.updateSetupSteps([
-            { label: 'AgentChatBus not found.', icon: 'error' },
-            { label: 'Click to attempt "pip install agentchatbus"', icon: 'cloud-download', description: 'Requires Python and pip' }
-        ]);
+        this.log('AgentChatBus not found in PATH or project.', 'error');
         
         const selection = await vscode.window.showErrorMessage(
             'AgentChatBus server not found. Would you like to attempt to install it via pip?',
@@ -110,10 +111,12 @@ export class BusServerManager {
         if (selection === 'Install') {
             const installed = await this.installAgentChatBus();
             if (installed) {
-                // Try again after install
+                this.log('Installation finished. Re-locating executable...', 'sync~spin');
                 const newCmd = await this.findAgentChatBusExecutable();
                 if (newCmd) {
                     return await this.spawnServer(newCmd, []);
+                } else {
+                    this.log('Installed but still cannot find "agentchatbus" in PATH.', 'error');
                 }
             }
         }
@@ -122,21 +125,18 @@ export class BusServerManager {
     }
 
     private async spawnServer(command: string, args: string[], cwd?: string): Promise<boolean> {
-        this.outputChannel.appendLine(`[AgentChatBus] Spawning: ${command} ${args.join(' ')}`);
+        this.log(`Starting server process: ${command} ${args.join(' ')}`, 'play');
         
         const env = { ...process.env };
         if (cwd) {
             env.PYTHONPATH = cwd;
         }
         
-        // Ensure paths are quoted if they contain spaces
-        const spawnCmd = command.includes(' ') ? `"${command}"` : command;
-
         try {
             this.serverProcess = child_process.spawn(command, args, {
                 cwd: cwd || process.cwd(),
                 env,
-                shell: true // Required for some Windows path resolutions
+                shell: true 
             });
 
             this.serverProcess.stdout?.on('data', (data) => {
@@ -148,33 +148,32 @@ export class BusServerManager {
             });
 
             this.serverProcess.on('error', (err) => {
-                this.outputChannel.appendLine(`[AgentChatBus] Failed to start process: ${err.message}`);
+                this.log(`Process spawn error: ${err.message}`, 'error');
             });
 
             this.serverProcess.on('close', (code) => {
-                this.outputChannel.appendLine(`[AgentChatBus] Server process exited with code ${code}`);
+                this.log(`Server process exited with code ${code}`, 'warning');
                 this.serverProcess = null;
                 this.setServerReady(false);
             });
 
-            // Wait for server to become ready
+            this.log('Waiting for health check...', 'sync~spin');
             const config = vscode.workspace.getConfiguration('agentchatbus');
             const serverUrl = config.get<string>('serverUrl', 'http://127.0.0.1:39765');
             let retries = 20;
             while (retries > 0) {
                 await new Promise(r => setTimeout(r, 1000));
                 if (await this.checkServer(serverUrl)) {
-                    this.outputChannel.appendLine('[AgentChatBus] Server is now ready.');
-                    this.updateSetupSteps([{ label: 'Server Ready', icon: 'check' }]);
+                    this.log('Server is online and healthy.', 'check');
                     return true;
                 }
                 retries--;
             }
 
-            this.outputChannel.appendLine('[AgentChatBus] Timeout waiting for server health check.');
+            this.log('Timeout: Server started but health check failed.', 'error');
             return false;
         } catch (e: any) {
-            this.outputChannel.appendLine(`[AgentChatBus] Spawn error: ${e.message}`);
+            this.log(`Spawn error: ${e.message}`, 'error');
             return false;
         }
     }
@@ -191,7 +190,6 @@ export class BusServerManager {
         if (process.platform === 'win32') {
             const appData = process.env.APPDATA;
             if (appData) {
-                // Often in Local/Programs/Python/PythonXX/Scripts (but APPDATA is Roaming)
                 const localAppData = process.env.LOCALAPPDATA || path.join(path.dirname(appData), 'Local');
                 const pythonBase = path.join(localAppData, 'Programs', 'Python');
                 if (fs.existsSync(pythonBase)) {
@@ -201,7 +199,6 @@ export class BusServerManager {
                         if (fs.existsSync(scriptsPath)) return scriptsPath;
                     }
                 }
-                // Also check Roaming/Python/PythonXX/Scripts
                 const roamingPython = path.join(appData, 'Python');
                 if (fs.existsSync(roamingPython)) {
                     const versions = fs.readdirSync(roamingPython);
@@ -217,9 +214,8 @@ export class BusServerManager {
     }
 
     private async installAgentChatBus(): Promise<boolean> {
-        this.updateSetupSteps([{ label: 'Installing AgentChatBus...', icon: 'sync~spin' }]);
+        this.log('Running: pip install agentchatbus...', 'cloud-download');
         this.outputChannel.show();
-        this.outputChannel.appendLine('[AgentChatBus] Running: pip install agentchatbus');
 
         return new Promise((resolve) => {
             const pkg = child_process.spawn('python', ['-m', 'pip', 'install', 'agentchatbus'], { shell: true });
@@ -229,17 +225,16 @@ export class BusServerManager {
             
             pkg.on('close', (code) => {
                 if (code === 0) {
-                    this.outputChannel.appendLine('[AgentChatBus] Installation successful.');
+                    this.log('Installation successful.', 'check');
                     resolve(true);
                 } else {
-                    this.outputChannel.appendLine(`[AgentChatBus] Installation failed with code ${code}.`);
-                    this.updateSetupSteps([{ label: 'Installation Failed', icon: 'error', description: 'See output for details' }]);
+                    this.log(`Installation failed (code ${code}).`, 'error');
                     resolve(false);
                 }
             });
 
             pkg.on('error', (err) => {
-                this.outputChannel.appendLine(`[AgentChatBus] Failed to start pip: ${err.message}`);
+                this.log(`Pip error: ${err.message}`, 'error');
                 resolve(false);
             });
         });
@@ -259,7 +254,7 @@ export class BusServerManager {
 
     registerMcpProvider(context: vscode.ExtensionContext): void {
         const projectRoot = this.findProjectRoot();
-        if (!projectRoot) return; // MCP currently only for source-mode
+        if (!projectRoot) return;
 
         const lm = (vscode as any).lm;
         if (!lm || !lm.registerMcpServerDefinitionProvider) return;
