@@ -40,6 +40,8 @@
     mermaidLoadPromise: null,
     uploadResolvers: new Map(),
     uploadRequestSeq: 0,
+    agentsLoaded: false,
+    agentsLoadPromise: null,
   };
 
   const INITIAL_RECENT_RENDER_COUNT = 36;
@@ -94,9 +96,10 @@
       await uploadFiles(Array.from(refs.imageInput.files || []));
       refs.imageInput.value = '';
     });
-    refs.mentionButton.addEventListener('click', (event) => {
+    refs.mentionButton.addEventListener('click', async (event) => {
       event.preventDefault();
-      showMentionMenu('', refs.mentionButton.getBoundingClientRect());
+      event.stopPropagation();
+      await openMentionPicker();
     });
 
     refs.composeInput.addEventListener('input', onComposerInput);
@@ -181,6 +184,21 @@
           resolver.resolve(message.image || null);
         } else {
           resolver.reject(new Error(message.error || 'Image upload failed.'));
+        }
+        break;
+      }
+      case 'agentsResult': {
+        if (!state.agentsLoadPromise || state.agentsLoadPromise.requestId !== message.requestId) {
+          break;
+        }
+        const pending = state.agentsLoadPromise;
+        state.agentsLoadPromise = null;
+        if (message.ok) {
+          state.agents = Array.isArray(message.agents) ? message.agents.filter(Boolean) : [];
+          state.agentsLoaded = true;
+          pending.resolve(state.agents);
+        } else {
+          pending.reject(new Error(message.error || 'Failed to load agents.'));
         }
         break;
       }
@@ -708,7 +726,9 @@
 
       const remove = document.createElement('button');
       remove.className = 'image-remove-btn';
-      remove.textContent = 'x';
+      remove.type = 'button';
+      remove.setAttribute('aria-label', 'Remove image');
+      remove.textContent = '×';
       remove.addEventListener('click', () => {
         state.uploadedImages.splice(index, 1);
         renderImagePreview();
@@ -807,7 +827,7 @@
   function onComposerInput() {
     const mentionState = detectMentionQuery();
     if (mentionState) {
-      showMentionMenu(mentionState.query, mentionState.rect);
+      void showMentionMenuForQuery(mentionState.query, mentionState.rect);
     } else {
       hideMentionMenu();
     }
@@ -865,6 +885,37 @@
     };
   }
 
+  async function openMentionPicker() {
+    refs.composeInput.focus();
+    placeCaretAtEndIfNeeded();
+
+    try {
+      const agents = await ensureAgentsLoaded();
+      if (!Array.isArray(agents) || agents.length === 0) {
+        insertPlainText('@');
+        showToast('No agents available for mention.');
+        return;
+      }
+      showMentionMenu('', getMentionButtonAnchorRect());
+    } catch (error) {
+      insertPlainText('@');
+      showToast(`Failed to load agents: ${formatError(error)}`);
+    }
+  }
+
+  async function showMentionMenuForQuery(query, rect) {
+    try {
+      const agents = await ensureAgentsLoaded();
+      if (!Array.isArray(agents) || agents.length === 0) {
+        hideMentionMenu();
+        return;
+      }
+      showMentionMenu(query, rect);
+    } catch {
+      hideMentionMenu();
+    }
+  }
+
   function showMentionMenu(query, rect) {
     const needle = String(query || '').toLowerCase();
     state.mentionCandidates = state.agents.filter((agent) => {
@@ -884,12 +935,14 @@
       button.type = 'button';
       button.className = 'menu-item';
       if (index === 0) button.classList.add('active');
-      button.innerHTML = `<div class="menu-item-title">${escapeHtml(agent.display_name || agent.name || agent.id)}</div><div class="menu-item-meta">${escapeHtml(agent.id || '')}</div>`;
+      button.innerHTML = `<div class="menu-item-title">${escapeHtml(agent.emoji || '')} ${escapeHtml(agent.display_name || agent.name || agent.id)}</div><div class="menu-item-meta">${escapeHtml(agent.id || '')}</div>`;
       button.addEventListener('click', () => chooseMention(index));
       refs.mentionMenu.appendChild(button);
     });
 
-    refs.mentionMenu.style.left = `${Math.max(12, Math.min(window.innerWidth - 300, rect.left))}px`;
+    const menuWidth = Math.min(320, Math.max(220, refs.composeInput.getBoundingClientRect().width));
+    refs.mentionMenu.style.width = `${menuWidth}px`;
+    refs.mentionMenu.style.left = `${Math.max(12, Math.min(window.innerWidth - menuWidth - 12, rect.left))}px`;
     refs.mentionMenu.style.top = `${Math.min(window.innerHeight - 240, rect.bottom + 8)}px`;
     refs.mentionMenu.classList.remove('hidden');
   }
@@ -959,6 +1012,32 @@
     refs.composeInput.focus();
   }
 
+  function placeCaretAtEndIfNeeded() {
+    const selection = window.getSelection();
+    if (selection && selection.rangeCount > 0 && refs.composeInput.contains(selection.anchorNode)) {
+      return;
+    }
+
+    const range = document.createRange();
+    range.selectNodeContents(refs.composeInput);
+    range.collapse(false);
+    const nextSelection = window.getSelection();
+    if (!nextSelection) {
+      return;
+    }
+    nextSelection.removeAllRanges();
+    nextSelection.addRange(range);
+  }
+
+  function getMentionButtonAnchorRect() {
+    const composerRect = refs.composeInput.getBoundingClientRect();
+    const buttonRect = refs.mentionButton.getBoundingClientRect();
+    return {
+      left: Math.max(12, Math.min(buttonRect.left, composerRect.left)),
+      bottom: Math.max(buttonRect.bottom, composerRect.top),
+    };
+  }
+
   function showReactionMenu(messageId, anchor) {
     state.reactionTargetId = messageId;
     const rect = anchor.getBoundingClientRect();
@@ -1001,23 +1080,35 @@
   }
 
   async function loadAgents() {
-    const candidates = [
-      `${state.baseUrl}/api/threads/${encodeURIComponent(state.threadId)}/agents`,
-      `${state.baseUrl}/api/agents`,
-    ];
+    return ensureAgentsLoaded();
+  }
 
-    for (const url of candidates) {
-      try {
-        const response = await fetch(url);
-        if (!response.ok) continue;
-        const payload = await response.json();
-        const items = Array.isArray(payload) ? payload : (payload.agents || []);
-        state.agents = items.filter(Boolean);
-        return;
-      } catch {
-        // Try next source.
-      }
+  async function ensureAgentsLoaded() {
+    if (state.agentsLoaded) {
+      return state.agents;
     }
+
+    if (state.agentsLoadPromise) {
+      return state.agentsLoadPromise.promise;
+    }
+
+    const requestId = `agents-${Date.now()}-${state.uploadRequestSeq++}`;
+    let resolvePromise;
+    let rejectPromise;
+    const promise = new Promise((resolve, reject) => {
+      resolvePromise = resolve;
+      rejectPromise = reject;
+    });
+
+    state.agentsLoadPromise = {
+      requestId,
+      promise,
+      resolve: resolvePromise,
+      reject: rejectPromise,
+    };
+
+    vscode.postMessage({ command: 'loadAgents', requestId });
+    return promise;
   }
 
   async function uploadFiles(files) {

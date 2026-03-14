@@ -42,6 +42,9 @@ export class ChatPanel {
                     case 'uploadImage':
                         await this._handleUploadImage(message.requestId, message.payload);
                         return;
+                    case 'loadAgents':
+                        await this._handleLoadAgents(message.requestId);
+                        return;
                 }
             },
             null,
@@ -224,6 +227,29 @@ export class ChatPanel {
         } catch (e: any) {
             this._panel.webview.postMessage({
                 command: 'uploadResult',
+                requestId,
+                ok: false,
+                error: e?.message || String(e),
+            });
+        }
+    }
+
+    private async _handleLoadAgents(requestId: string | undefined) {
+        if (!requestId) {
+            return;
+        }
+
+        try {
+            const agents = await this._apiClient.getAgents();
+            this._panel.webview.postMessage({
+                command: 'agentsResult',
+                requestId,
+                ok: true,
+                agents,
+            });
+        } catch (e: any) {
+            this._panel.webview.postMessage({
+                command: 'agentsResult',
                 requestId,
                 ok: false,
                 error: e?.message || String(e),

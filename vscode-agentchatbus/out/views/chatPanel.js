@@ -64,6 +64,9 @@ class ChatPanel {
                 case 'uploadImage':
                     await this._handleUploadImage(message.requestId, message.payload);
                     return;
+                case 'loadAgents':
+                    await this._handleLoadAgents(message.requestId);
+                    return;
             }
         }, null, this._disposables);
         // Listen for SSE messages
@@ -219,6 +222,28 @@ class ChatPanel {
         catch (e) {
             this._panel.webview.postMessage({
                 command: 'uploadResult',
+                requestId,
+                ok: false,
+                error: e?.message || String(e),
+            });
+        }
+    }
+    async _handleLoadAgents(requestId) {
+        if (!requestId) {
+            return;
+        }
+        try {
+            const agents = await this._apiClient.getAgents();
+            this._panel.webview.postMessage({
+                command: 'agentsResult',
+                requestId,
+                ok: true,
+                agents,
+            });
+        }
+        catch (e) {
+            this._panel.webview.postMessage({
+                command: 'agentsResult',
                 requestId,
                 ok: false,
                 error: e?.message || String(e),

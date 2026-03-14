@@ -513,11 +513,17 @@ textarea {
   right: -6px;
   width: 22px;
   height: 22px;
+  padding: 0;
   border: none;
   border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   background: var(--vscode-errorForeground);
   color: white;
   cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
 }
 
 @media (max-width: 900px) {
