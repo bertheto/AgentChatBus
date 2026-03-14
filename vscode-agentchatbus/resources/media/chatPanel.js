@@ -38,6 +38,8 @@
     toastTimer: null,
     renderToken: 0,
     mermaidLoadPromise: null,
+    uploadResolvers: new Map(),
+    uploadRequestSeq: 0,
   };
 
   const INITIAL_RECENT_RENDER_COUNT = 36;
@@ -169,6 +171,19 @@
           showToast(message.error || 'Failed to send message.');
         }
         break;
+      case 'uploadResult': {
+        const resolver = state.uploadResolvers.get(message.requestId);
+        if (!resolver) {
+          break;
+        }
+        state.uploadResolvers.delete(message.requestId);
+        if (message.ok) {
+          resolver.resolve(message.image || null);
+        } else {
+          resolver.reject(new Error(message.error || 'Image upload failed.'));
+        }
+        break;
+      }
     }
   }
 
@@ -437,7 +452,10 @@
     }
 
     body.appendChild(bubble);
-    body.appendChild(renderMessageTail(message));
+    const tail = renderMessageTail(message);
+    if (tail) {
+      body.appendChild(tail);
+    }
 
     main.appendChild(header);
     main.appendChild(body);
@@ -478,42 +496,30 @@
   }
 
   function renderMessageTail(message) {
-    const tail = document.createElement('div');
-    tail.className = 'msg-tail';
-
-    tail.appendChild(renderReactionList(message));
-
-    const actions = document.createElement('div');
-    actions.className = 'msg-actions';
-
-    const replyButton = createActionButton('Reply', () => setReplyTarget(message.id));
-    actions.appendChild(replyButton);
-
-    const reactButton = createActionButton('React', (event) => showReactionMenu(message.id, event.currentTarget));
-    reactButton.classList.add('msg-action-react');
-    actions.appendChild(reactButton);
-
-    if (isOwnMessage(message)) {
-      const editButton = createActionButton('Edit', () => beginEdit(message.id));
-      actions.appendChild(editButton);
+    const reactions = renderReactionList(message);
+    if (!reactions) {
+      return null;
     }
 
-    const historyButton = createActionButton('History', () => void showEditHistory(message.id));
-    actions.appendChild(historyButton);
-
-    tail.appendChild(actions);
+    const tail = document.createElement('div');
+    tail.className = 'msg-tail';
+    tail.appendChild(reactions);
     return tail;
   }
 
   function renderReactionList(message) {
-    const wrap = document.createElement('div');
-    wrap.className = 'reaction-list';
-
     const grouped = new Map();
     for (const reaction of message.reactions || []) {
       const key = reaction.reaction || '';
       grouped.set(key, (grouped.get(key) || 0) + 1);
     }
+
+    if (grouped.size === 0) {
+      return null;
+    }
+
+    const wrap = document.createElement('div');
+    wrap.className = 'reaction-list';
 
     for (const [reaction, count] of grouped.entries()) {
       const pill = document.createElement('button');
@@ -1021,23 +1027,38 @@
     }
 
     for (const file of imageFiles) {
-      const formData = new FormData();
-      formData.append('file', file);
       try {
-        const response = await fetch(`${state.baseUrl}/api/upload/image`, {
-          method: 'POST',
-          body: formData,
-        });
-        if (!response.ok) {
-          throw new Error(await response.text());
+        const payload = await requestImageUpload(file);
+        if (payload?.url) {
+          state.uploadedImages.push({ url: payload.url, name: payload.name || file.name });
         }
-        const payload = await response.json();
-        state.uploadedImages.push({ url: payload.url, name: payload.name || file.name });
       } catch (error) {
         showToast(`Failed to upload image: ${formatError(error)}`);
       }
     }
     renderImagePreview();
+  }
+
+  async function requestImageUpload(file) {
+    const requestId = `upload-${Date.now()}-${state.uploadRequestSeq++}`;
+    const buffer = await file.arrayBuffer();
+    const data = Array.from(new Uint8Array(buffer));
+
+    const promise = new Promise((resolve, reject) => {
+      state.uploadResolvers.set(requestId, { resolve, reject });
+    });
+
+    vscode.postMessage({
+      command: 'uploadImage',
+      requestId,
+      payload: {
+        name: file.name,
+        type: file.type,
+        data,
+      },
+    });
+
+    return promise;
   }
 
   async function onComposerPaste(event) {

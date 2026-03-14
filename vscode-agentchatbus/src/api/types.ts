@@ -64,3 +64,8 @@ export interface SendMessagePayload {
     images?: Array<{ url: string; name?: string }>;
     reply_to_msg_id?: string;
 }
+
+export interface UploadedImage {
+    url: string;
+    name?: string;
+}

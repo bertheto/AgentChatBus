@@ -39,6 +39,9 @@ export class ChatPanel {
                     case 'sendMessage':
                         await this._handleSendMessage(message.payload);
                         return;
+                    case 'uploadImage':
+                        await this._handleUploadImage(message.requestId, message.payload);
+                        return;
                 }
             },
             null,
@@ -193,6 +196,37 @@ export class ChatPanel {
                 command: 'sendResult',
                 ok: false,
                 error: errorMessage
+            });
+        }
+    }
+
+    private async _handleUploadImage(requestId: string | undefined, payload: any) {
+        if (!requestId) {
+            return;
+        }
+
+        try {
+            const fileName = typeof payload?.name === 'string' ? payload.name : 'image';
+            const mimeType = typeof payload?.type === 'string' ? payload.type : 'application/octet-stream';
+            const bytes = Array.isArray(payload?.data) ? Uint8Array.from(payload.data) : undefined;
+
+            if (!bytes || bytes.length === 0) {
+                throw new Error('Image payload is empty.');
+            }
+
+            const image = await this._apiClient.uploadImage(fileName, mimeType, bytes);
+            this._panel.webview.postMessage({
+                command: 'uploadResult',
+                requestId,
+                ok: true,
+                image,
+            });
+        } catch (e: any) {
+            this._panel.webview.postMessage({
+                command: 'uploadResult',
+                requestId,
+                ok: false,
+                error: e?.message || String(e),
             });
         }
     }

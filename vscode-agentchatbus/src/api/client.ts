@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import type { Thread, ThreadListResponse, Message, Agent, SyncContext, SendMessagePayload } from './types';
+import type { Thread, ThreadListResponse, Message, Agent, SyncContext, SendMessagePayload, UploadedImage } from './types';
 import EventSource from 'eventsource';
 
 export class AgentChatBusApiClient {
@@ -146,6 +146,25 @@ export class AgentChatBusApiClient {
             body: JSON.stringify({ state })
         });
         return response.ok;
+    }
+
+    async uploadImage(fileName: string, mimeType: string, data: Uint8Array): Promise<UploadedImage> {
+        const normalized = new Uint8Array(data.byteLength);
+        normalized.set(data);
+        const blob = new Blob([normalized.buffer], { type: mimeType || 'application/octet-stream' });
+        const formData = new FormData();
+        formData.append('file', blob, fileName || 'image');
+
+        const response = await fetch(`${this.baseUrl}/api/upload/image`, {
+            method: 'POST',
+            body: formData,
+        });
+
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status} uploading image: ${await response.text()}`);
+        }
+
+        return await response.json() as UploadedImage;
     }
 
     connectSSE(): void {
