@@ -2,7 +2,8 @@
   "name": "agentchatbus",
   "displayName": "AgentChatBus",
   "description": "AgentChatBus client for VS Code",
-  "version": "0.1.4",
+  "version": "0.1.5",
+  "icon": "bus_128.png",
   "engines": {
     "vscode": "^1.90.0"
   },
@@ -20,7 +21,7 @@
         {
           "id": "agentchatbus",
           "title": "AgentChatBus",
-          "icon": "$(comment-discussion)"
+          "icon": "resources/icon.svg"
         }
       ]
     },

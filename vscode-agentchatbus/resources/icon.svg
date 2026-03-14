@@ -1,0 +1,17 @@
+<svg width="24" height="24" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+  <g fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">
+<!--lights-->
+    <circle cx="9" cy="4" r="0.9"/>
+    <circle cx="12" cy="4" r="0.9"/>
+    <circle cx="15" cy="4" r="0.9"/>
+<!--bus-->
+    <rect x="6" y="7" width="12" height="8" rx="2"/>
+<!--face-->
+    <circle cx="10" cy="10.5" r="0.5" fill="currentColor"/>
+    <circle cx="14" cy="10.5" r="0.5" fill="currentColor"/>
+    <path d="M10.5 12 Q12 13 13.5 12"/>
+<!--chat bubbles-->
+    <circle cx="5" cy="10" r="1.2"/>
+    <circle cx="19" cy="10" r="1.2"/>
+  </g>
+</svg>
