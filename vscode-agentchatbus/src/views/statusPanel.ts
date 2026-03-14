@@ -45,6 +45,7 @@ export class StatusPanel {
     private _getHtmlForWebview() {
         const m = this.metadata;
         const mcp = m.mcp || {};
+        const attempts = Array.isArray(m.resolutionAttempts) ? m.resolutionAttempts : [];
         const uptime = m.startTime ? this._getUptime(new Date(m.startTime)) : 'N/A';
         const serverStatus = m.pid ? 'RUNNING' : 'STOPPED';
         const mcpApiStatus = mcp.apiAvailable ? 'AVAILABLE' : 'UNAVAILABLE';
@@ -91,6 +92,10 @@ export class StatusPanel {
 
         <div class="card">
             <h2>⚙️ Startup Configuration</h2>
+            <div><span class="label">Mode:</span> <span class="value">${m.startupMode || 'N/A'}</span></div>
+            <div><span class="label">Resolved By:</span> <span class="value">${m.resolvedBy || 'N/A'}</span></div>
+            <div><span class="label">Python:</span> <span class="value">${m.pythonLauncher || 'N/A'}</span></div>
+            <div><span class="label">Source Root:</span> <span class="value">${m.sourceRoot || 'N/A'}</span></div>
             <div><span class="label">Executable:</span> <span class="value">${m.command || 'N/A'}</span></div>
             <div><span class="label">Arguments:</span> <span class="value">${m.args ? m.args.join(' ') : 'N/A'}</span></div>
             <div><span class="label">WorkDir:</span> <span class="value">${m.cwd || 'N/A'}</span></div>
@@ -123,6 +128,13 @@ export class StatusPanel {
         </div>
     </div>
 
+    <h2>🧭 Resolution Attempts</h2>
+    <div class="card" style="max-width: 100%;">
+        <div class="env-list">
+            ${this._renderAttempts(attempts)}
+        </div>
+    </div>
+
     <script>
         const vscode = acquireVsCodeApi();
     </script>
@@ -142,6 +154,21 @@ export class StatusPanel {
                     <span class="env-val" title="${val}">${val}</span>
                 </div>
             `).join('');
+    }
+
+    private _renderAttempts(attempts: string[]) {
+        if (attempts.length === 0) {
+            return '<div class="value">No recorded resolution attempts.</div>';
+        }
+
+        return attempts
+            .map(entry => `
+                <div class="env-item">
+                    <span class="env-key">step</span>
+                    <span class="env-val" title="${entry}">${entry}</span>
+                </div>
+            `)
+            .join('');
     }
 
     private _getUptime(startTime: Date): string {

@@ -2,12 +2,47 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import * as child_process from 'child_process';
 import * as fs from 'fs';
+import { promisify } from 'util';
 import { SetupProvider } from './providers/setupProvider';
 import { McpLogProvider } from './providers/mcpLogProvider';
+
+const execFileAsync = promisify(child_process.execFile);
+
+type LaunchMode = 'workspace-source' | 'pip-executable' | 'pip-module' | 'external-service';
+
+type PythonLauncher = {
+    command: string;
+    baseArgs: string[];
+    label: string;
+};
+
+type LaunchSpec = {
+    command: string;
+    args: string[];
+    cwd?: string;
+    env?: NodeJS.ProcessEnv;
+    launchMode: LaunchMode;
+    resolvedBy: string;
+    pythonLauncher?: string;
+    sourceRoot?: string;
+};
+
+type ServerMetadata = {
+    command?: string;
+    args?: string[];
+    cwd?: string;
+    env?: NodeJS.ProcessEnv;
+    startupMode?: LaunchMode;
+    resolvedBy?: string;
+    pythonLauncher?: string;
+    sourceRoot?: string;
+    resolutionAttempts?: string[];
+};
 
 export class BusServerManager {
     private static readonly MCP_PROVIDER_ID = 'agentchatbus.provider';
     private static readonly MCP_PROVIDER_LABEL = 'AgentChatBus Local Server';
+    private static readonly MAX_ATTEMPTS = 40;
 
     private outputChannel: vscode.OutputChannel;
     private serverProcess: child_process.ChildProcess | null = null;
@@ -18,12 +53,7 @@ export class BusServerManager {
     private externalLogPoller: NodeJS.Timeout | null = null;
     private externalLogCursor = 0;
     private lastStartTime: Date | null = null;
-    private serverMetadata: {
-        command?: string;
-        args?: string[];
-        cwd?: string;
-        env?: any;
-    } = {};
+    private serverMetadata: ServerMetadata = { resolutionAttempts: [] };
 
     constructor() {
         this.outputChannel = vscode.window.createOutputChannel('AgentChatBus Server');
@@ -48,16 +78,30 @@ export class BusServerManager {
         }
     }
 
+    private resetResolutionAttempts(): void {
+        this.serverMetadata.resolutionAttempts = [];
+    }
+
+    private recordResolutionAttempt(message: string): void {
+        const attempts = this.serverMetadata.resolutionAttempts || [];
+        attempts.push(message);
+        if (attempts.length > BusServerManager.MAX_ATTEMPTS) {
+            attempts.shift();
+        }
+        this.serverMetadata.resolutionAttempts = attempts;
+        this.log(message, 'search');
+    }
+
     async ensureServerRunning(): Promise<boolean> {
         this.log('Initialization sequence started.', 'info');
-        
+
         const config = vscode.workspace.getConfiguration('agentchatbus');
         const autoStart = config.get<boolean>('autoStartBusServer', true);
         const serverUrl = config.get<string>('serverUrl', 'http://127.0.0.1:39765');
 
         if (!autoStart) {
             this.log('Auto-start is disabled in settings.', 'info');
-            return true; 
+            return true;
         }
 
         this.log(`Probing server at ${serverUrl}...`, 'sync~spin');
@@ -65,13 +109,17 @@ export class BusServerManager {
         try {
             const isRunning = await this.checkServer(serverUrl);
             if (isRunning) {
+                this.serverMetadata.startupMode = 'external-service';
+                this.serverMetadata.resolvedBy = 'Existing service detected via /health';
+                this.recordResolutionAttempt('Detected an already-running AgentChatBus service via /health probe.');
                 this.log('Server detected (Managed Externally). Switching to shared log API.', 'warning');
                 this.startExternalLogPolling(serverUrl);
                 this.setServerReady(true);
                 return true;
             }
-        } catch (e: any) {
-            this.log(`Probe failed: ${e.message}`, 'warning');
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            this.log(`Probe failed: ${message}`, 'warning');
         }
 
         this.log('Server not responding. Attempting to start...', 'search');
@@ -88,11 +136,10 @@ export class BusServerManager {
     async restartServer(): Promise<boolean> {
         this.log('Force restart initiated...', 'sync~spin');
         if (this.serverProcess) {
-            // Taskkill /F /T /PID to ensure child processes are also killed on Windows
-            if (process.platform === 'win32') {
+            if (process.platform === 'win32' && this.serverProcess.pid) {
                 try {
                     child_process.execSync(`taskkill /pid ${this.serverProcess.pid} /f /t`);
-                } catch (e) {
+                } catch {
                     this.serverProcess.kill();
                 }
             } else {
@@ -104,12 +151,11 @@ export class BusServerManager {
         this.stopExternalLogPolling();
         if (this.mcpLogProvider) {
             this.mcpLogProvider.clear();
-            this.mcpLogProvider.setIsManaged(false); // Reset to extension logs mode
+            this.mcpLogProvider.setIsManaged(false);
         }
-        
-        // Wait a bit for port to free up
-        await new Promise(r => setTimeout(r, 1000));
-        
+
+        await new Promise(resolve => setTimeout(resolve, 1000));
+
         const started = await this.startServer();
         if (started) {
             this.setServerReady(true);
@@ -119,7 +165,7 @@ export class BusServerManager {
     }
 
     private setServerReady(ready: boolean) {
-        vscode.commands.executeCommand('setContext', 'agentchatbus:serverReady', ready);
+        void vscode.commands.executeCommand('setContext', 'agentchatbus:serverReady', ready);
     }
 
     private startExternalLogPolling(serverUrl: string): void {
@@ -131,21 +177,20 @@ export class BusServerManager {
             this.mcpLogProvider.setStatusMessage('Reading logs from shared AgentChatBus API...');
         }
 
+        const normalizedServerUrl = serverUrl.replace(/\/+$/, '');
         const poll = async () => {
             try {
-                const response = await fetch(`${serverUrl.replace(/\/+$/, '')}/api/logs?after=${this.externalLogCursor}&limit=200`);
+                const response = await fetch(`${normalizedServerUrl}/api/logs?after=${this.externalLogCursor}&limit=200`);
                 if (!response.ok) {
                     throw new Error(`HTTP ${response.status}`);
                 }
-                const payload = await response.json() as { entries?: Array<{ id: number; line: string }>; next_cursor?: number };
+                const payload = await response.json() as { entries?: Array<{ id: number; line: string }> };
                 const entries = payload.entries || [];
                 for (const entry of entries) {
                     this.externalLogCursor = Math.max(this.externalLogCursor, entry.id);
                     this.mcpLogProvider?.addLog(entry.line);
                 }
-                if (this.mcpLogProvider) {
-                    this.mcpLogProvider.setStatusMessage(entries.length > 0 ? null : 'Connected to shared AgentChatBus log API.');
-                }
+                this.mcpLogProvider?.setStatusMessage(entries.length > 0 ? null : 'Connected to shared AgentChatBus log API.');
             } catch (error) {
                 const message = error instanceof Error ? error.message : String(error);
                 this.mcpLogProvider?.setStatusMessage(`Shared log API unavailable: ${message}`);
@@ -217,7 +262,7 @@ export class BusServerManager {
                 transport: 'http+sse',
                 serverUrl,
                 sseEndpoint: `${serverUrl}/mcp/sse`,
-                requiredVscodeVersion: '^1.110.0'
+                requiredVscodeVersion: '^1.105.0'
             }
         };
     }
@@ -227,127 +272,186 @@ export class BusServerManager {
     }
 
     private async startServer(): Promise<boolean> {
-        this.log('Scanning environment for AgentChatBus...', 'search');
+        this.resetResolutionAttempts();
+        this.log('Scanning environment for AgentChatBus startup candidates...', 'search');
+
         const projectRoot = await this.findProjectRootAsync();
-        const config = vscode.workspace.getConfiguration('agentchatbus');
-        let pythonPath = config.get<string>('pythonPath', 'python');
-
-        // Case 1: In a project workspace
         if (projectRoot) {
-            this.log(`Found project root: ${projectRoot}`, 'folder');
-            
-            // Auto-detect .venv if pythonPath is default
-            if (pythonPath === 'python') {
-                this.log('Searching for virtual environment (.venv)...', 'search');
-                const venvBase = path.join(projectRoot, '.venv', process.platform === 'win32' ? 'Scripts' : 'bin');
-                const venvPython = path.join(venvBase, process.platform === 'win32' ? 'python.exe' : 'python');
-                
-                if (fs.existsSync(venvPython)) {
-                    pythonPath = venvPython;
-                    this.log(`Using virtual env: ${pythonPath}`, 'terminal');
-                } else {
-                    this.log('No .venv found, falling back to system python.', 'info');
-                }
+            this.recordResolutionAttempt(`Recognized AgentChatBus source workspace at ${projectRoot}.`);
+            const sourceSpec = await this.resolveWorkspaceLaunchSpec(projectRoot);
+            if (sourceSpec) {
+                return this.spawnServer(sourceSpec);
             }
-
-            return await this.spawnServer(pythonPath, ['-m', 'src.main'], projectRoot);
+        } else {
+            this.recordResolutionAttempt('No AgentChatBus source workspace detected. Forcing pip/package resolution path.');
         }
 
-        // Case 2: Use global 'agentchatbus' command
-        this.log('Searching for "agentchatbus" command in PATH...', 'search');
-        const globalCmd = await this.findAgentChatBusExecutable();
-        if (globalCmd) {
-            this.log(`Located global command: ${globalCmd}`, 'terminal');
-            return await this.spawnServer(globalCmd, []);
-        }
-
-        // Case 3: Not found anywhere, offer to install
-        this.log('AgentChatBus not detected. Check system PATH or open an AgentChatBus project.', 'error');
-        
-        const selection = await vscode.window.showErrorMessage(
-            'AgentChatBus server not found. Would you like to attempt to install it via pip?',
-            'Install', 'Cancel'
-        );
-
-        if (selection === 'Install') {
+        let installedSpec = await this.resolveInstalledLaunchSpec();
+        if (!installedSpec) {
+            this.log('Packaged AgentChatBus was not found. Attempting pip installation...', 'cloud-download');
             const installed = await this.installAgentChatBus();
-            if (installed) {
-                this.log('Relocating executable after installation...', 'sync~spin');
-                const newCmd = await this.findAgentChatBusExecutable();
-                if (newCmd) {
-                    return await this.spawnServer(newCmd, []);
-                } else {
-                    this.log('Installation succeeded but executable still not found in PATH.', 'error');
-                }
+            if (!installed) {
+                this.log('pip installation attempts did not succeed.', 'error');
+                return false;
             }
+            installedSpec = await this.resolveInstalledLaunchSpec(installed);
         }
 
-        return false;
+        if (!installedSpec) {
+            this.log('AgentChatBus installation completed, but no runnable command or module could be resolved.', 'error');
+            return false;
+        }
+
+        return this.spawnServer(installedSpec);
     }
 
-    private async spawnServer(command: string, args: string[], cwd?: string): Promise<boolean> {
-        this.log(`Starting server process...`, 'play');
-        const fullCmd = `${command} ${args.join(' ')}`;
-        this.log(`Exec: ${fullCmd}`, 'terminal');
-        
-        const env = { ...process.env };
-        if (cwd) {
-            env.PYTHONPATH = cwd;
+    private async resolveWorkspaceLaunchSpec(projectRoot: string): Promise<LaunchSpec | null> {
+        const config = vscode.workspace.getConfiguration('agentchatbus');
+        const configuredPython = config.get<string>('pythonPath', 'python');
+        const launchers = this.getPythonLaunchers(projectRoot, true, configuredPython);
+
+        for (const launcher of launchers) {
+            const usable = await this.canRunPythonLauncher(launcher);
+            if (!usable) {
+                this.recordResolutionAttempt(`Workspace launcher unavailable: ${launcher.label}`);
+                continue;
+            }
+
+            this.recordResolutionAttempt(`Using workspace source mode with ${launcher.label}.`);
+            return {
+                command: launcher.command,
+                args: [...launcher.baseArgs, '-m', 'src.main'],
+                cwd: projectRoot,
+                env: { ...process.env, PYTHONPATH: projectRoot },
+                launchMode: 'workspace-source',
+                resolvedBy: 'Actual AgentChatBus workspace detected; launching source server.',
+                pythonLauncher: launcher.label,
+                sourceRoot: projectRoot,
+            };
         }
-        
-        this.serverMetadata = { command, args, cwd, env };
+
+        this.log('AgentChatBus workspace is open, but no usable Python launcher was found for source mode.', 'warning');
+        return null;
+    }
+
+    private async resolveInstalledLaunchSpec(preferredLaunchers: PythonLauncher[] = []): Promise<LaunchSpec | null> {
+        const pathExecutable = await this.findAgentChatBusExecutable();
+        if (pathExecutable) {
+            this.recordResolutionAttempt(`Resolved packaged executable directly: ${pathExecutable}`);
+            return {
+                command: pathExecutable,
+                args: [],
+                launchMode: 'pip-executable',
+                resolvedBy: 'Resolved installed agentchatbus executable from PATH or Python Scripts directory.',
+            };
+        }
+
+        const config = vscode.workspace.getConfiguration('agentchatbus');
+        const configuredPython = config.get<string>('pythonPath', 'python');
+        const launchers = this.getPythonLaunchers(undefined, false, configuredPython, preferredLaunchers);
+
+        for (const launcher of launchers) {
+            const usable = await this.canRunPythonLauncher(launcher);
+            if (!usable) {
+                this.recordResolutionAttempt(`Python launcher unavailable for packaged mode: ${launcher.label}`);
+                continue;
+            }
+
+            const scriptPath = await this.findAgentChatBusScriptForLauncher(launcher);
+            if (scriptPath) {
+                this.recordResolutionAttempt(`Resolved installed script via ${launcher.label}: ${scriptPath}`);
+                return {
+                    command: scriptPath,
+                    args: [],
+                    launchMode: 'pip-executable',
+                    resolvedBy: `Located agentchatbus script in Python Scripts directory via ${launcher.label}.`,
+                    pythonLauncher: launcher.label,
+                };
+            }
+
+            const moduleInstalled = await this.isAgentChatBusInstalledInLauncher(launcher);
+            if (moduleInstalled) {
+                this.recordResolutionAttempt(`Resolved installed Python module via ${launcher.label}; using module fallback.`);
+                return {
+                    command: launcher.command,
+                    args: [...launcher.baseArgs, '-m', 'agentchatbus.cli'],
+                    launchMode: 'pip-module',
+                    resolvedBy: `Python package is installed but script path could not be invoked directly; using python -m fallback via ${launcher.label}.`,
+                    pythonLauncher: launcher.label,
+                };
+            }
+
+            this.recordResolutionAttempt(`Launcher ${launcher.label} can run Python, but agentchatbus is not installed there.`);
+        }
+
+        return null;
+    }
+
+    private async spawnServer(spec: LaunchSpec): Promise<boolean> {
+        const env = { ...process.env, ...(spec.env || {}) };
+        this.serverMetadata = {
+            command: spec.command,
+            args: spec.args,
+            cwd: spec.cwd,
+            env,
+            startupMode: spec.launchMode,
+            resolvedBy: spec.resolvedBy,
+            pythonLauncher: spec.pythonLauncher,
+            sourceRoot: spec.sourceRoot,
+            resolutionAttempts: [...(this.serverMetadata.resolutionAttempts || [])],
+        };
         this.lastStartTime = new Date();
         this.stopExternalLogPolling();
 
+        this.log(`Starting server process using ${spec.launchMode}.`, 'play');
+        this.log(`Exec: ${spec.command} ${spec.args.join(' ')}`.trim(), 'terminal');
+        this.log(`Resolution: ${spec.resolvedBy}`, 'info');
+        if (spec.pythonLauncher) {
+            this.log(`Python launcher: ${spec.pythonLauncher}`, 'info');
+        }
+
         try {
-            this.serverProcess = child_process.spawn(command, args, {
-                cwd: cwd || process.cwd(),
+            this.serverProcess = child_process.spawn(spec.command, spec.args, {
+                cwd: spec.cwd || process.cwd(),
                 env,
-                shell: true 
+                shell: false,
             });
 
-            // Set context that MCP server is active (started by extension)
-            vscode.commands.executeCommand('setContext', 'agentchatbus:mcpServerActive', true);
+            void vscode.commands.executeCommand('setContext', 'agentchatbus:mcpServerActive', true);
             if (this.mcpLogProvider) {
                 this.mcpLogProvider.setIsManaged(true);
                 this.mcpLogProvider.setStatusMessage(null);
             }
 
-            this.serverProcess.stdout?.on('data', (data) => {
+            this.serverProcess.stdout?.on('data', data => {
                 const text = data.toString();
                 this.outputChannel.append(text);
-                if (this.mcpLogProvider) {
-                    this.mcpLogProvider.addLog(text);
-                }
+                this.mcpLogProvider?.addLog(text);
             });
 
-            this.serverProcess.stderr?.on('data', (data) => {
+            this.serverProcess.stderr?.on('data', data => {
                 const text = data.toString();
                 this.outputChannel.append(text);
-                if (this.mcpLogProvider) {
-                    this.mcpLogProvider.addLog(text);
-                }
+                this.mcpLogProvider?.addLog(text);
             });
 
-            this.serverProcess.on('error', (err) => {
+            this.serverProcess.on('error', err => {
                 this.log(`Spawn error: ${err.message}`, 'error');
             });
 
-            this.serverProcess.on('close', (code) => {
+            this.serverProcess.on('close', code => {
                 this.log(`Server exited (code ${code})`, 'warning');
                 this.serverProcess = null;
                 this.setServerReady(false);
-                vscode.commands.executeCommand('setContext', 'agentchatbus:mcpServerActive', false);
-                if (this.mcpLogProvider) {
-                    this.mcpLogProvider.setIsManaged(false);
-                }
+                void vscode.commands.executeCommand('setContext', 'agentchatbus:mcpServerActive', false);
+                this.mcpLogProvider?.setIsManaged(false);
             });
 
             this.log('Waiting for health check response...', 'sync~spin');
             const serverUrl = this.getServerUrl();
             let retries = 20;
             while (retries > 0) {
-                await new Promise(r => setTimeout(r, 1000));
+                await new Promise(resolve => setTimeout(resolve, 1000));
                 if (await this.checkServer(serverUrl)) {
                     this.log('Server is online and ready.', 'check');
                     return true;
@@ -357,84 +461,230 @@ export class BusServerManager {
 
             this.log('Server failed to respond to health checks.', 'error');
             return false;
-        } catch (e: any) {
-            this.log(`Fatal spawn error: ${e.message}`, 'error');
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            this.log(`Fatal spawn error: ${message}`, 'error');
             return false;
         }
     }
 
-    private async findAgentChatBusExecutable(): Promise<string | null> {
-        try {
-            const cmd = process.platform === 'win32' ? 'where' : 'which';
-            const checkCmd = `${cmd} agentchatbus`;
-            this.log(`Checking PATH via: ${checkCmd}`, 'terminal');
-            
-            const out = await new Promise<string>((resolve, reject) => {
-                child_process.exec(checkCmd, { timeout: 3000 }, (err, stdout) => {
-                    if (err) reject(err);
-                    else resolve(stdout.trim());
-                });
+    private async installAgentChatBus(): Promise<PythonLauncher[] | null> {
+        const config = vscode.workspace.getConfiguration('agentchatbus');
+        const configuredPython = config.get<string>('pythonPath', 'python');
+        const launchers = this.getPythonLaunchers(undefined, false, configuredPython);
+        const successful: PythonLauncher[] = [];
+
+        for (const launcher of launchers) {
+            const usable = await this.canRunPythonLauncher(launcher);
+            if (!usable) {
+                this.recordResolutionAttempt(`Skipping install attempt because launcher is unavailable: ${launcher.label}`);
+                continue;
+            }
+
+            const baseInstallArgs = [...launcher.baseArgs, '-m', 'pip', 'install', 'agentchatbus'];
+            this.log(`Attempting pip install via ${launcher.label}...`, 'cloud-download');
+            const primary = await this.runProcessWithLogging(launcher.command, baseInstallArgs, process.cwd());
+            if (primary === 0) {
+                this.log(`pip install succeeded via ${launcher.label}.`, 'check');
+                successful.push(launcher);
+                continue;
+            }
+
+            this.log(`pip install failed via ${launcher.label}; retrying with --user.`, 'warning');
+            const userInstallArgs = [...launcher.baseArgs, '-m', 'pip', 'install', '--user', 'agentchatbus'];
+            const secondary = await this.runProcessWithLogging(launcher.command, userInstallArgs, process.cwd());
+            if (secondary === 0) {
+                this.log(`pip install --user succeeded via ${launcher.label}.`, 'check');
+                successful.push(launcher);
+            } else {
+                this.log(`pip install failed via ${launcher.label} (exit codes ${primary}/${secondary}).`, 'error');
+            }
+        }
+
+        return successful.length > 0 ? successful : null;
+    }
+
+    private async runProcessWithLogging(command: string, args: string[], cwd: string): Promise<number> {
+        return await new Promise<number>(resolve => {
+            const proc = child_process.spawn(command, args, { cwd, shell: false, env: process.env });
+            proc.stdout?.on('data', data => {
+                const text = data.toString();
+                this.outputChannel.append(text);
+                this.mcpLogProvider?.addLog(text);
             });
-            const firstPath = out.split('\r\n')[0].split('\n')[0];
-            if (firstPath && fs.existsSync(firstPath)) return firstPath;
-        } catch (e: any) {
-            this.log(`Not found in PATH: ${e.message}`, 'info');
+            proc.stderr?.on('data', data => {
+                const text = data.toString();
+                this.outputChannel.append(text);
+                this.mcpLogProvider?.addLog(text);
+            });
+            proc.on('error', err => {
+                this.log(`Command failed to start: ${command} ${args.join(' ')} :: ${err.message}`, 'error');
+                resolve(-1);
+            });
+            proc.on('close', code => resolve(code ?? -1));
+        });
+    }
+
+    private getPythonLaunchers(projectRoot?: string, includeWorkspaceVenv = false, configuredPython?: string, preferred: PythonLauncher[] = []): PythonLauncher[] {
+        const launchers: PythonLauncher[] = [];
+        const seen = new Set<string>();
+
+        const addLauncher = (launcher: PythonLauncher) => {
+            const key = `${launcher.command}::${launcher.baseArgs.join(' ')}`;
+            if (seen.has(key)) {
+                return;
+            }
+            seen.add(key);
+            launchers.push(launcher);
+        };
+
+        for (const launcher of preferred) {
+            addLauncher(launcher);
+        }
+
+        if (includeWorkspaceVenv && projectRoot) {
+            const venvPython = path.join(
+                projectRoot,
+                '.venv',
+                process.platform === 'win32' ? 'Scripts' : 'bin',
+                process.platform === 'win32' ? 'python.exe' : 'python',
+            );
+            if (fs.existsSync(venvPython)) {
+                addLauncher({ command: venvPython, baseArgs: [], label: `workspace .venv (${venvPython})` });
+            }
+        }
+
+        if (configuredPython && configuredPython.trim().length > 0) {
+            addLauncher({ command: configuredPython.trim(), baseArgs: [], label: `configured pythonPath (${configuredPython.trim()})` });
         }
 
         if (process.platform === 'win32') {
-            this.log('Checking common Windows installation scripts...', 'search');
-            const appData = process.env.APPDATA;
-            if (appData) {
-                const localAppData = process.env.LOCALAPPDATA || path.join(path.dirname(appData), 'Local');
-                const pythonBase = path.join(localAppData, 'Programs', 'Python');
-                if (fs.existsSync(pythonBase)) {
-                    const versions = fs.readdirSync(pythonBase);
-                    for (const v of versions) {
-                        const scriptsPath = path.join(pythonBase, v, 'Scripts', 'agentchatbus.exe');
-                        if (fs.existsSync(scriptsPath)) return scriptsPath;
-                    }
+            addLauncher({ command: 'py', baseArgs: ['-3'], label: 'Windows py launcher (py -3)' });
+            for (const candidate of this.getWindowsPythonInstallCandidates()) {
+                addLauncher({ command: candidate, baseArgs: [], label: `discovered Windows Python (${candidate})` });
+            }
+        }
+
+        addLauncher({ command: 'python', baseArgs: [], label: 'python on PATH' });
+        return launchers;
+    }
+
+    private getWindowsPythonInstallCandidates(): string[] {
+        if (process.platform !== 'win32') {
+            return [];
+        }
+
+        const results: string[] = [];
+        const roots = [
+            process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'Programs', 'Python') : null,
+            process.env.ProgramFiles ? path.join(process.env.ProgramFiles, 'Python') : null,
+        ].filter((value): value is string => Boolean(value));
+
+        for (const root of roots) {
+            if (!fs.existsSync(root)) {
+                continue;
+            }
+            for (const entry of fs.readdirSync(root)) {
+                const pythonExe = path.join(root, entry, 'python.exe');
+                if (fs.existsSync(pythonExe)) {
+                    results.push(pythonExe);
                 }
             }
+        }
+
+        return results;
+    }
+
+    private async canRunPythonLauncher(launcher: PythonLauncher): Promise<boolean> {
+        try {
+            await execFileAsync(launcher.command, [...launcher.baseArgs, '-c', 'import sys; print(sys.executable)'], { timeout: 3000 });
+            return true;
+        } catch {
+            return false;
+        }
+    }
+
+    private async isAgentChatBusInstalledInLauncher(launcher: PythonLauncher): Promise<boolean> {
+        try {
+            const { stdout } = await execFileAsync(
+                launcher.command,
+                [...launcher.baseArgs, '-c', 'import importlib.util; print("1" if importlib.util.find_spec("agentchatbus") else "0")'],
+                { timeout: 3000 },
+            );
+            return stdout.trim() === '1';
+        } catch {
+            return false;
+        }
+    }
+
+    private async findAgentChatBusScriptForLauncher(launcher: PythonLauncher): Promise<string | null> {
+        try {
+            const script = [
+                'import os, sysconfig, pathlib',
+                'scripts = sysconfig.get_path("scripts") or ""',
+                'name = "agentchatbus.exe" if os.name == "nt" else "agentchatbus"',
+                'print(pathlib.Path(scripts) / name)',
+            ].join('; ');
+            const { stdout } = await execFileAsync(launcher.command, [...launcher.baseArgs, '-c', script], { timeout: 3000 });
+            const candidate = stdout.trim();
+            if (candidate && fs.existsSync(candidate)) {
+                return candidate;
+            }
+        } catch {
+            return null;
         }
         return null;
     }
 
-    private async installAgentChatBus(): Promise<boolean> {
-        const cmd = 'python -m pip install agentchatbus';
-        this.log(`Installation started: ${cmd}`, 'cloud-download');
-        this.outputChannel.show();
-
-        return new Promise((resolve) => {
-            const pkg = child_process.spawn('python', ['-m', 'pip', 'install', 'agentchatbus'], { shell: true });
-            pkg.stdout.on('data', (data) => this.outputChannel.append(data.toString()));
-            pkg.stderr.on('data', (data) => this.outputChannel.append(data.toString()));
-            
-            pkg.on('close', (code) => {
-                if (code === 0) {
-                    this.log('Installation successful.', 'check');
-                    resolve(true);
-                } else {
-                    this.log(`Installation failed (exit code ${code}).`, 'error');
-                    resolve(false);
+    private async findAgentChatBusExecutable(): Promise<string | null> {
+        try {
+            const command = process.platform === 'win32' ? 'where' : 'which';
+            this.recordResolutionAttempt(`Checking ${command} for agentchatbus on PATH.`);
+            const { stdout } = await execFileAsync(command, ['agentchatbus'], { timeout: 3000 });
+            const candidates = stdout
+                .split(/\r?\n/)
+                .map(line => line.trim())
+                .filter(Boolean)
+                .sort((left, right) => {
+                    const leftScore = left.toLowerCase().endsWith('.exe') ? 0 : 1;
+                    const rightScore = right.toLowerCase().endsWith('.exe') ? 0 : 1;
+                    return leftScore - rightScore;
+                });
+            for (const candidate of candidates) {
+                if (fs.existsSync(candidate)) {
+                    return candidate;
                 }
-            });
-            pkg.on('error', (err) => {
-                this.log(`Execution error: ${err.message}`, 'error');
-                resolve(false);
-            });
-        });
+            }
+        } catch {
+            this.recordResolutionAttempt('PATH lookup did not find a runnable agentchatbus executable.');
+        }
+        return null;
+    }
+
+    private async isAgentChatBusProjectRoot(folderPath: string): Promise<boolean> {
+        const mainPath = path.join(folderPath, 'src', 'main.py');
+        const pyprojectPath = path.join(folderPath, 'pyproject.toml');
+        const extensionPath = path.join(folderPath, 'vscode-agentchatbus', 'package.json');
+        if (!fs.existsSync(mainPath) || !fs.existsSync(pyprojectPath) || !fs.existsSync(extensionPath)) {
+            return false;
+        }
+
+        try {
+            const pyproject = await fs.promises.readFile(pyprojectPath, 'utf8');
+            return pyproject.includes('name = "agentchatbus"');
+        } catch {
+            return false;
+        }
     }
 
     private async findProjectRootAsync(): Promise<string | null> {
-        if (vscode.workspace.workspaceFolders) {
-            for (const folder of vscode.workspace.workspaceFolders) {
-                const mainPath = path.join(folder.uri.fsPath, 'src', 'main.py');
-                try {
-                    await fs.promises.access(mainPath);
-                    return folder.uri.fsPath;
-                } catch {
-                    // Not found in this folder
-                }
+        if (!vscode.workspace.workspaceFolders) {
+            return null;
+        }
+
+        for (const folder of vscode.workspace.workspaceFolders) {
+            if (await this.isAgentChatBusProjectRoot(folder.uri.fsPath)) {
+                return folder.uri.fsPath;
             }
         }
         return null;
@@ -449,23 +699,18 @@ export class BusServerManager {
 
         const provider: vscode.McpServerDefinitionProvider<vscode.McpHttpServerDefinition> = {
             onDidChangeMcpServerDefinitions: this.mcpDefinitionsChanged.event,
-            provideMcpServerDefinitions: () => {
-                return [this.createMcpServerDefinition()];
-            },
-            resolveMcpServerDefinition: async (_server) => {
+            provideMcpServerDefinitions: () => [this.createMcpServerDefinition()],
+            resolveMcpServerDefinition: async () => {
                 const isReady = await this.ensureServerRunning();
                 if (!isReady) {
                     throw new Error('AgentChatBus server could not be started.');
                 }
-
                 return this.createMcpServerDefinition();
-            }
+            },
         };
 
         context.subscriptions.push(this.mcpDefinitionsChanged);
-        context.subscriptions.push(
-            lm.registerMcpServerDefinitionProvider(BusServerManager.MCP_PROVIDER_ID, provider)
-        );
+        context.subscriptions.push(lm.registerMcpServerDefinitionProvider(BusServerManager.MCP_PROVIDER_ID, provider));
         this.mcpProviderRegistered = true;
         this.log('Registered AgentChatBus MCP definition provider.', 'plug');
     }
