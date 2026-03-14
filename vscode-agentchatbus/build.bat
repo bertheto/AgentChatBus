@@ -32,7 +32,8 @@ IF %ERRORLEVEL% NEQ 0 (
 
 echo.
 echo [SUCCESS] Build completed successfully.
-echo [INFO] VSIX packages are written to the dist folder.
+echo [INFO] dist folder was cleared before packaging.
+echo [INFO] VSIX packages are written to the dist folder and copied to this folder.
 echo.
 echo Press any key to close this window.
 pause > nul
