@@ -65,7 +65,10 @@ export class ChatPanel {
             column || vscode.ViewColumn.One,
             {
                 enableScripts: true,
-                retainContextWhenHidden: true
+                retainContextWhenHidden: true,
+                localResourceRoots: [
+                    vscode.Uri.file(ChatPanel._extensionPath)
+                ]
             }
         );
 
@@ -282,6 +285,14 @@ export class ChatPanel {
                 const messageContainer = document.getElementById('message-container');
                 const messageInput = document.getElementById('message-input');
                 const sendButton = document.getElementById('send-button');
+
+                console.log('[ACB Chat] Webview loaded');
+                window.addEventListener('load', () => {
+                    console.log('[ACB Chat] window.AcbMessageRenderer:', !!window.AcbMessageRenderer);
+                    if (!window.AcbMessageRenderer) {
+                        console.error('[ACB Chat] Message renderer failed to load!');
+                    }
+                });
 
                 // Auto-resize textarea
                 messageInput.addEventListener('input', () => {

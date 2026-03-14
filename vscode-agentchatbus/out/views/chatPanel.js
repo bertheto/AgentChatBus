@@ -80,7 +80,10 @@ class ChatPanel {
         }
         const panel = vscode.window.createWebviewPanel('agentChatBusChat', `ACB: ${thread.topic || thread.id.substring(0, 8)}`, column || vscode.ViewColumn.One, {
             enableScripts: true,
-            retainContextWhenHidden: true
+            retainContextWhenHidden: true,
+            localResourceRoots: [
+                vscode.Uri.file(ChatPanel._extensionPath)
+            ]
         });
         ChatPanel.currentPanels.set(thread.id, new ChatPanel(panel, thread, apiClient));
     }
@@ -289,6 +292,14 @@ class ChatPanel {
                 const messageContainer = document.getElementById('message-container');
                 const messageInput = document.getElementById('message-input');
                 const sendButton = document.getElementById('send-button');
+
+                console.log('[ACB Chat] Webview loaded');
+                window.addEventListener('load', () => {
+                    console.log('[ACB Chat] window.AcbMessageRenderer:', !!window.AcbMessageRenderer);
+                    if (!window.AcbMessageRenderer) {
+                        console.error('[ACB Chat] Message renderer failed to load!');
+                    }
+                });
 
                 // Auto-resize textarea
                 messageInput.addEventListener('input', () => {
