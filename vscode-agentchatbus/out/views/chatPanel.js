@@ -171,28 +171,59 @@ class ChatPanel {
                 #message-container {
                     flex: 1;
                     overflow-y: auto;
-                    padding: 16px;
+                    padding: 20px;
                     display: flex;
                     flex-direction: column;
+                    gap: 16px;
+                }
+                .message-wrapper {
+                    display: flex;
                     gap: 12px;
+                    max-width: 85%;
+                }
+                .message-wrapper.human {
+                    align-self: flex-end;
+                    flex-direction: row-reverse;
+                }
+                .avatar {
+                    width: 32px;
+                    height: 32px;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    font-size: 20px;
+                    background: var(--vscode-editor-inactiveSelectionBackground);
+                    border-radius: 50%;
+                    flex-shrink: 0;
+                    margin-top: 4px;
+                }
+                .message-content-wrapper {
+                    display: flex;
+                    flex-direction: column;
+                }
+                .message-wrapper.human .message-content-wrapper {
+                    align-items: flex-end;
                 }
                 .message {
-                    padding: 8px 12px;
-                    border-radius: 6px;
+                    padding: 10px 14px;
+                    border-radius: 12px;
                     background: var(--vscode-editor-inactiveSelectionBackground);
                     word-wrap: break-word;
                     white-space: pre-wrap;
+                    color: var(--vscode-editor-foreground);
+                    border: 1px solid var(--vscode-panel-border);
                 }
-                .message.human {
+                .message-wrapper.human .message {
                     background: var(--vscode-button-background);
                     color: var(--vscode-button-foreground);
-                    align-self: flex-end;
-                    max-width: 80%;
+                    border: none;
                 }
                 .message-header {
-                    font-size: 0.85em;
-                    opacity: 0.8;
+                    font-size: 0.8em;
+                    opacity: 0.7;
                     margin-bottom: 4px;
+                    display: flex;
+                    gap: 8px;
                 }
                 #input-container {
                     padding: 16px;
@@ -203,21 +234,22 @@ class ChatPanel {
                 }
                 #message-input {
                     flex: 1;
-                    padding: 8px;
+                    padding: 10px;
                     background: var(--vscode-input-background);
                     color: var(--vscode-input-foreground);
                     border: 1px solid var(--vscode-input-border);
-                    border-radius: 4px;
+                    border-radius: 6px;
                     font-family: var(--vscode-font-family);
                     resize: none;
                 }
                 button {
-                    padding: 8px 16px;
+                    padding: 8px 20px;
                     background: var(--vscode-button-background);
                     color: var(--vscode-button-foreground);
                     border: none;
-                    border-radius: 4px;
+                    border-radius: 6px;
                     cursor: pointer;
+                    font-weight: 500;
                 }
                 button:hover {
                     background: var(--vscode-button-hoverBackground);
@@ -227,7 +259,7 @@ class ChatPanel {
         <body>
             <div id="message-container"></div>
             <div id="input-container">
-                <textarea id="message-input" rows="3" placeholder="Type a message..."></textarea>
+                <textarea id="message-input" rows="1" placeholder="Type a message..."></textarea>
                 <button id="send-button">Send</button>
             </div>
 
@@ -238,21 +270,42 @@ class ChatPanel {
                 const sendButton = document.getElementById('send-button');
 
                 function renderMessage(msg) {
-                    const div = document.createElement('div');
-                    // Use a naive check: if the author contains "human", color it. 
                     const isHuman = /human/i.test(msg.author) || /human/i.test(msg.role);
-                    div.className = 'message ' + (isHuman ? 'human' : '');
+                    
+                    const wrapper = document.createElement('div');
+                    wrapper.className = 'message-wrapper' + (isHuman ? ' human' : '');
+                    
+                    const avatar = document.createElement('div');
+                    avatar.className = 'avatar';
+                    avatar.textContent = msg.author_emoji || (isHuman ? '👤' : '🤖');
+                    
+                    const contentWrapper = document.createElement('div');
+                    contentWrapper.className = 'message-content-wrapper';
                     
                     const header = document.createElement('div');
                     header.className = 'message-header';
-                    header.textContent = (msg.author || 'system') + ' - ' + new Date(msg.created_at).toLocaleTimeString();
+                    
+                    const authorSpan = document.createElement('span');
+                    authorSpan.style.fontWeight = 'bold';
+                    authorSpan.textContent = msg.author || 'system';
+                    
+                    const timeSpan = document.createElement('span');
+                    timeSpan.textContent = new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                    
+                    header.appendChild(authorSpan);
+                    header.appendChild(timeSpan);
                     
                     const content = document.createElement('div');
+                    content.className = 'message';
                     content.textContent = msg.content;
                     
-                    div.appendChild(header);
-                    div.appendChild(content);
-                    messageContainer.appendChild(div);
+                    contentWrapper.appendChild(header);
+                    contentWrapper.appendChild(content);
+                    
+                    wrapper.appendChild(avatar);
+                    wrapper.appendChild(contentWrapper);
+                    
+                    messageContainer.appendChild(wrapper);
                 }
 
                 window.addEventListener('message', event => {

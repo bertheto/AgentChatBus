@@ -21,6 +21,7 @@ export interface Message {
     seq: number;
     priority: number;
     author?: string;
+    author_emoji?: string;
     role?: string;
     reply_to_msg_id?: string;
     content: string;
@@ -36,6 +37,7 @@ export interface Agent {
     ide?: string;
     model?: string;
     description?: string;
+    emoji?: string;
     is_online: boolean;
     last_heartbeat: string;
     last_activity?: string;
