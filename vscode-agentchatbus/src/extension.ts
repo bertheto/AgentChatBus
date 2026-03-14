@@ -107,8 +107,8 @@ function initializeMainViews(context: vscode.ExtensionContext, serverManager: Bu
 
     context.subscriptions.push(
         vscode.window.registerTreeDataProvider('agentchatbus.threads', threadsProvider),
-        vscode.window.registerTreeDataProvider('agentchatbus.agents', agentsProvider),
-        vscode.window.registerTreeDataProvider('agentchatbus.settings', settingsProvider)
+        vscode.window.registerTreeDataProvider('agentchatbus.settings', settingsProvider),
+        vscode.window.registerTreeDataProvider('agentchatbus.agents', agentsProvider)
     );
 
     context.subscriptions.push(

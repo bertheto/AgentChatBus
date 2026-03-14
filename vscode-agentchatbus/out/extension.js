@@ -119,7 +119,7 @@ function initializeMainViews(context, serverManager, cursorConfigManager) {
     const threadsProvider = new threadsProvider_1.ThreadsTreeProvider(apiClient);
     const agentsProvider = new agentsProvider_1.AgentsTreeProvider(apiClient);
     settingsProvider = new settingsProvider_1.SettingsProvider();
-    context.subscriptions.push(vscode.window.registerTreeDataProvider('agentchatbus.threads', threadsProvider), vscode.window.registerTreeDataProvider('agentchatbus.agents', agentsProvider), vscode.window.registerTreeDataProvider('agentchatbus.settings', settingsProvider));
+    context.subscriptions.push(vscode.window.registerTreeDataProvider('agentchatbus.threads', threadsProvider), vscode.window.registerTreeDataProvider('agentchatbus.settings', settingsProvider), vscode.window.registerTreeDataProvider('agentchatbus.agents', agentsProvider));
     context.subscriptions.push(vscode.commands.registerCommand('agentchatbus.refreshThreads', () => threadsProvider.refresh()), vscode.commands.registerCommand('agentchatbus.refreshAgents', () => agentsProvider.refresh()), vscode.commands.registerCommand('agentchatbus.toggleAgentFilter', () => agentsProvider.toggleRecentFilter()), vscode.commands.registerCommand('agentchatbus.clearMcpLogs', () => {
         mcpLogProvider?.clear();
     }), vscode.commands.registerCommand('agentchatbus.stopServer', async () => {

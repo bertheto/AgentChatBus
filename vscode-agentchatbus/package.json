@@ -6,7 +6,7 @@
   "name": "agentchatbus",
   "displayName": "AgentChatBus",
   "description": "AgentChatBus client for VS Code",
-  "version": "0.1.40",
+  "version": "0.1.42",
   "icon": "resources/bus_128.png",
   "engines": {
     "vscode": "^1.105.0"
@@ -23,6 +23,15 @@
         "label": "AgentChatBus Local Server"
       }
     ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "agentchatbus",
+          "title": "AgentChatBus",
+          "icon": "resources/icon.svg"
+        }
+      ]
+    },
     "views": {
       "agentchatbus": [
         {
@@ -38,6 +47,12 @@
           "when": "agentchatbus:serverReady"
         },
         {
+          "id": "agentchatbus.mcpLogs",
+          "name": "MCP Server Logs",
+          "icon": "$(terminal)",
+          "when": "agentchatbus:serverReady"
+        },
+        {
           "id": "agentchatbus.settings",
           "name": "Management",
           "icon": "$(gear)",
@@ -48,12 +63,6 @@
           "name": "Agents",
           "icon": "$(robot)",
           "visibility": "collapsed",
-          "when": "agentchatbus:serverReady"
-        },
-        {
-          "id": "agentchatbus.mcpLogs",
-          "name": "MCP Server Logs",
-          "icon": "$(terminal)",
           "when": "agentchatbus:serverReady"
         }
       ]
