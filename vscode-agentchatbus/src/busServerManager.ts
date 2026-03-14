@@ -164,7 +164,12 @@ export class BusServerManager {
     }
 
     async restartServer(): Promise<boolean> {
-        this.log('Force restart initiated...', 'sync~spin');
+        if (this.mcpLogProvider) {
+            this.mcpLogProvider.clear();
+            this.mcpLogProvider.setIsManaged(false);
+            this.mcpLogProvider.setStatusMessage('Restarting MCP service. Waiting for fresh logs...');
+        }
+        this.log('Force restart initiated. Log panel was cleared for a fresh startup session.', 'sync~spin');
 
         if (this.ideSessionState.registered && !this.ideSessionState.can_shutdown) {
             this.log('Restart denied because this IDE session does not currently hold shutdown ownership.', 'warning');
@@ -195,7 +200,6 @@ export class BusServerManager {
         this.stopIdeHeartbeat();
         this.ideSessionToken = null;
         if (this.mcpLogProvider) {
-            this.mcpLogProvider.clear();
             this.mcpLogProvider.setIsManaged(false);
         }
 
@@ -307,10 +311,22 @@ export class BusServerManager {
                 this.ideSessionToken = payload.session_token || null;
                 this.updateIdeSessionState(payload);
                 this.startIdeHeartbeat();
-                this.log(
-                    `IDE session registered. shutdownPermission=${payload.can_shutdown ? 'yes' : 'no'} owner=${payload.owner_instance_id || 'none'}`,
-                    'plug'
-                );
+                if (payload.is_owner) {
+                    this.log(
+                        `IDE ownership registration granted. This session now owns MCP shutdown rights (${this.ideInstanceId}).`,
+                        'plug'
+                    );
+                } else if (claimOwner) {
+                    this.log(
+                        `IDE registration succeeded, but ownership was not granted. Current owner=${payload.owner_instance_id || 'none'}.`,
+                        'warning'
+                    );
+                } else {
+                    this.log(
+                        `IDE registration succeeded without owner claim. shutdownPermission=${payload.can_shutdown ? 'yes' : 'no'} owner=${payload.owner_instance_id || 'none'}`,
+                        'plug'
+                    );
+                }
                 return;
             } catch (error) {
                 const message = error instanceof Error ? error.message : String(error);
@@ -403,10 +419,32 @@ export class BusServerManager {
     }
 
     private updateIdeSessionState(payload: IdeSessionApiState): void {
+        const previousOwnerId = this.ideSessionState.owner_instance_id || null;
+        const previousCanShutdown = this.ideSessionState.can_shutdown || false;
+        const previousIsOwner = this.ideSessionState.is_owner || false;
+
         this.ideSessionState = {
             ...this.ideSessionState,
             ...payload,
         };
+
+        const currentOwnerId = this.ideSessionState.owner_instance_id || null;
+        const currentCanShutdown = this.ideSessionState.can_shutdown || false;
+        const currentIsOwner = this.ideSessionState.is_owner || false;
+
+        if (currentOwnerId !== previousOwnerId) {
+            this.log(`MCP shutdown owner changed from ${previousOwnerId || 'none'} to ${currentOwnerId || 'none'}.`, 'info');
+        }
+
+        if (!previousCanShutdown && currentCanShutdown) {
+            this.log('This IDE session now has permission to shut down the MCP service.', 'check');
+        } else if (previousCanShutdown && !currentCanShutdown) {
+            this.log('This IDE session lost MCP shutdown permission.', 'warning');
+        }
+
+        if (!previousIsOwner && currentIsOwner) {
+            this.log(`This IDE session is now the active MCP owner (${this.ideInstanceId}).`, 'check');
+        }
     }
 
     private setServerReady(ready: boolean) {

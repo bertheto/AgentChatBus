@@ -177,9 +177,6 @@ function initializeMainViews(context, serverManager, cursorConfigManager) {
         if (thread && apiClient) {
             chatPanel_1.ChatPanel.createOrShow(thread, apiClient);
         }
-    }), vscode.commands.registerCommand('agentchatbus.showStatus', () => {
-        const metadata = serverManager.getStatusMetadata();
-        statusPanel_1.StatusPanel.createOrShow(metadata);
     }), vscode.commands.registerCommand('agentchatbus.showMcpStatus', () => {
         const metadata = serverManager.getStatusMetadata();
         statusPanel_1.StatusPanel.createOrShow(metadata);

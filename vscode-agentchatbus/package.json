@@ -6,7 +6,7 @@
   "name": "agentchatbus",
   "displayName": "AgentChatBus",
   "description": "AgentChatBus client for VS Code",
-  "version": "0.1.31",
+  "version": "0.1.32",
   "icon": "resources/bus_128.png",
   "engines": {
     "vscode": "^1.105.0"
@@ -165,11 +165,6 @@
         "command": "agentchatbus.openCursorMcpConfig",
         "title": "Open Cursor MCP Config",
         "icon": "$(go-to-file)"
-      },
-      {
-        "command": "agentchatbus.showStatus",
-        "title": "Server Status",
-        "icon": "$(info)"
       },
       {
         "command": "agentchatbus.restartServer",

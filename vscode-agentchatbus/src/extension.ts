@@ -198,10 +198,6 @@ function initializeMainViews(context: vscode.ExtensionContext, serverManager: Bu
                 ChatPanel.createOrShow(thread, apiClient);
             }
         }),
-        vscode.commands.registerCommand('agentchatbus.showStatus', () => {
-            const metadata = serverManager.getStatusMetadata();
-            StatusPanel.createOrShow(metadata);
-        }),
         vscode.commands.registerCommand('agentchatbus.showMcpStatus', () => {
             const metadata = serverManager.getStatusMetadata();
             StatusPanel.createOrShow(metadata);

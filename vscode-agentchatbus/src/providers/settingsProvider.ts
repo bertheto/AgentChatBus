@@ -31,12 +31,6 @@ export class SettingsProvider implements vscode.TreeDataProvider<SettingItem> {
                 "agentchatbus.openCursorMcpConfig"
             ),
             new SettingItem(
-                "Server Status", 
-                "View detailed server and environment diagnostics", 
-                "info", 
-                "agentchatbus.showStatus"
-            ),
-            new SettingItem(
                 "Open Web Console", 
                 "Open the AgentChatBus dashboard in your browser", 
                 "browser", 
