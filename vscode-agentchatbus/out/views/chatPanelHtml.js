@@ -95,19 +95,23 @@ function buildChatPanelHtml(resources, config) {
                 <section id="composer-shell">
                     <div id="reply-preview" class="hidden"></div>
                     <div id="image-preview" class="hidden"></div>
-                    <div id="composer-toolbar">
-                        <div id="author-wrap">
-                            <label for="author-input">Name</label>
-                            <input id="author-input" type="text" maxlength="60" />
+                    <div id="composer-layout">
+                        <div id="composer-side-panel">
+                            <div id="author-wrap">
+                                <label for="author-input">Name</label>
+                                <input id="author-input" type="text" maxlength="60" />
+                            </div>
+                            <div class="toolbar-actions composer-side-actions">
+                                <button id="mention-button" class="icon-btn" title="Mention an agent in this thread" aria-label="Mention an agent in this thread">@</button>
+                                <button id="upload-button" class="icon-btn" title="Upload an image from file" aria-label="Upload an image from file">Image</button>
+                            </div>
                         </div>
-                        <div class="toolbar-actions">
-                            <button id="mention-button" class="icon-btn" title="Mention an agent">@</button>
-                            <button id="upload-button" class="icon-btn" title="Upload image">Image</button>
+                        <div id="composer-main-panel">
+                            <div id="composer-box">
+                                <div id="compose-input" contenteditable="true" data-placeholder="Send a message. Type @ to mention an agent."></div>
+                                <button id="send-button">Send</button>
+                            </div>
                         </div>
-                    </div>
-                    <div id="composer-box">
-                        <div id="compose-input" contenteditable="true" data-placeholder="Send a message. Type @ to mention an agent."></div>
-                        <button id="send-button">Send</button>
                     </div>
                     <input id="image-input" type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden />
                     <div id="mention-menu" class="floating-menu hidden"></div>

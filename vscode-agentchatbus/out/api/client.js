@@ -144,6 +144,13 @@ class AgentChatBusApiClient {
         const data = await response.json();
         return data.agents || data; // handle depending on array vs object wrap
     }
+    async getThreadAgents(threadId) {
+        const response = await fetch(`${this.baseUrl}/api/threads/${encodeURIComponent(threadId)}/agents`);
+        if (!response.ok)
+            throw new Error(`HTTP ${response.status} fetching thread agents`);
+        const data = await response.json();
+        return data.agents || data;
+    }
     async deleteThread(threadId) {
         const response = await fetch(`${this.baseUrl}/api/threads/${threadId}`, {
             method: 'DELETE'

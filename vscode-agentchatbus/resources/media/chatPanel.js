@@ -890,26 +890,16 @@
     placeCaretAtEndIfNeeded();
 
     try {
-      const agents = await ensureAgentsLoaded();
-      if (!Array.isArray(agents) || agents.length === 0) {
-        insertPlainText('@');
-        showToast('No agents available for mention.');
-        return;
-      }
+      await ensureAgentsLoaded();
       showMentionMenu('', getMentionButtonAnchorRect());
     } catch (error) {
-      insertPlainText('@');
       showToast(`Failed to load agents: ${formatError(error)}`);
     }
   }
 
   async function showMentionMenuForQuery(query, rect) {
     try {
-      const agents = await ensureAgentsLoaded();
-      if (!Array.isArray(agents) || agents.length === 0) {
-        hideMentionMenu();
-        return;
-      }
+      await ensureAgentsLoaded();
       showMentionMenu(query, rect);
     } catch {
       hideMentionMenu();
@@ -923,22 +913,26 @@
       return haystack.includes(needle);
     }).slice(0, 8);
 
-    if (state.mentionCandidates.length === 0) {
-      hideMentionMenu();
-      return;
-    }
-
     state.mentionIndex = 0;
     refs.mentionMenu.innerHTML = '';
-    state.mentionCandidates.forEach((agent, index) => {
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.className = 'menu-item';
-      if (index === 0) button.classList.add('active');
-      button.innerHTML = `<div class="menu-item-title">${escapeHtml(agent.emoji || '')} ${escapeHtml(agent.display_name || agent.name || agent.id)}</div><div class="menu-item-meta">${escapeHtml(agent.id || '')}</div>`;
-      button.addEventListener('click', () => chooseMention(index));
-      refs.mentionMenu.appendChild(button);
-    });
+
+    if (state.mentionCandidates.length === 0) {
+      refs.mentionMenu.appendChild(renderMentionEmptyState(
+        Array.isArray(state.agents) && state.agents.length > 0
+          ? 'No matching agents in this thread'
+          : 'No agents in this thread'
+      ));
+    } else {
+      state.mentionCandidates.forEach((agent, index) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'menu-item';
+        if (index === 0) button.classList.add('active');
+        button.innerHTML = `<div class="menu-item-title">${escapeHtml(agent.emoji || '')} ${escapeHtml(agent.display_name || agent.name || agent.id)}</div><div class="menu-item-meta">${escapeHtml(agent.id || '')}</div>`;
+        button.addEventListener('click', () => chooseMention(index));
+        refs.mentionMenu.appendChild(button);
+      });
+    }
 
     const menuWidth = Math.min(320, Math.max(220, refs.composeInput.getBoundingClientRect().width));
     refs.mentionMenu.style.width = `${menuWidth}px`;
@@ -967,6 +961,13 @@
     if (!agent) return;
     insertMentionPill(agent);
     hideMentionMenu();
+  }
+
+  function renderMentionEmptyState(text) {
+    const empty = document.createElement('div');
+    empty.className = 'menu-empty';
+    empty.textContent = text;
+    return empty;
   }
 
   function insertMentionPill(agent) {

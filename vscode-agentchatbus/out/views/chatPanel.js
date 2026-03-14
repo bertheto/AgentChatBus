@@ -233,7 +233,7 @@ class ChatPanel {
             return;
         }
         try {
-            const agents = await this._apiClient.getAgents();
+            const agents = await this._apiClient.getThreadAgents(this._thread.id);
             this._panel.webview.postMessage({
                 command: 'agentsResult',
                 requestId,
