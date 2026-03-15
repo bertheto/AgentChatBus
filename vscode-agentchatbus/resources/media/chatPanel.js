@@ -277,6 +277,7 @@
     const shouldStickBottom = keepBottom || isNearBottom();
     renderMessages(token, shouldStickBottom);
     rebuildNavSidebar();
+    updateNavSidebarScrollbarState();
     if (state.searchQuery) {
       runSearch(false);
     } else {
@@ -1348,6 +1349,16 @@
       button.addEventListener('click', () => scrollRowIntoView(message.id));
       refs.navSidebar.appendChild(button);
     }
+  }
+
+  function updateNavSidebarScrollbarState() {
+    if (!refs.navSidebar) {
+      return;
+    }
+    window.requestAnimationFrame(() => {
+      const hasScrollbar = refs.navSidebar.scrollHeight > refs.navSidebar.clientHeight + 1;
+      refs.navSidebar.classList.toggle('has-scrollbar', hasScrollbar);
+    });
   }
 
   function updateActiveNavEntry() {
