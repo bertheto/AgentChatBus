@@ -152,12 +152,12 @@ textarea {
 }
 
 #nav-sidebar {
-  width: 76px;
-  padding: 10px 6px;
+  width: 64px;
+  padding: 10px 4px;
   border-left: 1px solid var(--vscode-panel-border);
   overflow-x: hidden;
   overflow-y: auto;
-  flex: 0 0 76px;
+  flex: 0 0 64px;
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -183,12 +183,12 @@ textarea {
   background: transparent;
   color: inherit;
   border-radius: 999px;
-  padding: 4px 5px;
+  padding: 4px 4px;
   display: flex;
   flex-direction: row;
   align-items: center;
-  justify-content: space-between;
-  gap: 4px;
+  justify-content: flex-start;
+  gap: 3px;
   cursor: pointer;
   min-width: 0;
 }
@@ -212,6 +212,7 @@ textarea {
   overflow: hidden;
   text-overflow: ellipsis;
   min-width: 0;
+  flex: 0 1 auto;
   font-variant-numeric: tabular-nums;
 }
 
