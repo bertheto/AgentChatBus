@@ -15,6 +15,9 @@ export interface AgentRecord {
   skills?: unknown[];
   token: string;
   emoji?: string;
+  // 移植自：Python test_agent_registry.py L39
+  // alias_source 用于追踪 display_name 的来源 ('user' | 'auto')
+  alias_source?: string;
 }
 
 export interface ThreadRecord {

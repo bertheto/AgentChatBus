@@ -12,6 +12,7 @@ import {
   ReplyTokenReplayError 
 } from "../types/errors.js";
 import { eventBus } from "../../shared/eventBus.js";
+import { generateAgentEmoji } from "../../main.js";
 
 type IdeSession = {
   instanceId: string;
@@ -447,6 +448,15 @@ export class MemoryStore {
     this.threadMessages.set(input.threadId, messages);
     this.threadParticipants.get(input.threadId)?.add(input.author);
     this.clearWaitStates(input.threadId);
+    
+    // 移植自：Python test_agent_registry.py L69-70
+    // 更新 agent activity 为 'msg_post'
+    if (agent) {
+      agent.last_activity = 'msg_post';
+      agent.last_activity_time = new Date().toISOString();
+      this.upsertAgent(agent);
+    }
+    
     this.appendLog(`message posted: ${message.id} seq=${message.seq}`);
     eventBus.emit({ type: "msg.new", payload: message });
     this.insertMessage(message);
@@ -583,10 +593,13 @@ export class MemoryStore {
   }
 
   registerAgent(input: { ide: string; model: string; description?: string; capabilities?: string[]; display_name?: string; skills?: unknown[] }): AgentRecord {
+    const agentId = randomUUID();
     const agent: AgentRecord = {
-      id: randomUUID(),
+      id: agentId,
       name: `${input.ide} (${input.model})`,
       display_name: input.display_name,
+      // 移植自：Python test_agent_registry.py L39 - alias_source 设置为 'user'
+      alias_source: input.display_name ? 'user' : undefined,
       ide: input.ide,
       model: input.model,
       description: input.description,
@@ -595,8 +608,13 @@ export class MemoryStore {
       last_activity: "registered",
       last_activity_time: new Date().toISOString(),
       capabilities: input.capabilities || [],
-      skills: input.skills || [],
-      token: randomUUID()
+      // 移植自：Python test_agent_capabilities.py L90
+      // 不带 skills 注册时应该是 undefined，不是空数组
+      skills: input.skills ?? undefined,
+      token: randomUUID(),
+      // 移植自：Python src/main.py::_agent_emoji (L132-140)
+      // 基于 agent_id 生成确定性的 emoji
+      emoji: generateAgentEmoji(agentId)
     };
     this.agents.set(agent.id, agent);
     this.appendLog(`agent registered: ${agent.id}`);
@@ -609,7 +627,7 @@ export class MemoryStore {
   listAgents(): AgentRecord[] {
     const rows = this.persistenceDb.prepare(
       `
-        SELECT id, name, display_name, ide, model, description, is_online, last_heartbeat,
+        SELECT id, name, display_name, alias_source, ide, model, description, is_online, last_heartbeat,
                last_activity, last_activity_time, capabilities, skills, token, emoji
         FROM agents
       `
@@ -620,7 +638,7 @@ export class MemoryStore {
   getAgent(agentId: string): AgentRecord | undefined {
     const row = this.persistenceDb.prepare(
       `
-        SELECT id, name, display_name, ide, model, description, is_online, last_heartbeat,
+        SELECT id, name, display_name, alias_source, ide, model, description, is_online, last_heartbeat,
                last_activity, last_activity_time, capabilities, skills, token, emoji
         FROM agents WHERE id = ?
       `
@@ -660,11 +678,14 @@ export class MemoryStore {
   resumeAgent(agentId: string, token: string): AgentRecord | undefined {
     const agent = this.getAgent(agentId);
     if (!agent || agent.token !== token) {
-      return undefined;
+      // 移植自：Python test_agent_registry.py L83-84
+      // 应该抛出 ValueError 而不是返回 undefined
+      throw new Error('Invalid agent_id or token');
     }
     agent.is_online = true;
     agent.last_heartbeat = new Date().toISOString();
-    agent.last_activity = "resumed";
+    // 移植自：Python test_agent_registry.py L46 - 必须是 'resume' 而不是 'resumed'
+    agent.last_activity = "resume";
     agent.last_activity_time = agent.last_heartbeat;
     eventBus.emit({ type: "agent.updated", payload: agent });
     this.upsertAgent(agent);
@@ -685,6 +706,46 @@ export class MemoryStore {
     this.upsertAgent(agent);
     this.persistState();
     return true;
+  }
+
+  /**
+   * 移植自：Python crud.agent_msg_wait
+   * 对应测试：test_agent_registry.py L61-62
+   */
+  agentMsgWait(agentId: string, token: string): boolean {
+    const agent = this.getAgent(agentId);
+    if (!agent || agent.token !== token) {
+      throw new Error('Invalid agent_id or token');
+    }
+    
+    // 更新 agent activity 为 'msg_wait'
+    agent.last_activity = 'msg_wait';
+    agent.last_activity_time = new Date().toISOString();
+    this.upsertAgent(agent);
+    this.persistState();
+    
+    return true;
+  }
+
+  /**
+   * 移植自：Python crud._set_agent_activity
+   * 对应测试：test_agent_registry.py L102
+   */
+  updateAgentActivity(agentId: string, activity: string, touchHeartbeat: boolean = false): void {
+    const agent = this.getAgent(agentId);
+    if (!agent) {
+      throw new Error('Agent not found');
+    }
+    
+    agent.last_activity = activity;
+    agent.last_activity_time = new Date().toISOString();
+    
+    if (touchHeartbeat) {
+      agent.last_heartbeat = new Date().toISOString();
+    }
+    
+    this.upsertAgent(agent);
+    this.persistState();
   }
 
   unregisterAgent(agentId: string, token: string): boolean {
@@ -1134,6 +1195,8 @@ export class MemoryStore {
       id: String(row.id),
       name: String(row.name),
       display_name: row.display_name ? String(row.display_name) : undefined,
+      // 移植自：Python test_agent_registry.py L39
+      alias_source: row.alias_source ? String(row.alias_source) : undefined,
       ide: row.ide ? String(row.ide) : undefined,
       model: row.model ? String(row.model) : undefined,
       description: row.description ? String(row.description) : undefined,
@@ -1141,8 +1204,12 @@ export class MemoryStore {
       last_heartbeat: String(row.last_heartbeat),
       last_activity: row.last_activity ? String(row.last_activity) : undefined,
       last_activity_time: row.last_activity_time ? String(row.last_activity_time) : undefined,
+      // 移植自：Python test_agent_capabilities.py L90
+      // capabilities 默认为空数组，skills 默认为 undefined
       capabilities: row.capabilities ? JSON.parse(String(row.capabilities)) as string[] : [],
-      skills: row.skills ? JSON.parse(String(row.skills)) as unknown[] : [],
+      skills: row.skills && String(row.skills).trim() !== '' && String(row.skills) !== 'null' 
+        ? JSON.parse(String(row.skills)) as unknown[] 
+        : undefined,
       token: String(row.token),
       emoji: row.emoji ? String(row.emoji) : undefined
     };
@@ -1359,6 +1426,7 @@ export class MemoryStore {
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
         display_name TEXT,
+        alias_source TEXT,
         ide TEXT,
         model TEXT,
         description TEXT,
@@ -1524,7 +1592,9 @@ export class MemoryStore {
       agent.last_activity || null,
       agent.last_activity_time || null,
       JSON.stringify(agent.capabilities || []),
-      JSON.stringify(agent.skills || []),
+      // 移植自：Python test_agent_capabilities.py L90
+      // skills 为 undefined 时存储 null，不是 '[]'
+      agent.skills ? JSON.stringify(agent.skills) : null,
       agent.token,
       agent.emoji || null
     );
