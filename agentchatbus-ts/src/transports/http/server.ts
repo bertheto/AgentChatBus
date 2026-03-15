@@ -1,16 +1,32 @@
 import Fastify from "fastify";
 import multipart from "@fastify/multipart";
+import fastifyStatic from "@fastify/static";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { callTool, listTools } from "../../adapters/mcp/tools.js";
 import { getConfig } from "../../core/config/env.js";
 import { memoryStore } from "../../core/services/memoryStore.js";
 import { eventBus } from "../../shared/eventBus.js";
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
 type JsonBody = Record<string, unknown>;
 
 export function createHttpServer() {
   const fastify = Fastify({ logger: false });
   void fastify.register(multipart);
+
+  const staticPath = join(__dirname, "../../static");
+  void fastify.register(fastifyStatic, {
+    root: staticPath,
+    prefix: "/static/",
+  });
+
+  fastify.get("/", async (request, reply) => {
+    return reply.sendFile("index.html");
+  });
 
   fastify.get("/health", async () => ({ ok: true, service: "agentchatbus-ts" }));
 
@@ -455,10 +471,7 @@ export function createHttpServer() {
     return { results: memoryStore.searchMessages(q) };
   });
 
-  fastify.get("/api/metrics", async () => ({
-    threads_total: memoryStore.getThreads(true).length,
-    agents_total: memoryStore.listAgents().length
-  }));
+  fastify.get("/api/metrics", async () => memoryStore.getMetrics());
 
   fastify.get("/api/debug/sse-status", async () => ({
     subscribers: eventBus.listenerCount()

@@ -64,6 +64,7 @@ type PersistedState = {
 };
 
 export class MemoryStore {
+  private readonly startTime = Date.now();
   private sequence = 0;
   private readonly threads = new Map<string, ThreadRecord>();
   private readonly threadMessages = new Map<string, MessageRecord[]>();
@@ -110,6 +111,43 @@ export class MemoryStore {
         ...thread,
         waiting_agents: this.getThreadWaitingAgents(thread.id)
       }));
+  }
+
+  getMetrics() {
+    const threads = this.getThreads(true);
+    const agents = this.listAgents();
+    let messageCount = 0;
+    try {
+      const row = this.persistenceDb.prepare("SELECT COUNT(*) as count FROM messages").get() as { count: number };
+      messageCount = row.count;
+    } catch {}
+
+    const byStatus: Record<string, number> = {};
+    for (const t of threads) {
+      byStatus[t.status] = (byStatus[t.status] || 0) + 1;
+    }
+
+    return {
+      uptime_seconds: (Date.now() - this.startTime) / 1000,
+      started_at: new Date(this.startTime).toISOString(),
+      schema_version: "1.0",
+      threads: {
+        total: threads.length,
+        by_status: byStatus
+      },
+      messages: {
+        total: messageCount,
+        rate: {
+          last_1m: 0,
+          last_5m: 0,
+          last_15m: 0
+        }
+      },
+      agents: {
+        total: agents.length,
+        online: agents.filter(a => a.is_online).length
+      }
+    };
   }
 
   reset(): void {
@@ -1247,6 +1285,22 @@ export class MemoryStore {
         PRIMARY KEY (message_id, agent_id, reaction)
       );
     `);
+
+    // Proactive Migration: Handle existing databases lacking new columns
+    try {
+      const columns = this.persistenceDb.prepare("PRAGMA table_info(reply_tokens)").all() as Array<{ name: string }>;
+      const names = columns.map(c => c.name);
+      if (names.length > 0) {
+        if (!names.includes("agent_id")) {
+          this.persistenceDb.exec("ALTER TABLE reply_tokens ADD COLUMN agent_id TEXT");
+        }
+        if (!names.includes("source")) {
+          this.persistenceDb.exec("ALTER TABLE reply_tokens ADD COLUMN source TEXT");
+        }
+      }
+    } catch {
+      // Table might not exist yet; initializeRelationalTables already handled CREATE
+    }
   }
 
   private upsertThread(thread: ThreadRecord): void {

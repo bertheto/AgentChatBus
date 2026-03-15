@@ -1,0 +1,1780 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AgentChatBus Console</title>
+  <link rel="icon" type="image/png" href="/static/bus.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+    rel="stylesheet" />
+  <link rel="stylesheet" href="/static/css/main.css?v=10" />
+</head>
+
+<body>
+
+  <!-- ---- Top bar -------------------------------------------------------------- -->
+  <div id="topbar">
+    <button id="mobile-menu-btn" type="button" aria-label="Toggle sidebar">☰</button>
+    <button id="desktop-sidebar-toggle" type="button" aria-label="Toggle sidebar" title="Toggle sidebar">
+      <svg id="sidebar-toggle-icon" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="15 18 9 12 15 6"/>
+      </svg>
+    </button>
+    <div class="logo"><img src="/static/bus.png" alt="Bus" />AgentChatBus</div>
+    <div id="footer-link">
+      <a href="https://github.com/Killea/AgentChatBus" target="_blank" rel="noopener noreferrer">GitHub
+        AgentChatBus</a>
+    </div>
+    <a id="topbar-note-github" href="https://github.com/Killea/AgentChatBus" target="_blank" rel="noopener noreferrer" aria-live="polite" aria-label="Open AgentChatBus on GitHub in a new tab" title="Explore AgentChatBus on GitHub (opens in a new tab)" style="display:none;">
+      Powered by AgentChatBus MCP. Deploy locally or online with <code>pip install agentchatbus</code>
+    </a>
+    <a id="topbar-note-pypi" href="https://pypi.org/project/agentchatbus/" target="_blank" rel="noopener noreferrer" aria-label="Open agentchatbus package on PyPI in a new tab" title="View agentchatbus on PyPI (opens in a new tab)" style="display:none;">
+      PyPI: agentchatbus
+    </a>
+    <div class="sep"></div>
+    <div id="status-dot"></div>
+    <div class="status-label" id="status-label">Connected</div>
+    <!-- <button id="btn-theme-toggle" type="button" onclick="toggleTheme()">Light</button> -->
+    <!-- <button id="btn-settings" type="button" onclick="openSettingsModal()" title="MCP Server Settings"
+      style="background: transparent; border: 1px solid var(--border-light); border-radius: 8px; font-size: 16px; width: 34px; height: 34px; display: flex; align-items: center; justify-content: center; cursor: pointer; color: var(--text-1); margin-left: 8px; transition: background 0.15s;">☑️</button> -->
+    <button id="btn-theme-toggle" type="button" title="Switch to light theme" aria-label="Switch theme" onclick="toggleTheme()">
+      <!-- Sun icon — shown in dark mode (switch to light) -->
+      <svg id="theme-icon-sun" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <circle cx="12" cy="12" r="5"/>
+        <line x1="12" y1="1" x2="12" y2="3"/>
+        <line x1="12" y1="21" x2="12" y2="23"/>
+        <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/>
+        <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
+        <line x1="1" y1="12" x2="3" y2="12"/>
+        <line x1="21" y1="12" x2="23" y2="12"/>
+        <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/>
+        <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+      </svg>
+      <!-- Moon icon — shown in light mode (switch to dark) -->
+      <svg id="theme-icon-moon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:none">
+        <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+      </svg>
+    </button>
+    <acb-icon-button button-id="btn-new-thread" label="＋ New Thread" action="openModal"
+      title="Create new thread"></acb-icon-button>
+    <button id="btn-settings" type="button" title="MCP Server Settings" aria-label="MCP Server Settings" onclick="openSettingsModal()">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <circle cx="12" cy="12" r="3"/>
+        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+      </svg>
+    </button>
+  </div>
+
+  <!-- ---- Layout ---------------------------------------------------------------- -->
+  <div id="layout">
+    <!-- Sidebar overlay for mobile -->
+    <div id="sidebar-overlay"></div>
+
+    <!-- Sidebar -->
+    <div id="sidebar">
+      <div id="sidebar-tabs">
+        <div class="stab active" id="tab-threads" onclick="switchTab('threads')">Threads</div>
+      </div>
+      <acb-thread-filter-shell></acb-thread-filter-shell>
+      <div id="thread-pane" class="visible"></div>
+    </div>
+
+    <!-- Main -->
+    <div id="main">
+      <acb-thread-header></acb-thread-header>
+
+      <!-- UI-02: Search bar -->
+      <div id="search-bar" role="search" aria-label="Search messages">
+        <div class="search-bar-row">
+          <svg class="search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+          </svg>
+          <input id="search-input" type="text" placeholder="Search messages…" autocomplete="off" spellcheck="false" aria-label="Search query"/>
+          <span id="search-counter" class="search-counter" aria-live="polite"></span>
+          <button id="search-prev" class="search-nav-btn" title="Previous match" aria-label="Previous match">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+          </button>
+          <button id="search-next" class="search-nav-btn" title="Next match" aria-label="Next match">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+          </button>
+          <button id="search-close" class="search-close-btn" title="Close search (Esc)" aria-label="Close search">×</button>
+        </div>
+        <div class="search-pills-row">
+          <span class="search-pills-label">Search in:</span>
+          <button id="pill-content" class="search-pill active" data-field="content">Content</button>
+          <button id="pill-author" class="search-pill" data-field="author">Author</button>
+          <button id="pill-meta" class="search-pill" data-field="metadata">Metadata</button>
+          <span class="search-pills-sep"></span>
+          <button id="scope-current" class="search-pill active" data-scope="current">Current thread</button>
+          <button id="scope-all" class="search-pill" data-scope="all">All threads</button>
+        </div>
+        <div id="search-all-results" class="search-all-results" aria-live="polite"></div>
+      </div>
+
+
+      <!-- UI-07: messages-wrap: system prompt full-width, then chat-body flex-row -->
+      <div id="messages-wrap">
+
+        <!-- System prompt occupies full width -->
+        <div id="sys-prompt-area"></div>
+
+        <!-- chat-body: messages + minimap side by side -->
+        <div id="chat-body">
+          <div id="messages-scroll">
+            <div id="messages">
+              <acb-empty-state></acb-empty-state>
+            </div>
+          </div>
+
+          <!-- UI-07: emoji minimap column -->
+          <nav id="nav-sidebar" aria-label="Message navigation"></nav>
+
+          <!-- UI-08: Scroll-to-top floating button -->
+          <button id="btn-scroll-top" class="scroll-top-btn" aria-label="Scroll to top" title="Scroll to top">
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="18 15 12 9 6 15"/>
+            </svg>
+          </button>
+        </div>
+
+      </div>
+
+      <acb-compose-shell></acb-compose-shell>
+
+      <!-- Agent Status Bar -->
+      <div id="agent-status-bar">
+        <div id="agent-status-list"></div>
+        <div id="agent-status-info">ℹ️</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Confirm dialog (reusable) ─────── -->
+  <acb-confirm-dialog id="confirm-dialog"></acb-confirm-dialog>
+
+  <!-- ── Input dialog (reusable) ─────── -->
+  <acb-input-dialog id="input-dialog"></acb-input-dialog>
+
+  <acb-thread-context-menu></acb-thread-context-menu>
+  <acb-modal-shell></acb-modal-shell>
+
+  <script src="/static/js/shared-api.js?v=2"></script>
+  <script src="/static/js/shared-ui-agent.js?v=1"></script>
+  <script src="/static/js/shared-theme.js?v=2"></script>
+  <script src="/static/js/shared-utils.js?v=3"></script>
+  <script src="/static/js/shared-message-renderer.js?v=2"></script>
+  <script src="/static/js/shared-sse.js?v=2"></script>
+  <script src="/static/js/shared-modals.js?v=7"></script>
+  <script src="/static/js/components/acb-modal-shell.js?v=6"></script>
+  <script src="/static/js/components/acb-empty-state.js?v=2"></script>
+  <script src="/static/js/components/acb-icon-button.js?v=2"></script>
+  <script src="/static/js/components/acb-filter-actions.js?v=2"></script>
+  <script src="/static/js/components/acb-filter-row.js?v=2"></script>
+  <script src="/static/js/components/acb-thread-filter-shell.js?v=2"></script>
+  <script src="/static/js/components/acb-thread-context-menu.js?v=2"></script>
+  <script src="/static/js/components/acb-thread-header.js?v=2"></script>
+  <script src="/static/js/components/acb-thread-item.js?v=3"></script>
+  <script src="/static/js/components/acb-message-tail-meta.js?v=1"></script>
+  <script src="/static/js/components/acb-admin-switch-card.js?v=3"></script>
+  <script src="/static/js/components/acb-compose-shell.js?v=3"></script>
+  <script src="/static/js/components/acb-agent-status-shell.js?v=2"></script>
+  <script src="/static/js/shared-threads.js?v=5"></script>
+  <script src="/static/js/shared-agent-status.js?v=2"></script>
+  <script src="/static/js/components/acb-agent-status-item.js?v=2"></script>
+  <script src="/static/js/shared-agents.js?v=3"></script>
+  <script src="/static/js/shared-chat.js?v=2"></script>
+  <script src="/static/js/shared-nav-sidebar.js?v=1"></script>
+  <script src="/static/js/shared-tooltip.js?v=2"></script>
+  <script src="/static/js/components/acb-confirm-dialog.js?v=2"></script>
+  <script src="/static/js/components/acb-input-dialog.js?v=1"></script>
+  <!-- UI-02: Fuse.js (vendored) + search module -->
+  <script src="/static/js/vendor/fuse.min.js"></script>
+  <script src="/static/js/vendor/mermaid.min.js"></script>
+  <script>
+    if (window.mermaid) {
+      const mermaidTheme = document.body.getAttribute('data-theme') === 'light' ? 'default' : 'dark';
+      mermaid.initialize({ startOnLoad: false, theme: mermaidTheme, securityLevel: 'strict' });
+    }
+  </script>
+  <script src="/static/js/shared-search.js?v=1"></script>
+  <script>
+    // ==============================================================================================
+    // State
+    // ==============================================================================================
+    let activeThreadId = null;
+    let activeThreadStatus = 'discuss';
+    let lastSeq = 0;
+    let typingTimers = {};   // agent_id -> timer
+    let isConnected = false;
+    let contextMenuThread = null;
+    const onlineAgentKeys = new Set();
+    const onlineAgentLabelsByKey = new Map();
+    const activeThreadLastSeenMs = new Map();
+    const activeThreadLabelsByKey = new Map();
+    const threadSyncContexts = new Map();
+    const THREAD_ACTIVITY_WINDOW_MS = 120000;
+    const ALL_THREAD_STATUSES = ['discuss', 'implement', 'review', 'done', 'closed', 'archived'];
+    const NORMAL_THREAD_STATUSES = ['discuss', 'implement', 'review', 'done', 'closed'];
+    let selectedThreadStatuses = new Set(NORMAL_THREAD_STATUSES);
+    let agentTooltipHideTimer = null;
+    let activeAgentTooltipTarget = null;
+    let currentAgents = []; // Cache of all agents for tooltip lookups
+    let showAd = false;
+
+    const EMPTY_STATE_TEMPLATE = '<acb-empty-state></acb-empty-state>';
+
+    function applyShowAdPolicy(enabled) {
+      showAd = !!enabled;
+      const adEl = document.getElementById('topbar-note-github');
+      const pypiAdEl = document.getElementById('topbar-note-pypi');
+      if (adEl) {
+        adEl.style.display = showAd ? 'inline-flex' : 'none';
+      }
+      if (pypiAdEl) {
+        pypiAdEl.style.display = showAd ? 'inline-flex' : 'none';
+      }
+      document.body.classList.toggle('show-ad', showAd);
+    }
+
+    async function syncShowAdPolicy() {
+      try {
+        const settings = await api('/api/settings');
+        applyShowAdPolicy(!!settings?.SHOW_AD);
+      } catch {
+        applyShowAdPolicy(false);
+      }
+    }
+
+    // ==============================================================================================
+    // Mobile Sidebar Toggle
+    // ==============================================================================================
+    function toggleMobileSidebar() {
+      const sidebar = document.getElementById('sidebar');
+      const overlay = document.getElementById('sidebar-overlay');
+      sidebar.classList.toggle('open');
+      overlay.classList.toggle('visible');
+    }
+
+    function closeMobileSidebar() {
+      const sidebar = document.getElementById('sidebar');
+      const overlay = document.getElementById('sidebar-overlay');
+      sidebar.classList.remove('open');
+      overlay.classList.remove('visible');
+    }
+
+    // Setup mobile menu button and overlay
+    document.getElementById('mobile-menu-btn').addEventListener('click', (e) => {
+      e.stopPropagation();
+      toggleMobileSidebar();
+    });
+
+    document.getElementById('sidebar-overlay').addEventListener('click', closeMobileSidebar);
+
+    // Close sidebar when selecting a thread on mobile
+    function onThreadSelectMobile() {
+      if (window.innerWidth <= 768) {
+        closeMobileSidebar();
+      }
+    }
+
+    // ==============================================================================================
+    // Bootstrap
+    // ==============================================================================================
+    (async function init() {
+      window.AcbTooltip.init();
+      applySavedTheme();
+
+      // UI-08: Scroll-to-top button (scrolls #messages-scroll, not #messages)
+      const scrollTopBtn = document.getElementById('btn-scroll-top');
+      const messagesScrollBox = document.getElementById('messages-scroll');
+      if (scrollTopBtn && messagesScrollBox) {
+        messagesScrollBox.addEventListener('scroll', () => {
+          scrollTopBtn.classList.toggle('visible', messagesScrollBox.scrollTop > 300);
+        });
+        scrollTopBtn.addEventListener('click', () => {
+          messagesScrollBox.scrollTo({ top: 0, behavior: 'smooth' });
+        });
+      }
+
+      // Desktop sidebar toggle
+      (function setupDesktopSidebarToggle() {
+        const btn = document.getElementById('desktop-sidebar-toggle');
+        const sidebar = document.getElementById('sidebar');
+        const icon = document.getElementById('sidebar-toggle-icon');
+        if (!btn || !sidebar) return;
+        let collapsed = false;
+        btn.addEventListener('click', () => {
+          collapsed = !collapsed;
+          sidebar.classList.toggle('collapsed', collapsed);
+          // Rotate icon: chevron-left when open, chevron-right when collapsed
+          if (icon) {
+            icon.innerHTML = collapsed
+              ? '<polyline points="9 18 15 12 9 6"/>'
+              : '<polyline points="15 18 9 12 15 6"/>';
+          }
+        });
+      })();
+
+      // UI-02: Initialize search
+      if (window.AcbSearch) window.AcbSearch.init();
+      await syncShowAdPolicy();
+      await refreshThreadSidebarData();
+      updateOnlinePresence();
+      startSSE();
+      setInterval(refreshThreadSidebarData, 10000);
+
+      const tip = window.AcbTooltip.getTooltipElement();
+      if (tip) {
+        tip.addEventListener('mouseenter', () => clearAgentTooltipHideTimer());
+        tip.addEventListener('mouseleave', () => scheduleAgentTooltipHide());
+        tip.addEventListener('click', async (e) => {
+          e.stopPropagation();
+
+          const btn = e.target.closest('button[data-copy]');
+          if (!btn) return;
+          // Don't allow copy if button is disabled
+          if (btn.disabled) {
+            const old = btn.textContent;
+            btn.textContent = 'Select a thread first';
+            setTimeout(() => { btn.textContent = old; }, 1200);
+            return;
+          }
+          const value = btn.getAttribute('data-copy-value') || '';
+          const ok = await copyTextWithFallback(value);
+          const old = btn.textContent;
+          btn.textContent = ok ? 'Copied' : 'Copy failed';
+          setTimeout(() => { btn.textContent = old; }, 1200);
+        });
+      }
+    })();
+
+    document.addEventListener('click', () => {
+      hideThreadContextMenu();
+      hideThreadFilterPanel();
+      hideAgentTooltip();
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') hideThreadContextMenu();
+    });
+    window.addEventListener('resize', () => {
+      hideThreadContextMenu();
+      hideAgentTooltip();
+      // Close mobile sidebar if window resized to desktop size
+      if (window.innerWidth > 768) {
+        closeMobileSidebar();
+      }
+    });
+
+    // Handle orientation change on mobile
+    window.addEventListener('orientationchange', () => {
+      closeMobileSidebar();
+      hideThreadContextMenu();
+    });
+
+    (function setupServerStatusTooltip() {
+      const dot = document.getElementById('status-dot');
+      const label = document.getElementById('status-label');
+      if (!dot || !label) return;
+
+      let _metricsCache = null;
+      let _cacheTs = 0;
+      const CACHE_TTL = 30000; // 30s
+
+      function _fmtUptime(seconds) {
+        if (seconds == null) return '—';
+        const s = Math.round(seconds);
+        if (s < 60) return `${s}s`;
+        if (s < 3600) return `${Math.floor(s / 60)}m ${s % 60}s`;
+        const h = Math.floor(s / 3600);
+        const m = Math.floor((s % 3600) / 60);
+        return `${h}h ${m}m`;
+      }
+
+      function _fmtDate(iso) {
+        if (!iso) return '—';
+        try {
+          return new Date(iso).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' });
+        } catch { return iso; }
+      }
+
+      function _buildHtml(m, connected) {
+        const dot = connected ? '<span class="srv-tip-dot srv-tip-dot--on"></span>' : '<span class="srv-tip-dot srv-tip-dot--off"></span>';
+        const stateLabel = connected ? 'Connected' : 'Reconnecting…';
+
+        const byStatus = m.threads?.by_status || {};
+        const statusEntries = Object.entries(byStatus)
+          .filter(([, v]) => v > 0)
+          .map(([k, v]) => `<span class="srv-tip-badge">${k} <b>${v}</b></span>`)
+          .join('');
+
+        const rate = m.messages?.rate || {};
+
+        return `
+          <div class="srv-tip-card">
+            <div class="srv-tip-header">
+              ${dot}
+              <span class="srv-tip-title">AgentChatBus</span>
+              <span class="srv-tip-state">${stateLabel}</span>
+            </div>
+            <div class="srv-tip-divider"></div>
+            <div class="srv-tip-row">
+              <span class="srv-tip-key">Uptime</span>
+              <span class="srv-tip-val">${_fmtUptime(m.uptime_seconds)}</span>
+            </div>
+            <div class="srv-tip-row">
+              <span class="srv-tip-key">Started</span>
+              <span class="srv-tip-val">${_fmtDate(m.started_at)}</span>
+            </div>
+            <div class="srv-tip-row">
+              <span class="srv-tip-key">Schema</span>
+              <span class="srv-tip-val">v${m.schema_version ?? '—'}</span>
+            </div>
+            <div class="srv-tip-divider"></div>
+            <div class="srv-tip-row">
+              <span class="srv-tip-key">Threads</span>
+              <span class="srv-tip-val">${m.threads?.total ?? '—'}</span>
+            </div>
+            ${statusEntries ? `<div class="srv-tip-badges">${statusEntries}</div>` : ''}
+            <div class="srv-tip-row">
+              <span class="srv-tip-key">Messages</span>
+              <span class="srv-tip-val">${m.messages?.total ?? '—'}</span>
+            </div>
+            <div class="srv-tip-row srv-tip-row--sub">
+              <span class="srv-tip-key">Activity</span>
+              <span class="srv-tip-val">
+                <span class="srv-tip-rate">${rate.last_1m ?? 0}/1m</span>
+                <span class="srv-tip-rate">${rate.last_5m ?? 0}/5m</span>
+                <span class="srv-tip-rate">${rate.last_15m ?? 0}/15m</span>
+              </span>
+            </div>
+            <div class="srv-tip-row">
+              <span class="srv-tip-key">Agents online</span>
+              <span class="srv-tip-val">${m.agents?.online ?? '—'} / ${m.agents?.total ?? '—'}</span>
+            </div>
+          </div>`;
+      }
+
+      async function _show(anchorEl) {
+        const now = Date.now();
+        if (!_metricsCache || now - _cacheTs > CACHE_TTL) {
+          try {
+            _metricsCache = await window.AcbApi.api('/api/metrics');
+            _cacheTs = Date.now();
+          } catch {
+            _metricsCache = null;
+          }
+        }
+        if (!window.AcbTooltip?.showRich) return;
+        const connected = document.getElementById('status-dot')?.style.background?.includes('green') || isConnected;
+        const html = _metricsCache
+          ? _buildHtml(_metricsCache, connected)
+          : `<div class="srv-tip-card"><div class="srv-tip-header"><span class="srv-tip-title">AgentChatBus</span></div><div class="srv-tip-row"><span class="srv-tip-key">Status</span><span class="srv-tip-val">${connected ? 'Connected' : 'Reconnecting…'}</span></div></div>`;
+        window.AcbTooltip.showRich(anchorEl, html, { className: 'acb-tooltip-srv', maxWidth: '260px' });
+      }
+
+      function _hide() {
+        if (window.AcbTooltip?.scheduleHide) window.AcbTooltip.scheduleHide(200);
+      }
+
+      [dot, label].forEach(el => {
+        el.addEventListener('mouseenter', () => _show(el));
+        el.addEventListener('mouseleave', _hide);
+      });
+    })();
+
+    (function setupUnifiedInfoTooltip() {
+      const infoEl = document.getElementById('agent-status-info');
+      if (!infoEl) return;
+
+      const tooltipHtml = `
+        <div style="padding:8px 12px;min-width:260px;">
+          <div style="font-size:12px;color:var(--text-2);margin-bottom:6px;">Status Legend:</div>
+          <div class="state-item"><span class="state-emoji">🟢</span> <strong>Active:</strong> Activity within 30s</div>
+          <div class="state-item"><span class="state-emoji">⏳</span> <strong>Waiting:</strong> Agent is online and currently in msg_wait</div>
+          <div class="state-item"><span class="state-emoji">⚫</span> <strong>Offline:</strong> No recent activity</div>
+        </div>
+      `;
+
+      infoEl.addEventListener('mouseenter', () => {
+        window.AcbTooltip.showRich(infoEl, tooltipHtml, {
+          interactive: false,
+          maxWidth: '340px',
+          className: 'acb-tooltip-info',
+        });
+      });
+
+      infoEl.addEventListener('mouseleave', () => {
+        window.AcbTooltip.scheduleHide(120);
+      });
+    })();
+
+    function getResumePromptForAgent(agentId, displayName, token) {
+      const threadName = document.getElementById('thread-title')?.textContent?.trim() || '(current thread)';
+      const tokenLine = token ? `Token: ${token}\n` : '';
+      return `@${displayName}
+Please resume this agent session with saved credentials.
+1) Call agent_resume(agent_id, token) with your credentials.
+2) If resume fails, check token validity and retry.
+3) On success, post confirmation message.
+4) Begin msg_wait loop to listen for incoming messages.
+
+Agent ID: ${agentId}
+${tokenLine}Thread: ${threadName}
+
+Note: Thread name is the topic label. Thread ID is the unique identifier.`;
+    }
+
+    async function copyTextWithFallback(text) {
+      return window.AcbUtils.copyTextWithFallback(text);
+    }
+
+    function clearAgentTooltipHideTimer() {
+      if (agentTooltipHideTimer) {
+        clearTimeout(agentTooltipHideTimer);
+        agentTooltipHideTimer = null;
+      }
+      window.AcbTooltip.clearHideTimer();
+    }
+
+    function scheduleAgentTooltipHide(delay = 120) {
+      clearAgentTooltipHideTimer();
+      agentTooltipHideTimer = setTimeout(() => hideAgentTooltip(), delay);
+    }
+
+    function hideAgentTooltip() {
+      clearAgentTooltipHideTimer();
+      window.AcbTooltip.hideTooltip();
+      activeAgentTooltipTarget = null;
+    }
+
+    function showAgentTooltip(anchorEl, agent) {
+      if (!anchorEl || !agent) return;
+      clearAgentTooltipHideTimer();
+      const alias = String(agent.display_name ?? agent.name ?? 'Unknown').trim() || 'Unknown';
+      const agentId = String(agent.id ?? agent.agent_id ?? '').trim();
+      const ide = String(agent.ide ?? 'Unknown').trim() || 'Unknown';
+      const model = String(agent.model ?? 'Unknown').trim() || 'Unknown';
+      const token = String(agent.token ?? '').trim();
+      const prompt = getResumePromptForAgent(agentId, alias, token);
+
+      // Disable resume button if no thread is selected
+      const resumeButtonState = activeThreadId ? '' : 'disabled';
+      const resumeButtonStyle = activeThreadId ? '' : 'style="opacity:0.5;cursor:not-allowed;"';
+
+      // Build status footer
+      const state = getAgentState(agent);
+      const stateEmoji = getStateEmoji(state);
+      const offlineTime = getOfflineTime(agent);
+      const offlineStr = offlineTime ? ` — last seen ${offlineTime}` : '';
+      const isStdio = isStdioAgent ? isStdioAgent(agent) : false;
+      const transportEmoji = state.toLowerCase() === 'offline' ? '❔' : (isStdio ? '✡️' : '🌟');
+      const transportLabel = state.toLowerCase() === 'offline' ? 'unknown' : (isStdio ? 'stdio' : 'SSE');
+
+      const html = `
+        <div class="agent-tip-title">Agent Quick Prompt</div>
+        <div class="agent-tip-meta">Alias: <code>${esc(alias)}</code><br/>Agent ID: <code>${esc(agentId || '(unknown)')}</code><br/>IDE: <code>${esc(ide)}</code><br/>Model: <code>${esc(model)}</code></div>
+        <pre class="agent-tip-prompt">${esc(prompt)}</pre>
+        <div class="agent-tip-actions">
+          <button type="button" data-copy="agent-id" data-copy-value="${esc(agentId)}">Copy Agent ID</button>
+          <button type="button" data-copy="resume" data-copy-value="${esc(prompt)}" ${resumeButtonState} ${resumeButtonStyle} title="${activeThreadId ? '' : 'Select a thread first'}">Copy Resume Prompt</button>
+        </div>
+        <div class="agent-tip-status">${stateEmoji} ${esc(state)} — ${transportEmoji} ${esc(transportLabel)}${esc(offlineStr)}</div>`;
+
+      window.AcbTooltip.showRich(anchorEl, html, {
+        interactive: true,
+        width: 'min(380px, calc(100vw - 24px))',
+        maxWidth: '380px',
+        className: 'acb-tooltip-agent',
+      });
+      activeAgentTooltipTarget = anchorEl;
+    }
+
+    function bindAgentTooltipEvents(cardEl, agent) {
+      if (!cardEl) return;
+      // For message avatars (.msg-avatar), cardEl IS the avatar element itself.
+      // For status bar cards (<acb-agent-status-item>), cardEl has a .asi-avatar child
+      // that gets re-created on every setData call, so we bind on the stable cardEl
+      // and filter by target.
+      const isCard = cardEl.tagName && cardEl.tagName.toLowerCase() === 'acb-agent-status-item';
+
+      if (isCard) {
+        cardEl.addEventListener('mouseover', (e) => {
+          const overStatusBox = e.target.closest('.asi-status-box, .asi-transport-box');
+          if (overStatusBox) {
+            // Stop propagation so document-level shared-tooltip doesn't double-fire
+            e.stopPropagation();
+            // showTooltip resets manualMode and clears hide timers internally
+            window.AcbTooltip.showTooltip && window.AcbTooltip.showTooltip(overStatusBox);
+            return;
+          }
+          if (!e.target.closest('.asi-avatar')) return;
+          const avatarEl = cardEl.querySelector('.asi-avatar') || cardEl;
+          showAgentTooltip(avatarEl, agent);
+        });
+        cardEl.addEventListener('mouseout', (e) => {
+          const overStatusBox = e.target.closest('.asi-status-box, .asi-transport-box');
+          if (!overStatusBox) return;
+          // Only hide if actually leaving the status box (not moving between its children)
+          const toEl = e.relatedTarget;
+          if (toEl instanceof Element && overStatusBox.contains(toEl)) return;
+          e.stopPropagation();
+          window.AcbTooltip.scheduleHide && window.AcbTooltip.scheduleHide(80);
+        });
+        cardEl.addEventListener('mouseleave', () => scheduleAgentTooltipHide());
+        cardEl.addEventListener('click', (e) => {
+          if (e.target.closest('.asi-status-box, .asi-transport-box, .asi-status-panel')) return;
+          e.stopPropagation();
+          const avatarEl = cardEl.querySelector('.asi-avatar') || cardEl;
+          showAgentTooltip(avatarEl, agent);
+        });
+      } else {
+        // message avatar: bind directly
+        cardEl.addEventListener('mouseenter', () => showAgentTooltip(cardEl, agent));
+        cardEl.addEventListener('mouseleave', () => scheduleAgentTooltipHide());
+        cardEl.addEventListener('click', (e) => {
+          e.stopPropagation();
+          showAgentTooltip(cardEl, agent);
+        });
+      }
+    }
+
+    function applySavedTheme() {
+      return window.AcbTheme.applySavedTheme();
+    }
+
+    function setTheme(theme) {
+      return window.AcbTheme.setTheme(theme);
+    }
+
+    function toggleTheme() {
+      return window.AcbTheme.toggleTheme();
+    }
+
+    function updateOnlinePresence() {
+      return window.AcbAgents.updateOnlinePresence({
+        onlineAgentKeys,
+        onlineAgentLabelsByKey,
+        activeThreadLastSeenMs,
+        activeThreadLabelsByKey,
+        threadActivityWindowMs: THREAD_ACTIVITY_WINDOW_MS,
+        activeThreadId,
+      });
+    }
+
+    function getAgentDisplayName(msg) {
+      return window.AcbAgents.getAgentDisplayName(msg);
+    }
+
+    function getAgentPresenceKey(msg) {
+      return window.AcbAgents.getAgentPresenceKey(msg);
+    }
+
+    function recordThreadAgentActivity(key, label, createdAtIso) {
+      return window.AcbAgents.recordThreadAgentActivity({
+        key,
+        label,
+        createdAtIso,
+        activeThreadLastSeenMs,
+        activeThreadLabelsByKey,
+      });
+    }
+
+    function rebuildActiveThreadParticipants(messages) {
+      return window.AcbAgents.rebuildActiveThreadParticipants({
+        messages,
+        getAgentPresenceKey,
+        getAgentDisplayName,
+        recordThreadAgentActivity,
+        activeThreadLastSeenMs,
+        activeThreadLabelsByKey,
+      });
+    }
+
+    // ==============================================================================================
+    // SSE
+    // ==============================================================================================
+    function startSSE() {
+      return window.AcbSSE.startSSE({
+        getActiveThreadId: () => activeThreadId,
+        onMsgNew: async () => loadNewMessages(),
+        onThreadEvent: async () => refreshThreads(),
+        onAgentPresence: async () => refreshThreadSidebarData(),
+        onTyping: (agentId, isTyping) => {
+          if (isTyping) showTyping(agentId);
+          else hideTyping(agentId);
+        },
+        setConnected,
+      });
+    }
+
+    function setConnected(v) {
+      isConnected = v;
+      const dot = document.getElementById('status-dot');
+      const label = document.getElementById('status-label');
+      dot.style.background = v ? 'var(--green)' : 'var(--red)';
+      dot.style.boxShadow = v ? '0 0 8px var(--green)' : '0 0 8px var(--red)';
+      label.textContent = v ? 'Connected' : 'Reconnecting…';
+      return window.AcbSSE.setConnectedUI(v);
+    }
+
+    // ==============================================================================================
+    // API
+    // ==============================================================================================
+    async function api(path, opts = {}) {
+      return window.AcbApi.api(path, opts);
+    }
+
+    // ==============================================================================================
+    // Threads
+    // ==============================================================================================
+    async function refreshThreads() {
+      return window.AcbThreads.refreshThreads({
+        api,
+        getSelectedStatuses: () => selectedThreadStatuses,
+        getActiveThreadId: () => activeThreadId,
+        resetThreadSelection,
+        onSelectThread: selectThread,
+        onOpenContextMenu: openThreadContextMenu,
+        esc,
+        timeAgo,
+        updateThreadFilterButton,
+      });
+    }
+
+    async function refreshThreadSidebarData() {
+      await Promise.all([
+        refreshThreads(),
+        refreshAgents(),
+      ]);
+    }
+
+    function toggleThreadFilterPanel(event) {
+      return window.AcbThreads.toggleThreadFilterPanel(event);
+    }
+
+    function hideThreadFilterPanel() {
+      return window.AcbThreads.hideThreadFilterPanel();
+    }
+
+    function selectedStatusListFromUI() {
+      return window.AcbThreads.selectedStatusListFromUI();
+    }
+
+    function onThreadFilterChange() {
+      const selected = selectedStatusListFromUI();
+      if (!selected.length) {
+        document.querySelectorAll('#thread-filter-panel input[data-status]').forEach((cb) => {
+          const status = cb.getAttribute('data-status');
+          cb.checked = NORMAL_THREAD_STATUSES.includes(status);
+        });
+        selectedThreadStatuses = new Set(NORMAL_THREAD_STATUSES);
+      } else {
+        selectedThreadStatuses = new Set(selected);
+      }
+      refreshThreads();
+    }
+
+    function selectAllThreadStatuses() {
+      document.querySelectorAll('#thread-filter-panel input[data-status]').forEach(cb => cb.checked = true);
+      onThreadFilterChange();
+    }
+
+    function selectNormalThreadStatuses() {
+      document.querySelectorAll('#thread-filter-panel input[data-status]').forEach((cb) => {
+        const status = cb.getAttribute('data-status');
+        cb.checked = NORMAL_THREAD_STATUSES.includes(status);
+      });
+      onThreadFilterChange();
+    }
+
+    function updateThreadFilterButton() {
+      return window.AcbThreads.updateThreadFilterButton(
+        ALL_THREAD_STATUSES,
+        NORMAL_THREAD_STATUSES,
+        selectedThreadStatuses
+      );
+    }
+
+    async function selectThread(id, topic, status, initialSyncContext = null) {
+      // Close mobile sidebar when selecting thread
+      closeMobileSidebar();
+      
+      return window.AcbChat.selectThread({
+        id, topic, status,
+        initialSyncContext,
+        setThreadSyncContext: (threadId, syncContext) => {
+          if (!threadId) return;
+          if (syncContext && typeof syncContext.current_seq === 'number' && syncContext.reply_token) {
+            threadSyncContexts.set(threadId, syncContext);
+            return;
+          }
+          threadSyncContexts.delete(threadId);
+        },
+        setActiveThread: (id, status) => { activeThreadId = id; activeThreadStatus = status; },
+        api,
+        rebuildActiveThreadParticipants,
+        appendBubble,
+        updateOnlinePresence,
+        updateStatusBar: refreshAgents,
+        setLastSeq: (s) => { lastSeq = s; },
+        clearThreadParticipants: () => activeThreadLastSeenMs.clear(),
+        scrollBottom,
+      }).then(() => {
+        // UI-02: rebuild Fuse.js index after thread messages loaded
+        if (window.AcbSearch) window.AcbSearch.rebuild();
+        // UI-07: rebuild nav sidebar after thread messages loaded
+        if (window.AcbNavSidebar) window.AcbNavSidebar.rebuild();
+      });
+    }
+    // Expose globally for AcbSearch navigation
+    window.selectThread = selectThread;
+
+    function getThreadSyncContext(threadId = activeThreadId) {
+      if (!threadId) return null;
+      return threadSyncContexts.get(threadId) || null;
+    }
+
+    async function loadNewMessages() {
+      return window.AcbChat.loadNewMessages({
+        getActiveThreadId: () => activeThreadId,
+        getLastSeq: () => lastSeq,
+        api,
+        getAgentPresenceKey,
+        getAgentDisplayName,
+        recordThreadAgentActivity,
+        appendBubble,
+        updateOnlinePresence,
+        updateStatusBar: refreshAgents,
+        setLastSeq: (fn) => { lastSeq = (typeof fn === 'function' ? fn(lastSeq) : fn); },
+        scrollBottom,
+      });
+    }
+
+    async function closeThread(threadId = activeThreadId, x = null, y = null) {
+      return window.AcbThreads.closeThread({
+        threadId,
+        api,
+        refreshThreads,
+        x,
+        y,
+      });
+    }
+
+    function openThreadContextMenu(event, thread) {
+      contextMenuThread = window.AcbThreads.openThreadContextMenu(event, thread, { showAd });
+      // 保存右键点击的位置，用于确认对话框定位
+      contextMenuThread._clickX = event.clientX;
+      contextMenuThread._clickY = event.clientY;
+    }
+
+    function hideThreadContextMenu() {
+      contextMenuThread = window.AcbThreads.hideThreadContextMenu();
+    }
+
+    async function deleteThreadFromMenu() {
+      if (showAd) return;
+      if (!contextMenuThread) return;
+      const { id, topic, _clickX, _clickY } = contextMenuThread;
+      hideThreadContextMenu();
+
+      const confirmDialog = document.getElementById('confirm-dialog');
+      if (!confirmDialog) return;
+
+      const confirmed = await confirmDialog.show({
+        title: 'Delete thread',
+        message: `Permanently delete <strong>${esc(topic || id)}</strong>? This cannot be undone.`,
+        confirmText: 'Delete',
+        confirmClass: 'btn-destructive',
+        x: _clickX,
+        y: _clickY
+      });
+
+      if (!confirmed) return;
+
+      const result = await api(`/api/threads/${id}`, { method: 'DELETE' });
+      if (!result || result.ok !== true) return;
+
+      if (activeThreadId === id) {
+        resetThreadSelection();
+      }
+      await refreshThreads();
+    }
+
+    async function archiveThreadFromMenu() {
+      return window.AcbThreads.archiveThreadFromMenu({
+        getContextMenuThread: () => contextMenuThread,
+        hideThreadContextMenu,
+        api,
+        getActiveThreadId: () => activeThreadId,
+        resetThreadSelection,
+        refreshThreads,
+      });
+    }
+
+    async function unarchiveThreadFromMenu() {
+      return window.AcbThreads.unarchiveThreadFromMenu({
+        getContextMenuThread: () => contextMenuThread,
+        hideThreadContextMenu,
+        api,
+        getActiveThreadId: () => activeThreadId,
+        resetThreadSelection,
+        refreshThreads,
+      });
+    }
+
+    async function closeThreadFromMenu() {
+      if (showAd) return;
+      if (!contextMenuThread) return;
+      const { id, _clickX = null, _clickY = null } = contextMenuThread;
+      hideThreadContextMenu();
+      await closeThread(id, _clickX, _clickY);
+    }
+
+    async function exportFromHeader() {
+      const topic = document.getElementById("thread-title")?.textContent || "";
+      await window.AcbThreads.exportThread({ threadId: activeThreadId, topic });
+    }
+
+    async function exportThreadFromMenu() {
+      if (!contextMenuThread) return;
+      const { id, topic } = contextMenuThread;
+      hideThreadContextMenu();
+      await window.AcbThreads.exportThread({ threadId: id, topic });
+    }
+
+    async function copyThreadNameFromMenu() {
+      return window.AcbThreads.copyThreadNameFromMenu({
+        getContextMenuThread: () => contextMenuThread,
+        hideThreadContextMenu,
+        copyTextWithFallback,
+      });
+    }
+
+    async function copyJoinPromptFromMenu() {
+      return window.AcbThreads.copyJoinPromptFromMenu({
+        getContextMenuThread: () => contextMenuThread,
+        hideThreadContextMenu,
+        copyTextWithFallback,
+      });
+    }
+
+    function resetThreadSelection() {
+      if (activeThreadId) {
+        threadSyncContexts.delete(activeThreadId);
+      }
+      activeThreadId = null;
+      activeThreadStatus = 'discuss';
+      lastSeq = 0;
+      activeThreadLastSeenMs.clear();
+
+      document.querySelectorAll('.thread-item').forEach(el => el.classList.remove('active'));
+      document.getElementById('thread-header').style.display = 'none';
+      document.getElementById('compose').classList.remove('visible');
+      document.getElementById('messages').innerHTML = EMPTY_STATE_TEMPLATE;
+      const sysArea = document.getElementById('sys-prompt-area');
+      if (sysArea) sysArea.innerHTML = '';
+      updateOnlinePresence();
+    }
+
+    // ==============================================================================================
+    // Messages
+    // ==============================================================================================
+
+    function authorColor(author) {
+      return window.AcbUtils.authorColor(author);
+    }
+
+    function fmtTime(iso) {
+      return window.AcbUtils.fmtTime(iso);
+    }
+
+    function normalizeMessageText(raw) {
+      return window.AcbMessageRenderer.normalizeMessageText(raw);
+    }
+
+    function tokenizeMessage(rawText) {
+      return window.AcbMessageRenderer.tokenizeMessage(rawText);
+    }
+
+    function parseInlineCodeSegments(line) {
+      return window.AcbMessageRenderer.parseInlineCodeSegments(line);
+    }
+
+    function renderTextWithInlineCode(containerEl, text) {
+      return window.AcbMessageRenderer.renderTextWithInlineCode(containerEl, text);
+    }
+
+                  function renderMessageContent(containerEl, rawText, metadata = null) {
+                    return window.AcbMessageRenderer.renderMessageContent(containerEl, rawText, metadata);
+    }
+
+    // ── Copy message content to clipboard ────────────────────────────────────
+    window.AcbCopyMsg = function(btn) {
+      const bubble = btn.closest('.msg-col')?.querySelector('.bubble-v2');
+      if (!bubble) return;
+      const text = bubble.innerText || bubble.textContent || '';
+      navigator.clipboard.writeText(text.trim()).then(() => {
+        // Swap icon to checkmark briefly
+        const svg = btn.querySelector('svg');
+        if (!svg) return;
+        const original = svg.innerHTML;
+        svg.innerHTML = '<polyline points="20 6 9 17 4 12"/>';
+        btn.classList.add('msg-copy-btn--ok');
+        setTimeout(() => {
+          svg.innerHTML = original;
+          btn.classList.remove('msg-copy-btn--ok');
+        }, 1500);
+      }).catch(() => {});
+    };
+
+    // UI-13: scroll to the message referenced by a reply-quote button
+    window.AcbScrollToMsg = (msgId) => {
+      const target = document.querySelector(`[data-msg-id="${CSS.escape(msgId)}"]`);
+      if (!target) return;
+      const scrollEl = document.getElementById('messages-scroll');
+      if (scrollEl) {
+        scrollEl.scrollTo({ top: target.offsetTop - 12, behavior: 'smooth' });
+      } else {
+        target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+      target.classList.add('msg-jump-highlight');
+      setTimeout(() => target.classList.remove('msg-jump-highlight'), 1500);
+    };
+
+    // UI-13: event delegation -- intercepts clicks on any .msg-reply-quote in #messages
+    document.getElementById('messages')?.addEventListener('click', (e) => {
+      const btn = e.target.closest('button.msg-reply-quote');
+      if (!btn) return;
+      const targetId = btn.dataset.replyTarget;
+      if (targetId) window.AcbScrollToMsg(targetId);
+    });
+
+    function appendBubble(m) {
+      const box = document.getElementById('messages');
+
+      // ---- Deduplication check (also check sys-prompt-area for seq=0) --------
+      const seq = String(m.seq);
+      const sysPromptArea = document.getElementById('sys-prompt-area');
+      const existingMsg = box.querySelector(`[data-seq="${seq}"]`) ||
+        (sysPromptArea && sysPromptArea.querySelector(`[data-seq="${seq}"]`));
+      if (existingMsg) {
+        console.warn(`[Deduplicate] Message seq ${seq} already exists in DOM, skipping.`);
+        return;
+      }
+
+      const parseMetadata = (raw) => {
+        if (!raw) return null;
+        if (typeof raw === 'object') return raw;
+        if (typeof raw !== 'string') return null;
+        try {
+          return JSON.parse(raw);
+        } catch {
+          return null;
+        }
+      };
+
+      // ---- System event (centered pill / action card) or system prompt (collapsable bubble) ---------------------
+      if (m.role === 'system' && m.author === 'system') {
+        const metaObj = parseMetadata(m.metadata);
+
+        // Frontend fallback: still render legacy human-decision admin switch cards
+        // if old messages exist in history.
+        if (metaObj && (
+          metaObj.ui_type === 'admin_switch_confirmation_required'
+          || metaObj.ui_type === 'admin_takeover_confirmation_required'
+        )) {
+          const card = document.createElement('acb-admin-switch-card');
+          if (typeof card.setData === 'function') {
+            card.setData({
+              message: m,
+              metadata: metaObj,
+              threadId: metaObj.thread_id || activeThreadId,
+              api,
+            });
+          }
+          box.appendChild(card);
+          return;
+        }
+
+        if (metaObj && metaObj.ui_type === 'admin_coordination_timeout_notice') {
+          const wrapper = document.createElement('div');
+          wrapper.className = 'msg-sys-admin-timeout';
+          wrapper.setAttribute('data-seq', String(m.seq));
+
+          const card = document.createElement('div');
+          card.className = 'msg-sys-admin-timeout-card';
+
+          const main = document.createElement('div');
+          main.className = 'msg-sys-admin-timeout-main';
+          const sentAt = fmtTime(m.created_at);
+          main.textContent = sentAt ? `${sentAt}  ${m.content}` : m.content;
+          if (m.created_at) {
+            main.title = `sent at ${m.created_at}`;
+          }
+
+          const note = document.createElement('div');
+          note.className = 'msg-sys-admin-timeout-note-inline';
+          note.innerHTML = `
+            <span class="msg-sys-admin-timeout-note-icon" aria-hidden="true">i</span>
+            <span class="msg-sys-admin-timeout-note-text">This notice is visible only to human participants. Agents cannot read or receive this message.</span>
+          `;
+
+          card.appendChild(main);
+          card.appendChild(note);
+          wrapper.appendChild(card);
+          box.appendChild(wrapper);
+          return;
+        }
+
+        // System prompt (seq=0): collapsable bubble with Markdown rendering
+        if (m.seq === 0) {
+          const wrapper = document.createElement('div');
+          wrapper.className = 'msg-sys-prompt';
+          wrapper.setAttribute('data-seq', '0');
+
+          const promptHeader = document.createElement('button');
+          promptHeader.type = 'button';
+          promptHeader.className = 'msg-sys-prompt-header';
+          promptHeader.setAttribute('aria-expanded', 'true');
+          promptHeader.classList.add('is-expanded');
+          promptHeader.innerHTML = `<span class="msg-sys-prompt-label">Thread Instructions (system)</span><span class="msg-sys-prompt-chevron">&#9650;</span>`;
+
+          const promptBody = document.createElement('div');
+          promptBody.className = 'msg-sys-prompt-body bubble-v2';
+          renderMessageContent(promptBody, m.content, null);
+
+          promptHeader.addEventListener('click', () => {
+            const expanded = promptHeader.getAttribute('aria-expanded') === 'true';
+            promptHeader.setAttribute('aria-expanded', String(!expanded));
+            promptHeader.classList.toggle('is-expanded', !expanded);
+            promptBody.classList.toggle('collapsed', expanded);
+            promptHeader.querySelector('.msg-sys-prompt-chevron').innerHTML = !expanded ? '&#9650;' : '&#9660;';
+            promptHeader.querySelector('.msg-sys-prompt-label').textContent = !expanded
+              ? 'Thread Instructions (system)'
+              : 'Thread Instructions (system) u{2014} click to expand';
+          });
+
+          wrapper.appendChild(promptHeader);
+          wrapper.appendChild(promptBody);
+
+          // Copy button inside promptBody (bottom-right), not in the header
+          const promptCopyBtn = document.createElement('button');
+          promptCopyBtn.type = 'button';
+          promptCopyBtn.className = 'msg-sys-prompt-copy-btn';
+          promptCopyBtn.title = 'Copy system prompt';
+          promptCopyBtn.setAttribute('aria-label', 'Copy system prompt');
+          promptCopyBtn.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>`;
+          promptCopyBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const text = (promptBody.innerText || promptBody.textContent || '').trim();
+            navigator.clipboard.writeText(text).then(() => {
+              const svg = promptCopyBtn.querySelector('svg');
+              if (!svg) return;
+              const original = svg.innerHTML;
+              svg.innerHTML = '<polyline points="20 6 9 17 4 12"/>';
+              promptCopyBtn.classList.add('msg-copy-btn--ok');
+              setTimeout(() => {
+                svg.innerHTML = original;
+                promptCopyBtn.classList.remove('msg-copy-btn--ok');
+              }, 1500);
+            }).catch(() => {});
+          });
+          promptBody.appendChild(promptCopyBtn);
+
+          // UI-07: system prompt goes into its own full-width area (above chat-body)
+          const sysArea = document.getElementById('sys-prompt-area') || box;
+          sysArea.innerHTML = '';
+          sysArea.appendChild(wrapper);
+          return;
+        }
+
+        // Other system events: centered pill
+        const pill = document.createElement('div');
+        pill.className = 'msg-sys-event';
+        const sentAt = fmtTime(m.created_at);
+        pill.textContent = sentAt ? `${sentAt}  ${m.content}` : m.content;
+        if (m.created_at) {
+          pill.title = `sent at ${m.created_at}`;
+        }
+        box.appendChild(pill);
+        return;
+      }
+
+      const authorLabel = String(m.author_name ?? m.author ?? '').trim() || 'unknown';
+      const isSystem = String(m.role ?? '').toLowerCase() === 'system' || authorLabel.toLowerCase() === 'system';
+      const isHuman = !m.author_id && (
+        authorLabel.toLowerCase() === 'human'
+        || String(m.role ?? '').toLowerCase() === 'user'
+      );
+      const authorKey = isHuman ? 'human' : (isSystem ? 'system' : String(m.author_id ?? authorLabel));
+      const color = authorColor(authorKey);
+      const avatarEmoji = String(m.author_emoji || '').trim()
+        || String(currentAgents?.find((a) => a.id === String(m.author_id ?? ''))?.emoji || '').trim()
+        || (isHuman ? '👤' : (isSystem ? '☑️' : '🤖'));
+      const bgAlpha = `${color}22`;  // ~13% alpha tint for avatar bg
+      const isAgentMessage = !isHuman && !isSystem;
+      const sentAtLabel = fmtTime(m.created_at);
+
+      const row = document.createElement('div');
+      row.className = `msg-row ${isHuman ? 'msg-row-right' : 'msg-row-left'}`;
+      row.setAttribute('data-author-id', String(m.author_id ?? authorLabel));
+      row.setAttribute('data-seq', String(m.seq));
+      row.setAttribute('data-msg-id', String(m.id ?? ''));
+
+      // Check if this message has mentions (look in metadata if string/object)
+      let metaObj = parseMetadata(m.metadata);
+      const hasMentions = metaObj && metaObj.mentions && Array.isArray(metaObj.mentions) && metaObj.mentions.length > 0;
+      if (hasMentions) {
+        row.classList.add('message-has-mentions');
+      }
+
+      // Build metadata badges (handoff_target, stop_reason)
+      let handoffBadgeHtml = '';
+      if (metaObj) {
+        if (metaObj.handoff_target) {
+          handoffBadgeHtml = `<span class="handoff-badge" title="Handoff to: ${esc(metaObj.handoff_target)}">&#8594; ${esc(metaObj.handoff_target)}</span>`;
+        }
+        if (metaObj.stop_reason) {
+          const reasonClass = `stop-tag stop-tag-${esc(metaObj.stop_reason)}`;
+          handoffBadgeHtml += `<span class="${reasonClass}" title="Stop reason">${esc(metaObj.stop_reason)}</span>`;
+        }
+      }
+
+      // Priority badge (UP-16)
+      let priorityBadgeHtml = '';
+      if (m.priority === 'urgent') {
+        priorityBadgeHtml = '<span class="msg-priority-badge msg-priority-urgent" title="Urgent message">URGENT</span>';
+      } else if (m.priority === 'system') {
+        priorityBadgeHtml = '<span class="msg-priority-badge msg-priority-system" title="System message">SYSTEM</span>';
+      }
+
+      // Reply-to quote (UP-14) -- UI-13: clickable button with event delegation
+      const replyQuoteHtml = m.reply_to_msg_id
+        ? `<button class="msg-reply-quote" data-reply-target="${esc(m.reply_to_msg_id)}" title="Jump to message ${esc(m.reply_to_msg_id)}">&#8617; In reply to: <em>${esc(m.reply_to_msg_id.slice(0, 8))}&#8230;</em></button>`
+        : '';
+
+      // Edit indicator (UP-21)
+      const editedIndicatorHtml = m.edited_at
+        ? `<span class="msg-edited-indicator" title="Edited ${fmtTime(m.edited_at)} (v${m.edit_version})" onclick="window.AcbMsgEditHistory(this)" data-msg-id="${esc(m.id)}">edited</span>`
+        : '';
+
+      row.innerHTML = `
+      <div class="msg-avatar" style="background:${bgAlpha};color:${color};border:1px solid ${color}44">${avatarEmoji}</div>
+      <div class="msg-col">
+        <div class="msg-header">
+          <span class="msg-author-label" style="color:${color}">${esc(authorLabel)}</span>
+          <span class="msg-time-label">seq ${m.seq} ${fmtTime(m.created_at)}</span>
+          ${priorityBadgeHtml}
+          ${handoffBadgeHtml}
+          <button class="msg-copy-btn" title="Copy message" aria-label="Copy message content" onclick="window.AcbCopyMsg(this)">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+          </button>
+          ${!isSystem ? `<button class="msg-edit-btn toolbar-btn" aria-label="Edit message" onclick="window.AcbMsgEditStart(this)" data-msg-id="${esc(m.id)}" data-author="${esc(m.author)}">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+          </button>` : ''}
+        </div>
+        ${replyQuoteHtml}
+        <div class="bubble-v2" style="border-color:${color}55;${isHuman ? 'border-right-color' : 'border-left-color'}:${color}"></div>
+        ${editedIndicatorHtml}
+        ${isAgentMessage ? '<acb-message-tail-meta></acb-message-tail-meta>' : ''}
+        <div class="msg-reactions"></div>
+      </div>`;
+
+
+      const tailMetaEl = row.querySelector('acb-message-tail-meta');
+      if (tailMetaEl && typeof tailMetaEl.setData === 'function') {
+        tailMetaEl.setData({
+          visible: true,
+          emoji: avatarEmoji,
+          name: authorLabel,
+          timeLabel: sentAtLabel,
+        });
+      }
+
+      const bubbleEl = row.querySelector('.bubble-v2');
+      if (bubbleEl) {
+        renderMessageContent(bubbleEl, m.content, m.metadata);
+
+        // Render images if any
+        let images = null;
+        console.log(`[Bubble] Message metadata:`, m.metadata, `Type: ${typeof m.metadata}`);
+        if (m.metadata) {
+          // Parse metadata if it's a string
+          if (typeof m.metadata === 'string') {
+            try {
+              const meta = JSON.parse(m.metadata);
+              images = meta.images;
+              console.log(`[Bubble] Parsed metadata as string, images:`, images);
+            } catch (e) {
+              console.error(`[Bubble] Failed to parse metadata JSON:`, e);
+            }
+          } else if (typeof m.metadata === 'object') {
+            images = m.metadata.images;
+            console.log(`[Bubble] Got metadata as object, images:`, images);
+          }
+        } else {
+          console.log(`[Bubble] No metadata in message`);
+        }
+
+        if (images && Array.isArray(images) && images.length > 0) {
+          console.log(`[Bubble] Rendering ${images.length} images`);
+          const imgContainer = document.createElement('div');
+          imgContainer.style.cssText = 'display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px;';
+          images.forEach(img => {
+            const imgEl = document.createElement('img');
+            imgEl.src = img.url;
+            imgEl.title = img.name || 'Uploaded image';
+            imgEl.style.cssText = 'width: min(520px, 80vw); max-width: 100%; max-height: 70vh; border-radius: 8px; object-fit: contain; cursor: zoom-in; background: rgba(0,0,0,0.05);';
+            imgEl.onclick = () => window.open(img.url, '_blank');
+            imgContainer.appendChild(imgEl);
+            console.log(`[Bubble] Added image: ${img.url}`);
+          });
+          bubbleEl.appendChild(imgContainer);
+        } else {
+          console.log(`[Bubble] No images to render`);
+        }
+      }
+
+      // Render reactions pills (UP-13)
+      if (m.reactions && m.reactions.length > 0) {
+        const reactionsEl = row.querySelector('.msg-reactions');
+        if (reactionsEl) {
+          // Group by reaction label
+          const groups = {};
+          for (const r of m.reactions) {
+            if (!groups[r.reaction]) groups[r.reaction] = [];
+            groups[r.reaction].push(r.agent_name || r.agent_id || '?');
+          }
+          for (const [label, agents] of Object.entries(groups)) {
+            const pill = document.createElement('span');
+            pill.className = 'reaction-pill';
+            pill.title = agents.join(', ');
+            pill.textContent = agents.length > 1 ? `${label} ×${agents.length}` : label;
+            reactionsEl.appendChild(pill);
+          }
+        }
+      }
+
+      // Set rich tooltip for edit button
+      const editBtn = row.querySelector('.msg-edit-btn');
+      if (editBtn && window.AcbTooltip) {
+        const helpText = `
+          <div style="padding: 10px; max-width: 280px; font-size: 13px; line-height: 1.5; color: var(--text-1);">
+            <div style="font-weight: 600; margin-bottom: 4px;">Edit message</div>
+            <hr style="border: 0; border-top: 1px solid var(--border-light); margin: 6px 0;" />
+            <div style="font-weight: 600; margin-bottom: 6px; color: var(--accent); display: flex; align-items: center; gap: 6px;">
+              <span style="font-size: 16px;">⚠️</span> Agent Perception Notice
+            </div>
+            <div style="margin-bottom: 8px;">
+              AI Agents follow the <strong>sequence (seq)</strong> of the conversation. 
+              Modifying an old message does NOT change its sequence number, so agents currently waiting for new messages 
+              <strong>will not be notified</strong> of this edit.
+            </div>
+            <div style="border-top: 1px solid var(--border-light); padding-top: 8px; font-style: italic; color: var(--text-2); font-size: 11px;">
+              Recommendation: After editing, send a brief message to ensure they work with the latest context.
+            </div>
+          </div>
+        `;
+        editBtn.onmouseenter = () => window.AcbTooltip.showRich(editBtn, helpText, { maxWidth: '300px' });
+        editBtn.onmouseleave = () => window.AcbTooltip.scheduleHide(150);
+      }
+
+      if (!isHuman && !isSystem) {
+        const avatarEl = row.querySelector('.msg-avatar');
+        if (avatarEl) {
+          avatarEl.classList.add('msg-avatar-interactive');
+          // Get full agent details from current agents list
+          const authorId = String(m.author_id ?? authorLabel);
+          const agentData = currentAgents?.find(a => a.id === authorId) || {
+            id: authorId,
+            agent_id: authorId,
+            name: authorLabel,
+            display_name: authorLabel,
+            ide: 'Unknown',
+            model: 'Unknown',
+            token: ''
+          };
+          bindAgentTooltipEvents(avatarEl, agentData);
+        }
+      }
+
+      box.appendChild(row);
+      if (window.AcbNavSidebar) window.AcbNavSidebar.onNewMessage();
+
+      // UI-07: collapse system prompt on first real message
+      const sysArea = document.getElementById('sys-prompt-area');
+      if (sysArea) {
+        const header = sysArea.querySelector('.msg-sys-prompt-header');
+        const body = sysArea.querySelector('.msg-sys-prompt-body');
+        if (header && body && header.getAttribute('aria-expanded') === 'true') {
+          header.setAttribute('aria-expanded', 'false');
+          header.classList.remove('is-expanded');
+          body.classList.add('collapsed');
+          const chevron = header.querySelector('.msg-sys-prompt-chevron');
+          const label = header.querySelector('.msg-sys-prompt-label');
+          if (chevron) chevron.innerHTML = '&#9660;';
+          if (label) label.textContent = 'Thread Instructions (system) — click to expand';
+        }
+      }
+    }
+    // ---- Typing indicator ----------------------------------------------------------------------------------------------------------
+    function showTyping(agentId) {
+      const box = document.getElementById('messages');
+      let el = document.getElementById(`typing-${agentId}`);
+      if (!el) {
+        const color = authorColor(agentId);
+        const agentEmoji = String(currentAgents?.find((a) => a.id === agentId)?.emoji || '').trim();
+        const avatarEmoji = agentEmoji || '🤖';
+        const row = document.createElement('div');
+        row.className = 'msg-row msg-row-left';
+        row.id = `typing-${agentId}`;
+        row.innerHTML = `
+          <div class="msg-avatar" style="background:${color}22;color:${color};border:1px solid ${color}44">${avatarEmoji}</div>
+          <div class="msg-col">
+            <div class="msg-header">
+              <span class="msg-author-label" style="color:${color}">${esc(agentId)}</span>
+              <span class="msg-time-label">typing…</span>
+            </div>
+            <div class="typing-bubble"><span></span><span></span><span></span></div>
+          </div>`;
+        box.appendChild(row);
+        scrollBottom(true);
+      }
+      clearTimeout(typingTimers[agentId]);
+      typingTimers[agentId] = setTimeout(() => hideTyping(agentId), 8000);
+    }
+
+    function hideTyping(agentId) {
+      const el = document.getElementById(`typing-${agentId}`);
+      if (el) el.remove();
+    }
+
+    // ==============================================================================================
+    // Compose
+    // ==============================================================================================
+    async function sendMessage() {
+      return window.AcbChat.sendMessage({
+        getActiveThreadId: () => activeThreadId,
+        getThreadSyncContext,
+        setThreadSyncContext: (threadId, syncContext) => {
+          if (!threadId) return;
+          if (syncContext && typeof syncContext.current_seq === 'number' && syncContext.reply_token) {
+            threadSyncContexts.set(threadId, syncContext);
+            return;
+          }
+          threadSyncContexts.delete(threadId);
+        },
+        updateOnlinePresence,
+        api,
+        setLastSeq: (fn) => { lastSeq = (typeof fn === 'function' ? fn(lastSeq) : fn); },
+        appendBubble,
+        scrollBottom,
+      });
+    }
+
+    function handleKey(e) {
+      return window.AcbChat.handleKey(e, sendMessage);
+    }
+
+    function autoResize(el) {
+      // Placeholder for compatibility
+    }
+
+    // ==============================================================================================
+    // Agents
+    // ==============================================================================================
+    async function refreshAgents() {
+      // Delegate to window.AcbAgents.updateStatusBar() for consistency
+      await window.AcbAgents.updateStatusBar({
+        api,
+        setCurrentAgents: (agents) => { currentAgents = agents; },
+        getActiveThreadId: () => activeThreadId,
+        getAgentState,
+        getStateEmoji,
+        getOfflineTime,
+        isOfflineMoreThanHour,
+        getCompressedOfflineChar,
+        isStdioAgent,
+        getTooltipText,
+        escapeHtml,
+        bindAgentTooltipEvents,
+      });
+    }
+
+    // ==============================================================================================
+    // Helper: Escape HTML
+    // ==============================================================================================
+    function escapeHtml(t) {
+      return window.AcbUtils.escapeHtml(t);
+    }
+
+    function getAgentState(agent) {
+      return window.AcbAgentStatus.getAgentState(agent);
+    }
+
+    function getOfflineTime(agent) {
+      return window.AcbAgentStatus.getOfflineTime(agent);
+    }
+
+    function isOfflineMoreThanHour(agent) {
+      return window.AcbAgentStatus.isOfflineMoreThanHour(agent);
+    }
+
+    function getCompressedOfflineChar(offlineTimeStr) {
+      return window.AcbAgentStatus.getCompressedOfflineChar(offlineTimeStr);
+    }
+
+
+    function getStateEmoji(state) {
+          return window.AcbAgentStatus.getStateEmoji(state);
+        }
+
+        function isStdioAgent(agent) {
+          return window.AcbAgentStatus.isStdioAgent(agent);
+        }
+
+        function getTooltipText(agent, state, offlineDisplay) {
+          return window.AcbAgentStatus.getTooltipText(agent, state, offlineDisplay);
+    }
+
+    // ==============================================================================================
+    // Sidebar tabs
+    // ==============================================================================================
+    function switchTab(tab) {
+      // Only threads tab is available now
+      if (tab !== 'threads') return;
+      // Control filter visibility
+      const filterWrap = document.getElementById('thread-filter-wrap');
+      if (filterWrap) {
+        filterWrap.style.display = '';
+      }
+    }
+
+    // ==============================================================================================
+    // Modal
+    // ==============================================================================================
+    function openModal() {
+      return window.AcbModals.openThreadModal(api);
+    }
+
+    function closeModal(e) {
+      return window.AcbModals.closeThreadModal(e);
+    }
+
+    async function submitModal() {
+      return window.AcbModals.submitThreadModal({ api, refreshThreads, selectThread });
+    }
+
+    // ==============================================================================================
+    // Extras: thread state & close (REST shims)
+    // ==============================================================================================
+    // Extend the REST API with two extra POST endpoints that main.py may serve later.
+    // If they 404, we silently ignore — the MCP tool path is the canonical way.
+
+    // ==============================================================================================
+    // Utilities
+    // ==============================================================================================
+    function esc(s) {
+      return window.AcbUtils.esc(s);
+    }
+
+    // renderMarkdown and inlineMd functions are now in shared-message-renderer.js module
+    // Access them via window.AcbMessageRenderer.renderMarkdown() and window.AcbMessageRenderer.inlineMd()
+
+    function scrollBottom(smooth = false) {
+      const box = document.getElementById('messages-scroll');
+      if (!box) return;
+
+      // Use setTimeout to ensure DOM updates and layout are fully applied
+      // before attempting to scroll to the bottom.
+      setTimeout(() => {
+        // Force synchronous layout so scrollHeight is accurate
+        void box.offsetHeight;
+        if (smooth) {
+          console.log('Scrolling to bottom', { top: box.scrollHeight, behavior: 'smooth' });
+          box.scrollTo({ top: box.scrollHeight, behavior: 'smooth' });
+        } else {
+          box.scrollTop = box.scrollHeight;
+        }
+      }, 50);
+    }
+
+    function timeAgo(iso) {
+      return window.AcbUtils.timeAgo(iso);
+    }
+
+    // ==============================================================================================
+    // Settings Settings
+    // ==============================================================================================
+    async function openSettingsModal() {
+      return window.AcbModals.openSettingsModal(api);
+    }
+
+    function closeSettingsModal(e) {
+      return window.AcbModals.closeSettingsModal(e);
+    }
+
+    async function submitSettings() {
+      return window.AcbModals.submitSettings(api);
+    }
+
+    // ==============================================================================================
+    // Message Edit (UP-21)
+    // ==============================================================================================
+
+    // Start inline editing: replace bubble content with a textarea + Save/Cancel buttons
+    window.AcbMsgEditStart = function(btn) {
+      const row = btn.closest('.msg-row');
+      if (!row) return;
+      const msgId = btn.getAttribute('data-msg-id');
+      const author = btn.getAttribute('data-author');
+      const bubbleEl = row.querySelector('.bubble-v2');
+      if (!bubbleEl || row.classList.contains('msg-editing')) return;
+
+      row.classList.add('msg-editing');
+      btn.disabled = true;
+
+      const originalContent = bubbleEl.innerText || bubbleEl.textContent;
+      bubbleEl.dataset.originalContent = originalContent;
+
+      const textarea = document.createElement('textarea');
+      textarea.className = 'msg-edit-textarea';
+      textarea.value = originalContent;
+      textarea.rows = Math.max(3, Math.round(originalContent.length / 80));
+
+      const actions = document.createElement('div');
+      actions.className = 'msg-edit-actions';
+
+
+      const saveBtn = document.createElement('button');
+      saveBtn.className = 'msg-edit-save-btn';
+      saveBtn.textContent = 'Save';
+      saveBtn.onclick = async () => {
+        const newContent = textarea.value.trim();
+        if (!newContent) return;
+        saveBtn.disabled = true;
+        saveBtn.textContent = 'Saving…';
+        try {
+          const resp = await api(`/api/messages/${msgId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ content: newContent, edited_by: author }),
+          });
+          if (resp.no_change) {
+            window.AcbMsgEditCancel(row);
+            return;
+          }
+          // Update bubble in-place
+          bubbleEl.innerHTML = '';
+          window.AcbMessageRenderer.renderMessageContent(bubbleEl, newContent, null);
+          // Refresh/add edited indicator
+          let indicator = row.querySelector('.msg-edited-indicator');
+          if (!indicator) {
+            indicator = document.createElement('span');
+            indicator.className = 'msg-edited-indicator';
+            indicator.setAttribute('data-msg-id', msgId);
+            indicator.setAttribute('onclick', 'window.AcbMsgEditHistory(this)');
+            const tail = row.querySelector('acb-message-tail-meta') || row.querySelector('.msg-reactions');
+            if (tail) tail.before(indicator);
+          }
+          indicator.title = `Edited (v${resp.version})`;
+          indicator.textContent = 'edited';
+          // Close editing mode without restoring old content (cancel would overwrite new text)
+          row.classList.remove('msg-editing');
+          const editBtn = row.querySelector('.msg-edit-btn');
+          if (editBtn) editBtn.disabled = false;
+          delete bubbleEl.dataset.originalContent;
+        } catch (err) {
+          saveBtn.disabled = false;
+          saveBtn.textContent = 'Save';
+          console.error('[msg_edit] save failed', err);
+        }
+      };
+
+      const cancelBtn = document.createElement('button');
+      cancelBtn.className = 'msg-edit-cancel-btn';
+      cancelBtn.textContent = 'Cancel';
+      cancelBtn.onclick = () => window.AcbMsgEditCancel(row);
+
+      actions.appendChild(saveBtn);
+      actions.appendChild(cancelBtn);
+
+      bubbleEl.innerHTML = '';
+      bubbleEl.appendChild(textarea);
+      bubbleEl.appendChild(actions);
+      textarea.focus();
+    };
+
+    // Cancel inline editing: restore original bubble content
+    window.AcbMsgEditCancel = function(row) {
+      if (!row) return;
+      row.classList.remove('msg-editing');
+      const editBtn = row.querySelector('.msg-edit-btn');
+      if (editBtn) editBtn.disabled = false;
+      const bubbleEl = row.querySelector('.bubble-v2');
+      if (!bubbleEl) return;
+      const original = bubbleEl.dataset.originalContent || '';
+      bubbleEl.innerHTML = '';
+      window.AcbMessageRenderer.renderMessageContent(bubbleEl, original, null);
+      delete bubbleEl.dataset.originalContent;
+    };
+
+    // Show edit history modal for a message
+    window.AcbMsgEditHistory = async function(el) {
+      const msgId = el.getAttribute('data-msg-id');
+      if (!msgId) return;
+      let data;
+      try {
+        data = await api(`/api/messages/${msgId}/history`);
+      } catch (err) {
+        console.error('[msg_edit_history] fetch failed', err);
+        return;
+      }
+      const modal = document.createElement('acb-modal-shell');
+      modal.setAttribute('title', 'Edit History');
+      document.body.appendChild(modal);
+
+      const container = document.createElement('div');
+      container.className = 'msg-edit-history-modal';
+
+      if (!data.edits || data.edits.length === 0) {
+        const p = document.createElement('p');
+        p.style.cssText = 'opacity:0.6; font-size:0.85rem; margin:0;';
+        p.textContent = 'No edit history.';
+        container.appendChild(p);
+      } else {
+        data.edits.slice().reverse().forEach((edit, idx) => {
+          const entry = document.createElement('div');
+          entry.className = 'msg-edit-history-entry';
+          entry.innerHTML = `
+            <div class="msg-edit-history-meta">
+              <span class="msg-edit-history-version">v${edit.version}</span>
+              <span class="msg-edit-history-by">${esc(edit.edited_by)}</span>
+              <span class="msg-edit-history-time">${fmtTime(edit.created_at)}</span>
+            </div>
+            <div class="msg-edit-history-content"><del>${esc(edit.old_content)}</del></div>`;
+          container.appendChild(entry);
+        });
+        const current = document.createElement('div');
+        current.className = 'msg-edit-history-entry msg-edit-history-current';
+        current.innerHTML = `
+          <div class="msg-edit-history-meta">
+            <span class="msg-edit-history-version">current (v${data.edit_version})</span>
+          </div>
+          <div class="msg-edit-history-content">${esc(data.current_content)}</div>`;
+        container.prepend(current);
+      }
+
+      if (typeof modal.setContent === 'function') {
+        modal.setContent(container);
+      } else {
+        modal.appendChild(container);
+      }
+    };
+  </script>
+</body>
+
+</html>

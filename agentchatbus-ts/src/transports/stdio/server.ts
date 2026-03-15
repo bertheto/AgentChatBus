@@ -30,7 +30,7 @@ export async function runStdioServer(): Promise<void> {
     if (method === "tools/call") {
       try {
         const params = (payload.params || {}) as { name?: string; arguments?: Record<string, unknown> };
-        const result = callTool(String(params.name || ""), params.arguments || {});
+        const result = await callTool(String(params.name || ""), params.arguments || {});
         process.stdout.write(`${JSON.stringify({ result })}\n`);
       } catch (error) {
         process.stdout.write(`${JSON.stringify({ error: (error as Error).message })}\n`);
