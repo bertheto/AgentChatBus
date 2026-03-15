@@ -160,6 +160,7 @@ textarea {
   flex: 0 0 64px;
   display: flex;
   flex-direction: column;
+  align-items: flex-start;
   gap: 4px;
   background: color-mix(in srgb, var(--vscode-sideBar-background) 72%, transparent);
   scrollbar-gutter: stable;
@@ -191,6 +192,9 @@ textarea {
   gap: 3px;
   cursor: pointer;
   min-width: 0;
+  width: auto;
+  max-width: 100%;
+  align-self: flex-start;
 }
 
 .nav-entry:hover,
