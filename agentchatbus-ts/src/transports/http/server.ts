@@ -174,11 +174,11 @@ export function createHttpServer() {
     }
   });
 
-  fastify.get("/api/agents", async () => ({ agents: memoryStore.listAgents() }));
+  fastify.get("/api/agents", async () => memoryStore.listAgents());
 
   fastify.get("/api/threads/:threadId/agents", async (request) => {
     const params = request.params as { threadId: string };
-    return { agents: memoryStore.getThreadAgents(params.threadId) };
+    return memoryStore.getThreadAgents(params.threadId);
   });
 
   fastify.get("/api/agents/:agentId", async (request, reply) => {
@@ -208,26 +208,35 @@ export function createHttpServer() {
   });
 
   fastify.post("/api/agents/register", async (request, reply) => {
-    const body = request.body as JsonBody;
-    const ide = String(body.ide || "CLI");
-    const model = String(body.model || "unknown");
-    const agent = memoryStore.registerAgent({
-      ide,
-      model,
-      description: typeof body.description === "string" ? body.description : undefined,
-      capabilities: Array.isArray(body.capabilities) ? body.capabilities.map(String) : undefined,
-      display_name: typeof body.display_name === "string" ? body.display_name : undefined,
-      skills: Array.isArray(body.skills) ? body.skills : undefined
-    });
-    reply.code(200);
-    return {
-      agent_id: agent.id,
-      name: agent.name,
-      display_name: agent.display_name,
-      token: agent.token,
-      capabilities: agent.capabilities,
-      skills: agent.skills
-    };
+    try {
+      const body = request.body as JsonBody;
+      const ide = String(body.ide || "CLI");
+      const model = String(body.model || "unknown");
+      const agent = memoryStore.registerAgent({
+        ide,
+        model,
+        description: typeof body.description === "string" ? body.description : undefined,
+        capabilities: Array.isArray(body.capabilities) ? body.capabilities.map(String) : undefined,
+        display_name: typeof body.display_name === "string" ? body.display_name : undefined,
+        skills: Array.isArray(body.skills) ? body.skills : undefined
+      });
+      reply.code(200);
+      return {
+        ok: true,
+        id: agent.id,
+        agent_id: agent.id,
+        name: agent.name,
+        display_name: agent.display_name,
+        token: agent.token,
+        capabilities: agent.capabilities,
+        skills: agent.skills,
+        emoji: (agent as any).emoji || "🤖"
+      };
+    } catch (err) {
+      console.error("Registration error:", err);
+      reply.code(500);
+      return { detail: (err as Error).message };
+    }
   });
 
   fastify.post("/api/agents/heartbeat", async (request, reply) => {

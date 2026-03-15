@@ -112,7 +112,8 @@
     updateOnlinePresence,
   }) {
     hideAgentTooltip();
-    const allAgents = (await api("/api/agents")) || [];
+    let allAgents = (await api("/api/agents")) || [];
+    if (!Array.isArray(allAgents)) allAgents = [];
     setCurrentAgents(allAgents);
     onlineAgentKeys.clear();
     onlineAgentLabelsByKey.clear();
@@ -147,7 +148,8 @@
     const agentsPath = activeThreadIdVal
       ? `/api/threads/${encodeURIComponent(activeThreadIdVal)}/agents`
       : "/api/agents";
-    const allAgents = (await api(agentsPath)) || [];
+    let allAgents = (await api(agentsPath)) || [];
+    if (!Array.isArray(allAgents)) allAgents = [];
     setCurrentAgents(allAgents);
     const container = document.getElementById("agent-status-list");
     if (!container) return;

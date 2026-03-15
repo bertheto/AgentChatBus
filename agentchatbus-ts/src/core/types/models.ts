@@ -14,6 +14,7 @@ export interface AgentRecord {
   capabilities?: string[];
   skills?: unknown[];
   token: string;
+  emoji?: string;
 }
 
 export interface ThreadRecord {

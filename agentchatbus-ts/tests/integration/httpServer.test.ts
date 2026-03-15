@@ -134,8 +134,8 @@ describe("HTTP compatibility shell", () => {
 
     expect(listResponse.statusCode).toBe(200);
     const listBody = listResponse.json();
-    expect(Array.isArray(listBody.agents)).toBe(true);
-    expect(listBody.agents.length).toBeGreaterThan(0);
+    expect(Array.isArray(listBody)).toBe(true);
+    expect(listBody.length).toBeGreaterThan(0);
 
     await server.close();
   });

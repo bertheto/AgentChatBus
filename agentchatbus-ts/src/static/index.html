@@ -1212,7 +1212,7 @@ Note: Thread name is the topic label. Thread ID is the unique identifier.`;
       const authorKey = isHuman ? 'human' : (isSystem ? 'system' : String(m.author_id ?? authorLabel));
       const color = authorColor(authorKey);
       const avatarEmoji = String(m.author_emoji || '').trim()
-        || String(currentAgents?.find((a) => a.id === String(m.author_id ?? ''))?.emoji || '').trim()
+        || String((Array.isArray(currentAgents) ? currentAgents : []).find((a) => a.id === String(m.author_id ?? ''))?.emoji || '').trim()
         || (isHuman ? '👤' : (isSystem ? '☑️' : '🤖'));
       const bgAlpha = `${color}22`;  // ~13% alpha tint for avatar bg
       const isAgentMessage = !isHuman && !isSystem;
@@ -1388,7 +1388,7 @@ Note: Thread name is the topic label. Thread ID is the unique identifier.`;
           avatarEl.classList.add('msg-avatar-interactive');
           // Get full agent details from current agents list
           const authorId = String(m.author_id ?? authorLabel);
-          const agentData = currentAgents?.find(a => a.id === authorId) || {
+          const agentData = (Array.isArray(currentAgents) ? currentAgents : []).find(a => a.id === authorId) || {
             id: authorId,
             agent_id: authorId,
             name: authorLabel,
@@ -1426,7 +1426,7 @@ Note: Thread name is the topic label. Thread ID is the unique identifier.`;
       let el = document.getElementById(`typing-${agentId}`);
       if (!el) {
         const color = authorColor(agentId);
-        const agentEmoji = String(currentAgents?.find((a) => a.id === agentId)?.emoji || '').trim();
+        const agentEmoji = String((Array.isArray(currentAgents) ? currentAgents : []).find((a) => a.id === agentId)?.emoji || '').trim();
         const avatarEmoji = agentEmoji || '🤖';
         const row = document.createElement('div');
         row.className = 'msg-row msg-row-left';

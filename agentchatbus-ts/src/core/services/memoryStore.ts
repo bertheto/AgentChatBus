@@ -29,7 +29,7 @@ type ReplyTokenRecord = {
   issuedAt: number;
   expiresAt: number;
   consumedAt?: number;
-  status: "active" | "consumed";
+  status: "issued" | "consumed";
 };
 
 type RefreshRequestRecord = {
@@ -64,6 +64,7 @@ type PersistedState = {
 };
 
 export class MemoryStore {
+  private static readonly SEQ_TOLERANCE = 5;
   private readonly startTime = Date.now();
   private sequence = 0;
   private readonly threads = new Map<string, ThreadRecord>();
@@ -178,10 +179,19 @@ export class MemoryStore {
     this.persistState();
   }
 
-  createThread(topic: string, systemPrompt?: string): { thread: ThreadRecord; sync: SyncContext } {
+  createThread(topic: string, systemPrompt?: string, templateId?: string): { thread: ThreadRecord; sync: SyncContext } {
     const existing = this.getThreadByTopic(topic);
     if (existing) {
       return { thread: existing, sync: this.issueSyncContext(existing.id) };
+    }
+
+    // Apply template defaults if provided
+    let finalSystemPrompt = systemPrompt;
+    if (templateId && !systemPrompt) {
+      const template = this.getTemplate(templateId);
+      if (template?.system_prompt) {
+        finalSystemPrompt = template.system_prompt;
+      }
     }
 
     const thread: ThreadRecord = {
@@ -189,7 +199,8 @@ export class MemoryStore {
       topic,
       status: "discuss",
       created_at: new Date().toISOString(),
-      system_prompt: systemPrompt
+      system_prompt: finalSystemPrompt,
+      template_id: templateId
     };
     this.threads.set(thread.id, thread);
     this.threadMessages.set(thread.id, []);
@@ -385,13 +396,13 @@ export class MemoryStore {
         throw new ReplyTokenExpiredError(new Date(token.expiresAt).toISOString());
       }
 
-      if (input.expectedLastSeq !== latestSeq) {
+      if (input.expectedLastSeq !== undefined && Math.abs(latestSeq - input.expectedLastSeq) > MemoryStore.SEQ_TOLERANCE) {
         if (agent) {
           this.invalidateReplyTokensForAgent(thread.id, agent.id);
           this.setRefreshRequest(thread.id, agent.id, "SEQ_MISMATCH");
         }
         const newMsgs = this.getMessages(thread.id, input.expectedLastSeq);
-        throw new SeqMismatchError(latestSeq, latestSeq, this.projectMessagesForAgent(newMsgs));
+        throw new SeqMismatchError(input.expectedLastSeq, latestSeq, this.projectMessagesForAgent(newMsgs));
       }
 
       this.consumeReplyToken(token.token);
@@ -543,7 +554,7 @@ export class MemoryStore {
       token,
       issuedAt,
       expiresAt,
-      status: "active"
+      status: "issued"
     };
 
     this.syncTokens.set(token, record);
@@ -585,7 +596,7 @@ export class MemoryStore {
     const rows = this.persistenceDb.prepare(
       `
         SELECT id, name, display_name, ide, model, description, is_online, last_heartbeat,
-               last_activity, last_activity_time, capabilities, skills, token
+               last_activity, last_activity_time, capabilities, skills, token, emoji
         FROM agents
       `
     ).all() as Array<Record<string, unknown>>;
@@ -596,7 +607,7 @@ export class MemoryStore {
     const row = this.persistenceDb.prepare(
       `
         SELECT id, name, display_name, ide, model, description, is_online, last_heartbeat,
-               last_activity, last_activity_time, capabilities, skills, token
+               last_activity, last_activity_time, capabilities, skills, token, emoji
         FROM agents WHERE id = ?
       `
     ).get(agentId) as Record<string, unknown> | undefined;
@@ -677,12 +688,17 @@ export class MemoryStore {
     return true;
   }
 
+  verifyAgentToken(agentId: string, token: string): boolean {
+    const agent = this.getAgent(agentId);
+    return agent !== undefined && agent.token === token;
+  }
+
   getThreadAgents(threadId: string): AgentRecord[] {
     const rows = this.persistenceDb.prepare(
       `
         SELECT DISTINCT a.id, a.name, a.display_name, a.ide, a.model, a.description,
                a.is_online, a.last_heartbeat, a.last_activity, a.last_activity_time,
-               a.capabilities, a.skills, a.token
+               a.capabilities, a.skills, a.token, a.emoji
         FROM messages m
         JOIN agents a ON a.id = m.author_id
         WHERE m.thread_id = ?
@@ -713,12 +729,68 @@ export class MemoryStore {
     return {
       preferred_language: "English",
       content_filter_enabled: true,
-      heartbeat_timeout_seconds: 30
+      heartbeat_timeout_seconds: 30,
+      SHOW_AD: false
     };
   }
 
   getTemplates() {
-    return [] as Array<Record<string, unknown>>;
+    // Built-in templates (UP-18)
+    const builtinTemplates = [
+      {
+        id: "default",
+        name: "Default Discussion",
+        description: "Standard discussion thread with auto-admin enabled",
+        is_builtin: true,
+        system_prompt: "You are a helpful AI assistant collaborating with other agents and humans. Follow the thread's coordination rules.",
+        default_metadata: {},
+        created_at: new Date().toISOString()
+      },
+      {
+        id: "implement",
+        name: "Implementation Task",
+        description: "Focused implementation thread with extended timeout",
+        is_builtin: true,
+        system_prompt: "You are an implementation specialist. Focus on producing working code and tests.",
+        default_metadata: { task_type: "implementation" },
+        created_at: new Date().toISOString()
+      },
+      {
+        id: "review",
+        name: "Code Review",
+        description: "Code review thread with strict validation",
+        is_builtin: true,
+        system_prompt: "You are a code reviewer. Critically analyze the code for bugs, security issues, and best practices.",
+        default_metadata: { task_type: "review" },
+        created_at: new Date().toISOString()
+      }
+    ];
+
+    // Load custom templates from database
+    try {
+      const rows = this.persistenceDb.prepare(
+        "SELECT id, name, description, system_prompt, default_metadata, is_builtin, created_at FROM templates ORDER BY created_at ASC"
+      ).all() as Array<Record<string, unknown>>;
+      
+      const customTemplates = rows.map(row => ({
+        id: String(row.id),
+        name: String(row.name),
+        description: String(row.description),
+        system_prompt: row.system_prompt ? String(row.system_prompt) : undefined,
+        default_metadata: row.default_metadata ? JSON.parse(String(row.default_metadata)) as Record<string, unknown> : undefined,
+        is_builtin: Boolean(row.is_builtin),
+        created_at: String(row.created_at)
+      }));
+
+      return [...builtinTemplates, ...customTemplates];
+    } catch {
+      return builtinTemplates;
+    }
+  }
+
+  getTemplate(templateId: string): ReturnType<typeof this.getTemplates>[number] | undefined {
+    const templates = this.getTemplates();
+    return templates.find(t => t.id === templateId);
   }
 
   getThreadSettings(threadId: string) {
@@ -770,6 +842,39 @@ export class MemoryStore {
       `
     ).all(`%${normalized}%`) as Array<Record<string, unknown>>;
     return rows.map((row) => this.rowToMessageRecord(row));
+  }
+
+  createTemplate(input: { id: string; name: string; description?: string; system_prompt?: string; default_metadata?: Record<string, unknown> }): boolean {
+    try {
+      // Check if builtin template with same id exists
+      const builtinTemplates = this.getTemplates().filter(t => t.is_builtin);
+      if (builtinTemplates.some(t => t.id === input.id)) {
+        throw new Error(`Built-in template '${input.id}' already exists`);
+      }
+
+      this.persistenceDb.prepare(
+        `
+          INSERT INTO templates (id, name, description, system_prompt, default_metadata, is_builtin, created_at)
+          VALUES (?, ?, ?, ?, ?, 0, ?)
+          ON CONFLICT(id) DO UPDATE SET
+            name = excluded.name,
+            description = excluded.description,
+            system_prompt = excluded.system_prompt,
+            default_metadata = excluded.default_metadata
+        `
+      ).run(
+        input.id,
+        input.name,
+        input.description || null,
+        input.system_prompt || null,
+        input.default_metadata ? JSON.stringify(input.default_metadata) : null,
+        new Date().toISOString()
+      );
+      return true;
+    } catch (error) {
+      console.error("Failed to create template:", error);
+      return false;
+    }
   }
 
   getLogs(after: number, limit: number): { entries: Array<{ id: number; line: string }>; next_cursor: number } {
@@ -936,6 +1041,15 @@ export class MemoryStore {
     this.persistState();
   }
 
+  exitWaitState(threadId: string, agentId: string): void {
+    const waits = this.threadWaitStates.get(threadId);
+    if (waits) {
+      waits.delete(agentId);
+      this.replaceThreadWaitStates(threadId);
+      this.persistState();
+    }
+  }
+
   private pruneExpiredWaitStates(threadId: string): void {
     const waits = this.threadWaitStates.get(threadId);
     if (!waits || waits.size === 0) {
@@ -1015,7 +1129,8 @@ export class MemoryStore {
       last_activity_time: row.last_activity_time ? String(row.last_activity_time) : undefined,
       capabilities: row.capabilities ? JSON.parse(String(row.capabilities)) as string[] : [],
       skills: row.skills ? JSON.parse(String(row.skills)) as unknown[] : [],
-      token: String(row.token)
+      token: String(row.token),
+      emoji: row.emoji ? String(row.emoji) : undefined
     };
   }
 
@@ -1131,7 +1246,7 @@ export class MemoryStore {
     const agents = this.persistenceDb.prepare(
       `
         SELECT id, name, display_name, ide, model, description, is_online, last_heartbeat,
-               last_activity, last_activity_time, capabilities, skills, token
+               last_activity, last_activity_time, capabilities, skills, token, emoji
         FROM agents
       `
     ).all() as Array<Record<string, unknown>>;
@@ -1152,7 +1267,7 @@ export class MemoryStore {
         issuedAt: Number(row.issued_at),
         expiresAt: Number(row.expires_at),
         consumedAt: row.consumed_at ? Number(row.consumed_at) : undefined,
-        status: String(row.status) as "active" | "consumed"
+        status: String(row.status) as "issued" | "consumed"
       });
     }
 
@@ -1239,7 +1354,8 @@ export class MemoryStore {
         last_activity_time TEXT,
         capabilities TEXT,
         skills TEXT,
-        token TEXT NOT NULL
+        token TEXT NOT NULL,
+        emoji TEXT
       );
       CREATE TABLE IF NOT EXISTS reply_tokens (
         token TEXT PRIMARY KEY,
@@ -1284,6 +1400,15 @@ export class MemoryStore {
         reaction TEXT NOT NULL,
         PRIMARY KEY (message_id, agent_id, reaction)
       );
+      CREATE TABLE IF NOT EXISTS templates (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        description TEXT,
+        system_prompt TEXT,
+        default_metadata TEXT,
+        is_builtin INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL
+      );
     `);
 
     // Proactive Migration: Handle existing databases lacking new columns
@@ -1297,6 +1422,12 @@ export class MemoryStore {
         if (!names.includes("source")) {
           this.persistenceDb.exec("ALTER TABLE reply_tokens ADD COLUMN source TEXT");
         }
+      }
+      
+      const agentCols = this.persistenceDb.prepare("PRAGMA table_info(agents)").all() as Array<{ name: string }>;
+      const agentColNames = agentCols.map(c => c.name);
+      if (agentColNames.length > 0 && !agentColNames.includes("emoji")) {
+          this.persistenceDb.exec("ALTER TABLE agents ADD COLUMN emoji TEXT");
       }
     } catch {
       // Table might not exist yet; initializeRelationalTables already handled CREATE
@@ -1350,8 +1481,8 @@ export class MemoryStore {
       `
         INSERT INTO agents (
           id, name, display_name, ide, model, description, is_online, last_heartbeat,
-          last_activity, last_activity_time, capabilities, skills, token
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          last_activity, last_activity_time, capabilities, skills, token, emoji
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           name = excluded.name,
           display_name = excluded.display_name,
@@ -1364,7 +1495,8 @@ export class MemoryStore {
           last_activity_time = excluded.last_activity_time,
           capabilities = excluded.capabilities,
           skills = excluded.skills,
-          token = excluded.token
+          token = excluded.token,
+          emoji = excluded.emoji
       `
     ).run(
       agent.id,
@@ -1379,7 +1511,8 @@ export class MemoryStore {
       agent.last_activity_time || null,
       JSON.stringify(agent.capabilities || []),
       JSON.stringify(agent.skills || []),
-      agent.token
+      agent.token,
+      agent.emoji || null
     );
   }
 
@@ -1453,6 +1586,13 @@ export class MemoryStore {
     }
   }
 
+  getReaction(messageId: string, agentId: string, reaction: string): boolean {
+    const row = this.persistenceDb.prepare(
+      "SELECT 1 FROM reactions WHERE message_id = ? AND agent_id = ? AND reaction = ?"
+    ).get(messageId, agentId, reaction) as Record<string, unknown> | undefined;
+    return row !== undefined;
+  }
+
   private setRefreshRequest(threadId: string, agentId: string, reason: string): void {
     this.persistenceDb.prepare(
       "INSERT OR REPLACE INTO msg_wait_refresh_requests (thread_id, agent_id, reason, created_at) VALUES (?, ?, ?, ?)"
@@ -1480,7 +1620,7 @@ export class MemoryStore {
 
   invalidateReplyTokensForAgentSource(threadId: string, agentId: string, source: string): void {
     const tokens = [...this.syncTokens.values()].filter(
-      t => t.threadId === threadId && t.agentId === agentId && t.source === source && t.status === "active"
+      t => t.threadId === threadId && t.agentId === agentId && t.source === source && t.status === "issued"
     );
     for (const t of tokens) {
       t.status = "consumed";
@@ -1492,7 +1632,7 @@ export class MemoryStore {
 
   private invalidateReplyTokensForAgent(threadId: string, agentId: string): void {
     const tokens = [...this.syncTokens.values()].filter(
-      t => t.threadId === threadId && t.agentId === agentId && t.status === "active"
+      t => t.threadId === threadId && t.agentId === agentId && t.status === "issued"
     );
     for (const t of tokens) {
       t.status = "consumed";
@@ -1500,6 +1640,25 @@ export class MemoryStore {
       this.upsertReplyToken(t);
     }
     this.persistState();
+  }
+
+  invalidateReplyTokensForAgentExcept(threadId: string, agentId: string, keepToken: string): void {
+    const tokens = [...this.syncTokens.values()].filter(
+      t => t.threadId === threadId && t.agentId === agentId && t.status === "issued" && t.token !== keepToken
+    );
+    for (const t of tokens) {
+      t.status = "consumed";
+      t.consumedAt = Date.now();
+      this.upsertReplyToken(t);
+    }
+    this.persistState();
+  }
+
+  getLatestIssuedToken(threadId: string, agentId: string): ReplyTokenRecord | undefined {
+    const tokens = [...this.syncTokens.values()]
+      .filter(t => t.threadId === threadId && t.agentId === agentId && t.status === "issued")
+      .sort((a, b) => b.issuedAt - a.issuedAt);
+    return tokens.length > 0 ? tokens[0] : undefined;
   }
 
   private appendLog(line: string): void {
