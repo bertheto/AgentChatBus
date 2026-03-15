@@ -1090,6 +1090,8 @@
 
     let left = anchorRect.left + (anchorRect.width / 2) - (tooltipRect.width / 2);
     left = Math.max(margin, Math.min(window.innerWidth - tooltipRect.width - margin, left));
+    const anchorCenter = anchorRect.left + (anchorRect.width / 2);
+    const arrowLeft = Math.max(12, Math.min(tooltipRect.width - 12, anchorCenter - left));
 
     let top = anchorRect.top - tooltipRect.height - gap;
     let side = 'top';
@@ -1099,6 +1101,7 @@
     }
 
     refs.uiTooltip.dataset.side = side;
+    refs.uiTooltip.style.setProperty('--tooltip-arrow-left', `${arrowLeft}px`);
     refs.uiTooltip.style.left = `${left}px`;
     refs.uiTooltip.style.top = `${top}px`;
   }
@@ -1111,6 +1114,7 @@
     refs.uiTooltip.textContent = '';
     refs.uiTooltip.style.left = '';
     refs.uiTooltip.style.top = '';
+    refs.uiTooltip.style.removeProperty('--tooltip-arrow-left');
     refs.uiTooltip.dataset.side = 'top';
   }
 
