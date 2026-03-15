@@ -124,7 +124,7 @@ export class MemoryStore {
   }
 
   createThread(topic: string, systemPrompt?: string): { thread: ThreadRecord; sync: SyncContext } {
-    const existing = [...this.threads.values()].find((thread) => thread.topic === topic);
+    const existing = this.getThreadByTopic(topic);
     if (existing) {
       return { thread: existing, sync: this.issueSyncContext(existing.id) };
     }
@@ -161,10 +161,11 @@ export class MemoryStore {
   }
 
   setThreadStatus(threadId: string, status: ThreadStatus): boolean {
-    const thread = this.threads.get(threadId);
+    const thread = this.getThread(threadId);
     if (!thread) {
       return false;
     }
+    this.threads.set(threadId, thread);
     thread.status = status;
     this.appendLog(`thread state updated: ${threadId} ${status}`);
     eventBus.emit({ type: "thread.updated", payload: thread });
@@ -174,7 +175,9 @@ export class MemoryStore {
   }
 
   deleteThread(threadId: string): boolean {
-    const deleted = this.threads.delete(threadId);
+    const existing = this.getThread(threadId);
+    const deleted = Boolean(existing);
+    this.threads.delete(threadId);
     this.threadMessages.delete(threadId);
     this.threadParticipants.delete(threadId);
     this.threadWaitStates.delete(threadId);
@@ -211,7 +214,7 @@ export class MemoryStore {
     reply_token: string;
     reply_window: number;
   } {
-    const thread = this.threads.get(input.threadId);
+    const thread = this.getThread(input.threadId);
     if (!thread) {
       throw new Error("Thread not found");
     }
@@ -242,12 +245,12 @@ export class MemoryStore {
     replyToMsgId?: string;
     priority?: string;
   }): MessageRecord {
-    const thread = this.threads.get(input.threadId);
+    const thread = this.getThread(input.threadId);
     if (!thread) {
       throw new Error("Thread not found");
     }
 
-    const latestSeq = (this.threadMessages.get(input.threadId) || []).at(-1)?.seq || 0;
+    const latestSeq = this.getLatestSeq(input.threadId);
     if (typeof input.expectedLastSeq !== "number" || !input.replyToken) {
       const error = new Error("MISSING_SYNC_FIELDS");
       (error as Error & { detail?: unknown }).detail = {
@@ -361,6 +364,21 @@ export class MemoryStore {
     }));
   }
 
+  getReactions(messageId: string) {
+    const rows = this.persistenceDb.prepare(
+      `
+        SELECT agent_id, reaction
+        FROM reactions
+        WHERE message_id = ?
+        ORDER BY reaction ASC, agent_id ASC
+      `
+    ).all(messageId) as Array<Record<string, unknown>>;
+    return rows.map((row) => ({
+      agent_id: String(row.agent_id),
+      reaction: String(row.reaction)
+    }));
+  }
+
   addReaction(messageId: string, agentId: string, reaction: string): MessageRecord | undefined {
     const message = this.getMessage(messageId);
     if (!message) {
@@ -394,7 +412,7 @@ export class MemoryStore {
   }
 
   issueSyncContext(threadId: string): SyncContext {
-    const currentSeq = (this.threadMessages.get(threadId) || []).at(-1)?.seq || 0;
+    const currentSeq = this.getLatestSeq(threadId);
     const token = randomUUID();
     this.syncTokens.set(token, {
       threadId,
@@ -459,7 +477,7 @@ export class MemoryStore {
   }
 
   updateAgent(agentId: string, token: string, input: { description?: string; display_name?: string; capabilities?: string[]; skills?: unknown[] }): AgentRecord | undefined {
-    const agent = this.agents.get(agentId);
+    const agent = this.getAgent(agentId);
     if (!agent || agent.token !== token) {
       return undefined;
     }
@@ -484,7 +502,7 @@ export class MemoryStore {
   }
 
   resumeAgent(agentId: string, token: string): AgentRecord | undefined {
-    const agent = this.agents.get(agentId);
+    const agent = this.getAgent(agentId);
     if (!agent || agent.token !== token) {
       return undefined;
     }
@@ -499,7 +517,7 @@ export class MemoryStore {
   }
 
   heartbeatAgent(agentId: string, token: string): boolean {
-    const agent = this.agents.get(agentId);
+    const agent = this.getAgent(agentId);
     if (!agent || agent.token !== token) {
       return false;
     }
@@ -514,7 +532,7 @@ export class MemoryStore {
   }
 
   unregisterAgent(agentId: string, token: string): boolean {
-    const agent = this.agents.get(agentId);
+    const agent = this.getAgent(agentId);
     if (!agent || agent.token !== token) {
       return false;
     }
@@ -529,8 +547,17 @@ export class MemoryStore {
   }
 
   getThreadAgents(threadId: string): AgentRecord[] {
-    const participantIds = this.threadParticipants.get(threadId) || new Set<string>();
-    return [...participantIds].map((id) => this.agents.get(id)).filter((agent): agent is AgentRecord => Boolean(agent));
+    const rows = this.persistenceDb.prepare(
+      `
+        SELECT DISTINCT a.id, a.name, a.display_name, a.ide, a.model, a.description,
+               a.is_online, a.last_heartbeat, a.last_activity, a.last_activity_time,
+               a.capabilities, a.skills, a.token
+        FROM messages m
+        JOIN agents a ON a.id = m.author_id
+        WHERE m.thread_id = ?
+      `
+    ).all(threadId) as Array<Record<string, unknown>>;
+    return rows.map((row) => this.rowToAgentRecord(row));
   }
 
   getThreadWaitingAgents(threadId: string): Array<{ id: string; display_name?: string; emoji?: string }> {
@@ -581,7 +608,7 @@ export class MemoryStore {
   }
 
   updateThreadSettings(threadId: string, input: { auto_administrator_enabled?: boolean; timeout_seconds?: number; switch_timeout_seconds?: number }) {
-    const existing = this.threadSettings.get(threadId);
+    const existing = this.getThreadSettings(threadId);
     if (!existing) {
       return undefined;
     }
@@ -594,6 +621,7 @@ export class MemoryStore {
     if (input.switch_timeout_seconds !== undefined) {
       existing.switch_timeout_seconds = input.switch_timeout_seconds;
     }
+    this.threadSettings.set(threadId, existing);
     this.upsertThreadSettings(threadId);
     this.persistState();
     return existing;
@@ -601,7 +629,16 @@ export class MemoryStore {
 
   searchMessages(query: string): MessageRecord[] {
     const normalized = query.toLowerCase();
-    return [...this.threadMessages.values()].flat().filter((message) => message.content.toLowerCase().includes(normalized));
+    const rows = this.persistenceDb.prepare(
+      `
+        SELECT id, thread_id, seq, priority, author, author_id, author_name, author_emoji,
+               role, content, metadata, reply_to_msg_id, created_at, edited_at, edit_version
+        FROM messages
+        WHERE LOWER(content) LIKE ?
+        ORDER BY seq ASC
+      `
+    ).all(`%${normalized}%`) as Array<Record<string, unknown>>;
+    return rows.map((row) => this.rowToMessageRecord(row));
   }
 
   getLogs(after: number, limit: number): { entries: Array<{ id: number; line: string }>; next_cursor: number } {
@@ -816,6 +853,20 @@ export class MemoryStore {
     };
   }
 
+  private getLatestSeq(threadId: string): number {
+    const row = this.persistenceDb.prepare(
+      "SELECT COALESCE(MAX(seq), 0) AS current_seq FROM messages WHERE thread_id = ?"
+    ).get(threadId) as { current_seq?: number } | undefined;
+    return Number(row?.current_seq || 0);
+  }
+
+  private getThreadByTopic(topic: string): ThreadRecord | undefined {
+    const row = this.persistenceDb.prepare(
+      "SELECT id, topic, status, created_at, system_prompt, template_id FROM threads WHERE topic = ?"
+    ).get(topic) as Record<string, unknown> | undefined;
+    return row ? this.rowToThreadRecord(row) : undefined;
+  }
+
   private rowToMessageRecord(row: Record<string, unknown>): MessageRecord {
     return {
       id: String(row.id),
@@ -859,43 +910,44 @@ export class MemoryStore {
       const row = this.persistenceDb
         .prepare("SELECT payload FROM state_snapshots WHERE id = 1")
         .get() as { payload?: string } | undefined;
-      if (!row?.payload) {
-        return;
+      if (row?.payload) {
+        const state = JSON.parse(row.payload) as PersistedState;
+        this.sequence = state.sequence || 0;
+        for (const thread of state.threads || []) {
+          this.threads.set(thread.id, thread);
+        }
+        for (const [threadId, messages] of state.threadMessages || []) {
+          this.threadMessages.set(threadId, messages);
+        }
+        for (const [threadId, participants] of state.threadParticipants || []) {
+          this.threadParticipants.set(threadId, new Set(participants));
+        }
+        for (const [threadId, waits] of state.threadWaitStates || []) {
+          this.threadWaitStates.set(threadId, new Map(waits));
+        }
+        for (const agent of state.agents || []) {
+          this.agents.set(agent.id, agent);
+        }
+        for (const token of state.syncTokens || []) {
+          this.syncTokens.set(token.token, token);
+        }
+        this.logEntries.push(...(state.logEntries || []));
+        for (const session of state.ideSessions || []) {
+          this.ideSessions.set(session.instanceId, session);
+        }
+        this.ideOwnerInstanceId = state.ideOwnerInstanceId || null;
+        this.logCursor = state.logCursor || 0;
+        for (const [threadId, settings] of state.threadSettings || []) {
+          this.threadSettings.set(threadId, settings);
+        }
+        for (const [messageId, history] of state.messageEditHistory || []) {
+          this.messageEditHistory.set(messageId, history);
+        }
       }
-      const state = JSON.parse(row.payload) as PersistedState;
-      this.sequence = state.sequence || 0;
-      for (const thread of state.threads || []) {
-        this.threads.set(thread.id, thread);
-      }
-      for (const [threadId, messages] of state.threadMessages || []) {
-        this.threadMessages.set(threadId, messages);
-      }
-      for (const [threadId, participants] of state.threadParticipants || []) {
-        this.threadParticipants.set(threadId, new Set(participants));
-      }
-      for (const [threadId, waits] of state.threadWaitStates || []) {
-        this.threadWaitStates.set(threadId, new Map(waits));
-      }
-      for (const agent of state.agents || []) {
-        this.agents.set(agent.id, agent);
-      }
-      for (const token of state.syncTokens || []) {
-        this.syncTokens.set(token.token, token);
-      }
-      this.logEntries.push(...(state.logEntries || []));
-      for (const session of state.ideSessions || []) {
-        this.ideSessions.set(session.instanceId, session);
-      }
-      this.ideOwnerInstanceId = state.ideOwnerInstanceId || null;
-      this.logCursor = state.logCursor || 0;
-      for (const [threadId, settings] of state.threadSettings || []) {
-        this.threadSettings.set(threadId, settings);
-      }
-      for (const [messageId, history] of state.messageEditHistory || []) {
-        this.messageEditHistory.set(messageId, history);
-      }
+      this.hydrateFromRelationalTables();
     } catch {
       // Ignore invalid persisted state for the initial prototype.
+      this.hydrateFromRelationalTables();
     }
   }
 
@@ -928,6 +980,107 @@ export class MemoryStore {
     } catch {
       // Ignore persistence failures for the initial prototype.
     }
+  }
+
+  private hydrateFromRelationalTables(): void {
+    this.threads.clear();
+    this.threadMessages.clear();
+    this.agents.clear();
+    this.syncTokens.clear();
+    this.threadSettings.clear();
+    this.threadWaitStates.clear();
+    this.messageEditHistory.clear();
+
+    const threads = this.persistenceDb.prepare(
+      "SELECT id, topic, status, created_at, system_prompt, template_id FROM threads"
+    ).all() as Array<Record<string, unknown>>;
+    for (const row of threads) {
+      const thread = this.rowToThreadRecord(row);
+      this.threads.set(thread.id, thread);
+    }
+
+    const messages = this.persistenceDb.prepare(
+      `
+        SELECT id, thread_id, seq, priority, author, author_id, author_name, author_emoji,
+               role, content, metadata, reply_to_msg_id, created_at, edited_at, edit_version
+        FROM messages
+        ORDER BY seq ASC
+      `
+    ).all() as Array<Record<string, unknown>>;
+    for (const row of messages) {
+      const message = this.rowToMessageRecord(row);
+      const group = this.threadMessages.get(message.thread_id) || [];
+      group.push(message);
+      this.threadMessages.set(message.thread_id, group);
+    }
+
+    const agents = this.persistenceDb.prepare(
+      `
+        SELECT id, name, display_name, ide, model, description, is_online, last_heartbeat,
+               last_activity, last_activity_time, capabilities, skills, token
+        FROM agents
+      `
+    ).all() as Array<Record<string, unknown>>;
+    for (const row of agents) {
+      const agent = this.rowToAgentRecord(row);
+      this.agents.set(agent.id, agent);
+    }
+
+    const tokens = this.persistenceDb.prepare(
+      "SELECT token, thread_id, issued_at, expires_at, consumed_at, status FROM reply_tokens"
+    ).all() as Array<Record<string, unknown>>;
+    for (const row of tokens) {
+      this.syncTokens.set(String(row.token), {
+        token: String(row.token),
+        threadId: String(row.thread_id),
+        issuedAt: Number(row.issued_at),
+        expiresAt: Number(row.expires_at),
+        consumedAt: row.consumed_at ? Number(row.consumed_at) : undefined,
+        status: String(row.status) as "active" | "consumed"
+      });
+    }
+
+    const settings = this.persistenceDb.prepare(
+      "SELECT thread_id, auto_administrator_enabled, timeout_seconds, switch_timeout_seconds FROM thread_settings"
+    ).all() as Array<Record<string, unknown>>;
+    for (const row of settings) {
+      this.threadSettings.set(String(row.thread_id), {
+        auto_administrator_enabled: Boolean(row.auto_administrator_enabled),
+        timeout_seconds: Number(row.timeout_seconds),
+        switch_timeout_seconds: Number(row.switch_timeout_seconds)
+      });
+    }
+
+    const waits = this.persistenceDb.prepare(
+      "SELECT thread_id, agent_id, entered_at, timeout_ms FROM thread_wait_states"
+    ).all() as Array<Record<string, unknown>>;
+    for (const row of waits) {
+      const threadId = String(row.thread_id);
+      const threadWaits = this.threadWaitStates.get(threadId) || new Map<string, WaitStateRecord>();
+      threadWaits.set(String(row.agent_id), {
+        agentId: String(row.agent_id),
+        enteredAt: String(row.entered_at),
+        timeoutMs: Number(row.timeout_ms)
+      });
+      this.threadWaitStates.set(threadId, threadWaits);
+    }
+
+    const edits = this.persistenceDb.prepare(
+      "SELECT message_id, version, old_content, edited_by, created_at FROM message_edits ORDER BY version ASC"
+    ).all() as Array<Record<string, unknown>>;
+    for (const row of edits) {
+      const messageId = String(row.message_id);
+      const history = this.messageEditHistory.get(messageId) || [];
+      history.push({
+        version: Number(row.version),
+        old_content: String(row.old_content),
+        edited_by: String(row.edited_by),
+        created_at: String(row.created_at)
+      });
+      this.messageEditHistory.set(messageId, history);
+    }
+
+    this.sequence = Math.max(this.sequence, ...messages.map((row) => Number(row.seq || 0)), 0);
   }
 
   private initializeRelationalTables(): void {

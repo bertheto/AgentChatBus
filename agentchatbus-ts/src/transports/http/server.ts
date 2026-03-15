@@ -327,7 +327,7 @@ export function createHttpServer() {
       reply.code(404);
       return { detail: "Message not found" };
     }
-    return { reactions: message.reactions || [] };
+    return { reactions: memoryStore.getReactions(params.messageId) };
   });
 
   fastify.post("/api/messages/:messageId/reactions", async (request, reply) => {
@@ -339,7 +339,7 @@ export function createHttpServer() {
       return { detail: "Message not found" };
     }
     reply.code(201);
-    return { ok: true, reactions: message.reactions || [] };
+    return { ok: true, reactions: memoryStore.getReactions(params.messageId) };
   });
 
   fastify.delete("/api/messages/:messageId/reactions/:reaction", async (request, reply) => {
