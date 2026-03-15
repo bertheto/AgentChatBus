@@ -3,6 +3,14 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { AgentRecord, IdeSessionState, MessageRecord, SyncContext, ThreadRecord, ThreadStatus } from "../types/models.js";
+import { 
+  BusError, 
+  MissingSyncFieldsError, 
+  SeqMismatchError, 
+  ReplyTokenInvalidError, 
+  ReplyTokenExpiredError, 
+  ReplyTokenReplayError 
+} from "../types/errors.js";
 import { eventBus } from "../../shared/eventBus.js";
 
 type IdeSession = {
@@ -15,11 +23,20 @@ type IdeSession = {
 
 type ReplyTokenRecord = {
   threadId: string;
+  agentId?: string;
+  source?: string;
   token: string;
   issuedAt: number;
   expiresAt: number;
   consumedAt?: number;
   status: "active" | "consumed";
+};
+
+type RefreshRequestRecord = {
+  threadId: string;
+  agentId: string;
+  reason: string;
+  createdAt: string;
 };
 
 type WaitStateRecord = {
@@ -213,24 +230,79 @@ export class MemoryStore {
     current_seq: number;
     reply_token: string;
     reply_window: number;
+    fast_return: boolean;
+    fast_return_reason?: string;
   } {
     const thread = this.getThread(input.threadId);
     if (!thread) {
       throw new Error("Thread not found");
     }
 
+    const latestSeq = this.getLatestSeq(input.threadId);
+    let fastReturn = false;
+    let fastReturnReason: string | undefined;
+
+    // Fast-return Scenario 1: Agent is behind (recovery)
+    if (input.afterSeq < latestSeq) {
+      fastReturn = true;
+      fastReturnReason = "BEHIND";
+    }
+
+    // Fast-return Scenario 2: Explicit refresh request
+    if (!fastReturn && input.agentId) {
+      const refresh = this.getRefreshRequest(input.threadId, input.agentId);
+      if (refresh) {
+        fastReturn = true;
+        fastReturnReason = refresh.reason;
+        this.clearRefreshRequest(input.threadId, input.agentId);
+      }
+    }
+
     this.pruneExpiredWaitStates(input.threadId);
-    const messages = this.getMessages(input.threadId, input.afterSeq);
-    if (input.agentId) {
+    if (!fastReturn && input.agentId) {
       this.enterWaitState(input.threadId, input.agentId, input.timeoutMs || 300_000);
     }
 
-    const sync = this.issueSyncContext(input.threadId);
+    const messages = this.getMessages(input.threadId, input.afterSeq);
+    const sync = this.issueSyncContext(input.threadId, input.agentId, "msg_wait");
+    
     return {
-      messages,
+      messages: this.projectMessagesForAgent(messages),
       current_seq: sync.current_seq,
       reply_token: sync.reply_token,
-      reply_window: sync.reply_window
+      reply_window: sync.reply_window,
+      fast_return: fastReturn,
+      fast_return_reason: fastReturnReason
+    };
+  }
+
+  private projectMessagesForAgent(messages: MessageRecord[]): MessageRecord[] {
+    return messages.map(m => this.projectMessageForAgent(m));
+  }
+
+  private projectMessageForAgent(msg: MessageRecord): MessageRecord {
+    const meta = msg.metadata;
+    if (!meta) return msg;
+
+    const visibility = String(meta.visibility || "").toLowerCase();
+    const audience = String(meta.audience || "").toLowerCase();
+    const isHumanOnly = visibility === "human_only" || audience === "human";
+
+    if (!isHumanOnly) return msg;
+
+    const allowedKeys = ["visibility", "audience", "ui_type", "handoff_target", "target_admin_id", "source_message_id", "decision_type"];
+    const projectedMeta: Record<string, any> = {};
+    for (const key of allowedKeys) {
+      if (key in meta) projectedMeta[key] = meta[key];
+    }
+    projectedMeta.visibility = projectedMeta.visibility || "human_only";
+    projectedMeta.content_hidden = true;
+    projectedMeta.content_hidden_reason = "human_only";
+
+    return {
+      ...msg,
+      content: "[human-only content hidden]",
+      metadata: projectedMeta
     };
   }
 
@@ -238,45 +310,54 @@ export class MemoryStore {
     threadId: string;
     author: string;
     content: string;
+    role?: string;
+    metadata?: Record<string, unknown> | null;
+    priority?: string;
+    replyToMsgId?: string;
     expectedLastSeq?: number;
     replyToken?: string;
-    role?: string;
-    metadata?: Record<string, unknown>;
-    replyToMsgId?: string;
-    priority?: string;
   }): MessageRecord {
     const thread = this.getThread(input.threadId);
     if (!thread) {
-      throw new Error("Thread not found");
+      throw new BusError("THREAD_NOT_FOUND");
     }
 
     const latestSeq = this.getLatestSeq(input.threadId);
-    if (typeof input.expectedLastSeq !== "number" || !input.replyToken) {
-      const error = new Error("MISSING_SYNC_FIELDS");
-      (error as Error & { detail?: unknown }).detail = {
-        error: "MISSING_SYNC_FIELDS",
-        missing_fields: [
-          ...(typeof input.expectedLastSeq !== "number" ? ["expected_last_seq"] : []),
-          ...(!input.replyToken ? ["reply_token"] : [])
-        ],
-        action: "CALL_SYNC_CONTEXT_THEN_RETRY"
-      };
-      throw error;
-    }
+    const agent = this.getAgentById(input.author);
 
-    if (input.expectedLastSeq !== latestSeq) {
-      const error = new Error("SEQ_MISMATCH");
-      (error as Error & { detail?: unknown }).detail = {
-        error: "SEQ_MISMATCH",
-        expected_last_seq: input.expectedLastSeq,
-        current_seq: latestSeq,
-        new_messages: this.getMessages(input.threadId, input.expectedLastSeq),
-        action: "RE_READ_AND_RETRY"
-      };
-      throw error;
-    }
+    // Strict Sync Logic (UP-14/15/16)
+    if (input.expectedLastSeq !== undefined || input.replyToken !== undefined) {
+      if (input.expectedLastSeq === undefined || input.replyToken === undefined) {
+        throw new MissingSyncFieldsError(input.expectedLastSeq === undefined ? ["expected_last_seq"] : ["reply_token"]);
+      }
 
-    this.consumeToken(input.threadId, input.replyToken);
+      const token = this.syncTokens.get(input.replyToken);
+      if (!token || token.threadId !== input.threadId) {
+        if (agent) this.setRefreshRequest(thread.id, agent.id, "TOKEN_INVALID");
+        throw new ReplyTokenInvalidError();
+      }
+
+      if (token.status === "consumed") {
+        if (agent) this.setRefreshRequest(thread.id, agent.id, "TOKEN_REPLAY");
+        throw new ReplyTokenReplayError(token.consumedAt ? new Date(token.consumedAt).toISOString() : undefined);
+      }
+
+      if (token.expiresAt < Date.now()) {
+        if (agent) this.setRefreshRequest(thread.id, agent.id, "TOKEN_EXPIRED");
+        throw new ReplyTokenExpiredError(new Date(token.expiresAt).toISOString());
+      }
+
+      if (input.expectedLastSeq !== latestSeq) {
+        if (agent) {
+          this.invalidateReplyTokensForAgent(thread.id, agent.id);
+          this.setRefreshRequest(thread.id, agent.id, "SEQ_MISMATCH");
+        }
+        const newMsgs = this.getMessages(thread.id, input.expectedLastSeq);
+        throw new SeqMismatchError(latestSeq, latestSeq, this.projectMessagesForAgent(newMsgs));
+      }
+
+      this.consumeReplyToken(token.token);
+    }
 
     this.sequence += 1;
     const message: MessageRecord = {
@@ -411,22 +492,30 @@ export class MemoryStore {
     return { removed, message };
   }
 
-  issueSyncContext(threadId: string): SyncContext {
+  issueSyncContext(threadId: string, agentId?: string, source?: string): SyncContext {
     const currentSeq = this.getLatestSeq(threadId);
     const token = randomUUID();
-    this.syncTokens.set(token, {
+    const issuedAt = Date.now();
+    const expiresAt = issuedAt + 300_000; // 5 minutes
+
+    const record: ReplyTokenRecord = {
       threadId,
+      agentId,
+      source,
       token,
-      issuedAt: Date.now(),
-      expiresAt: NON_EXPIRING_TOKEN_TS,
+      issuedAt,
+      expiresAt,
       status: "active"
-    });
-    this.upsertReplyToken(this.syncTokens.get(token)!);
+    };
+
+    this.syncTokens.set(token, record);
+    this.upsertReplyToken(record);
     this.persistState();
+
     return {
       current_seq: currentSeq,
       reply_token: token,
-      reply_window: 1
+      reply_window: 300
     };
   }
 
@@ -474,6 +563,10 @@ export class MemoryStore {
       `
     ).get(agentId) as Record<string, unknown> | undefined;
     return row ? this.rowToAgentRecord(row) : undefined;
+  }
+
+  getAgentById(agentId: string): AgentRecord | undefined {
+    return this.getAgent(agentId);
   }
 
   updateAgent(agentId: string, token: string, input: { description?: string; display_name?: string; capabilities?: string[]; skills?: unknown[] }): AgentRecord | undefined {
@@ -777,29 +870,12 @@ export class MemoryStore {
     };
   }
 
-  private consumeToken(threadId: string, token: string): void {
+  private consumeReplyToken(token: string): void {
     const found = this.syncTokens.get(token);
-    if (!found || found.threadId !== threadId) {
-      const error = new Error("TOKEN_INVALID");
-      (error as Error & { detail?: unknown }).detail = {
-        error: "TOKEN_INVALID",
-        action: "CALL_SYNC_CONTEXT_THEN_RETRY"
-      };
-      throw error;
-    }
+    if (!found) return;
 
-    const now = Date.now();
-    if (found.status === "consumed") {
-      const error = new Error("TOKEN_REPLAY");
-      (error as Error & { detail?: unknown }).detail = {
-        error: "TOKEN_REPLAY",
-        consumed_at: new Date(found.consumedAt || now).toISOString(),
-        action: "CALL_SYNC_CONTEXT_THEN_RETRY"
-      };
-      throw error;
-    }
     found.status = "consumed";
-    found.consumedAt = now;
+    found.consumedAt = Date.now();
     this.upsertReplyToken(found);
     this.persistState();
   }
@@ -1027,12 +1103,14 @@ export class MemoryStore {
     }
 
     const tokens = this.persistenceDb.prepare(
-      "SELECT token, thread_id, issued_at, expires_at, consumed_at, status FROM reply_tokens"
+      "SELECT token, thread_id, agent_id, source, issued_at, expires_at, consumed_at, status FROM reply_tokens"
     ).all() as Array<Record<string, unknown>>;
     for (const row of tokens) {
       this.syncTokens.set(String(row.token), {
         token: String(row.token),
         threadId: String(row.thread_id),
+        agentId: row.agent_id ? String(row.agent_id) : undefined,
+        source: row.source ? String(row.source) : undefined,
         issuedAt: Number(row.issued_at),
         expiresAt: Number(row.expires_at),
         consumedAt: row.consumed_at ? Number(row.consumed_at) : undefined,
@@ -1128,10 +1206,19 @@ export class MemoryStore {
       CREATE TABLE IF NOT EXISTS reply_tokens (
         token TEXT PRIMARY KEY,
         thread_id TEXT NOT NULL,
+        agent_id TEXT,
+        source TEXT,
         issued_at INTEGER NOT NULL,
         expires_at INTEGER NOT NULL,
         consumed_at INTEGER,
         status TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS msg_wait_refresh_requests (
+        thread_id TEXT NOT NULL,
+        agent_id TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (thread_id, agent_id)
       );
       CREATE TABLE IF NOT EXISTS thread_settings (
         thread_id TEXT PRIMARY KEY,
@@ -1245,16 +1332,18 @@ export class MemoryStore {
   private upsertReplyToken(token: ReplyTokenRecord): void {
     this.persistenceDb.prepare(
       `
-        INSERT INTO reply_tokens (token, thread_id, issued_at, expires_at, consumed_at, status)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO reply_tokens (token, thread_id, agent_id, source, issued_at, expires_at, consumed_at, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(token) DO UPDATE SET
           thread_id = excluded.thread_id,
+          agent_id = excluded.agent_id,
+          source = excluded.source,
           issued_at = excluded.issued_at,
           expires_at = excluded.expires_at,
           consumed_at = excluded.consumed_at,
           status = excluded.status
       `
-    ).run(token.token, token.threadId, token.issuedAt, token.expiresAt, token.consumedAt || null, token.status);
+    ).run(token.token, token.threadId, token.agentId || null, token.source || null, token.issuedAt, token.expiresAt, token.consumedAt || null, token.status);
   }
 
   private upsertThreadSettings(threadId: string): void {
@@ -1308,6 +1397,55 @@ export class MemoryStore {
     for (const reaction of reactions) {
       insert.run(messageId, reaction.agent_id, reaction.reaction);
     }
+  }
+
+  private setRefreshRequest(threadId: string, agentId: string, reason: string): void {
+    this.persistenceDb.prepare(
+      "INSERT OR REPLACE INTO msg_wait_refresh_requests (thread_id, agent_id, reason, created_at) VALUES (?, ?, ?, ?)"
+    ).run(threadId, agentId, reason, new Date().toISOString());
+  }
+
+  private getRefreshRequest(threadId: string, agentId: string): RefreshRequestRecord | undefined {
+    const row = this.persistenceDb.prepare(
+      "SELECT thread_id, agent_id, reason, created_at FROM msg_wait_refresh_requests WHERE thread_id = ? AND agent_id = ?"
+    ).get(threadId, agentId) as Record<string, unknown> | undefined;
+    if (!row) return undefined;
+    return {
+      threadId: String(row.thread_id),
+      agentId: String(row.agent_id),
+      reason: String(row.reason),
+      createdAt: String(row.created_at)
+    };
+  }
+
+  private clearRefreshRequest(threadId: string, agentId: string): void {
+    this.persistenceDb.prepare(
+      "DELETE FROM msg_wait_refresh_requests WHERE thread_id = ? AND agent_id = ?"
+    ).run(threadId, agentId);
+  }
+
+  invalidateReplyTokensForAgentSource(threadId: string, agentId: string, source: string): void {
+    const tokens = [...this.syncTokens.values()].filter(
+      t => t.threadId === threadId && t.agentId === agentId && t.source === source && t.status === "active"
+    );
+    for (const t of tokens) {
+      t.status = "consumed";
+      t.consumedAt = Date.now();
+      this.upsertReplyToken(t);
+    }
+    this.persistState();
+  }
+
+  private invalidateReplyTokensForAgent(threadId: string, agentId: string): void {
+    const tokens = [...this.syncTokens.values()].filter(
+      t => t.threadId === threadId && t.agentId === agentId && t.status === "active"
+    );
+    for (const t of tokens) {
+      t.status = "consumed";
+      t.consumedAt = Date.now();
+      this.upsertReplyToken(t);
+    }
+    this.persistState();
   }
 
   private appendLog(line: string): void {

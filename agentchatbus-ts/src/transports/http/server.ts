@@ -48,7 +48,7 @@ export function createHttpServer() {
     if (request?.method === "tools/call") {
       try {
         const params = request.params as { name?: string; arguments?: Record<string, unknown> } | undefined;
-        return { result: callTool(String(params?.name || ""), params?.arguments || {}) };
+        return { result: await callTool(String(params?.name || ""), params?.arguments || {}) };
       } catch (error) {
         reply.code(400);
         return { error: (error as Error).message };

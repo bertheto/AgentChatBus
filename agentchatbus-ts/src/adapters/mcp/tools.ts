@@ -1,4 +1,5 @@
 import { memoryStore } from "../../core/services/memoryStore.js";
+import { eventBus } from "../../shared/eventBus.js";
 
 export type ToolDefinition = {
   name: string;
@@ -40,7 +41,7 @@ export function listTools(): ToolDefinition[] {
   return toolDefinitions;
 }
 
-export function callTool(name: string, args: Record<string, unknown>): unknown {
+export async function callTool(name: string, args: Record<string, unknown>): Promise<unknown> {
   switch (name) {
     case "thread_create": {
       const created = memoryStore.createThread(String(args.topic || ""), typeof args.system_prompt === "string" ? args.system_prompt : undefined);
@@ -70,8 +71,8 @@ export function callTool(name: string, args: Record<string, unknown>): unknown {
         threadId: String(args.thread_id || ""),
         author: String(args.author || "human"),
         content: String(args.content || ""),
-        expectedLastSeq: Number(args.expected_last_seq),
-        replyToken: String(args.reply_token || ""),
+        expectedLastSeq: args.expected_last_seq !== undefined ? Number(args.expected_last_seq) : undefined,
+        replyToken: typeof args.reply_token === "string" ? args.reply_token : undefined,
         role: typeof args.role === "string" ? args.role : undefined,
         priority: typeof args.priority === "string" ? args.priority : undefined,
         metadata: typeof args.metadata === "object" && args.metadata !== null ? args.metadata as Record<string, unknown> : undefined,
@@ -83,12 +84,39 @@ export function callTool(name: string, args: Record<string, unknown>): unknown {
       return memoryStore.getMessage(String(args.message_id || "")) || { found: false };
     case "msg_wait": {
       const threadId = String(args.thread_id || "");
-      return memoryStore.waitForMessages({
-        threadId,
-        afterSeq: Number(args.after_seq || 0),
-        agentId: typeof args.agent_id === "string" ? args.agent_id : undefined,
-        timeoutMs: typeof args.timeout_ms === "number" ? args.timeout_ms : undefined
-      });
+      const afterSeq = Number(args.after_seq || 0);
+      const agentId = typeof args.agent_id === "string" ? args.agent_id : undefined;
+      const timeoutMs = typeof args.timeout_ms === "number" ? args.timeout_ms : 300_000;
+
+      // Start waiting
+      const startTime = Date.now();
+      while (Date.now() - startTime < timeoutMs) {
+        const result = memoryStore.waitForMessages({
+          threadId,
+          afterSeq,
+          agentId,
+          timeoutMs
+        });
+
+        if (result.messages.length > 0 || result.fast_return) {
+          return result;
+        }
+
+        // Wait for next message or timeout
+        await new Promise<void>((resolve) => {
+          const timeout = setTimeout(resolve, 5000); // Poll every 5s as fallback
+          const unsubscribe = eventBus.subscribe((event) => {
+            if (event.type === "msg.new" && (event.payload as any).thread_id === threadId) {
+              clearTimeout(timeout);
+              unsubscribe();
+              resolve();
+            }
+          });
+        });
+      }
+
+      // Final check after loop
+      return memoryStore.waitForMessages({ threadId, afterSeq, agentId, timeoutMs });
     }
     case "template_list":
       return { templates: memoryStore.getTemplates() };
@@ -140,6 +168,10 @@ export function callTool(name: string, args: Record<string, unknown>): unknown {
         capabilities: Array.isArray(args.capabilities) ? args.capabilities.map(String) : undefined,
         skills: Array.isArray(args.skills) ? args.skills : undefined
       });
+      
+      memoryStore.invalidateReplyTokensForAgentSource(created.thread.id, agent.id, "bus_connect");
+      const sync = memoryStore.issueSyncContext(created.thread.id, agent.id, "bus_connect");
+
       const isAdministrator = memoryStore.getMessages(created.thread.id, 0).length === 0;
       return {
         agent: {
@@ -151,9 +183,9 @@ export function callTool(name: string, args: Record<string, unknown>): unknown {
         },
         thread: created.thread,
         messages: memoryStore.getMessages(created.thread.id, Number(args.after_seq || 0)),
-        current_seq: created.sync.current_seq,
-        reply_token: created.sync.reply_token,
-        reply_window: created.sync.reply_window
+        current_seq: sync.current_seq,
+        reply_token: sync.reply_token,
+        reply_window: sync.reply_window
       };
     }
     case "bus_get_config":
@@ -167,4 +199,4 @@ export function callTool(name: string, args: Record<string, unknown>): unknown {
     default:
       throw new Error(`Unknown tool: ${name}`);
   }
-}
+}
