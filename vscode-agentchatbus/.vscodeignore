@@ -20,3 +20,4 @@ node_modules/**
 !package.json
 !LICENSE.md
 !README.md
+!CHANGELOG.md

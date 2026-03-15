@@ -6,7 +6,7 @@
   "name": "agentchatbus",
   "displayName": "AgentChatBus",
   "description": "AgentChatBus client for VS Code",
-  "version": "0.1.64",
+  "version": "0.1.65",
   "icon": "resources/bus_128.png",
   "engines": {
     "vscode": "^1.105.0"
@@ -275,5 +275,5 @@
   "dependencies": {
     "eventsource": "^2.0.2"
   },
-  "publisher": "killea"
+  "publisher": "AgentChatBus"
 }
