@@ -311,6 +311,12 @@ export class MemoryStore {
     }
 
     const latestSeq = this.getLatestSeq(input.threadId);
+    // Debug: log seq state to help parity test investigation
+    try {
+      const logLine = `[memoryStore.postMessage] thread=${input.threadId} latestSeq=${latestSeq} globalSequence=${this.sequence}\n`;
+      console.log(logLine.trim());
+      try { require('node:fs').appendFileSync('C:\\Users\\hankw\\Documents\\AgentChatBus\\tmp_mcp_seq.log', logLine, { encoding: 'utf8' }); } catch (e) {}
+    } catch (e) {}
     let fastReturn = false;
     let fastReturnReason: string | undefined;
 

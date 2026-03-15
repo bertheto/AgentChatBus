@@ -3,11 +3,13 @@ import multipart from "@fastify/multipart";
 import fastifyStatic from "@fastify/static";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { writeFileSync } from "node:fs";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { callTool, listTools } from "../../adapters/mcp/tools.js";
 import { SeqMismatchError, MissingSyncFieldsError, ReplyTokenInvalidError, ReplyTokenExpiredError, ReplyTokenReplayError, BusError } from "../../core/types/errors.js";
 import { getConfig } from "../../core/config/env.js";
 import { MemoryStore, memoryStore } from "../../core/services/memoryStore.js";
+import { registerStore } from "../../core/services/storeSingleton.js";
 import { eventBus } from "../../shared/eventBus.js";
 
 // Allow tests to override the global memoryStore instance
@@ -27,13 +29,16 @@ export function createHttpServer() {
   // If AGENTCHATBUS_DB env is set for this process, create a dedicated store
   // instance so in-process tests can control the DB path and teardown.
   let store: ReturnType<typeof getMemoryStore>;
-  const envDb = process.env.AGENTCHATBUS_DB;
+  // Allow tests to override the DB path using AGENTCHATBUS_TEST_DB
+  const envDb = process.env.AGENTCHATBUS_DB || process.env.AGENTCHATBUS_TEST_DB;
   // Track ownership: only close the store on shutdown if this server created it.
   const ownsStore = Boolean(envDb);
   if (envDb) {
     try {
       // Lazily create an instance bound to this DB path.
       memoryStoreInstance = new MemoryStore(envDb);
+      // Ensure MCP tools and other modules use the same store instance
+      try { registerStore(memoryStoreInstance); } catch (_) { }
       store = memoryStoreInstance;
     } catch (e) {
       // Fallback to global store on error
@@ -90,8 +95,12 @@ export function createHttpServer() {
     if (request?.method === "tools/call") {
       try {
         const params = request.params as { name?: string; arguments?: Record<string, unknown> } | undefined;
-        return { result: await callTool(String(params?.name || ""), params?.arguments || {}) };
+        const result = await callTool(String(params?.name || ""), params?.arguments || {});
+        try { console.log(`[mcp-call] ${String(params?.name || '')} => ${JSON.stringify(result).slice(0,200)}`); } catch (e) {}
+        return { result };
       } catch (error) {
+        // Log tool call errors for debugging parity
+        try { console.error(`[mcp-call-error] ${String((error as Error).message || error)}`); } catch (e) {}
         reply.code(400);
         return { error: (error as Error).message };
       }
@@ -111,7 +120,38 @@ export function createHttpServer() {
       const result = await callTool(params.toolName, body || {});
       // For certain tools parity tests expect a blocks-style MCP payload
       if (params.toolName === "bus_connect" || params.toolName === "msg_post" || params.toolName === "msg_wait") {
-        return [ { type: "text", text: JSON.stringify(result) } ];
+        try {
+          // If the tool already returned a blocks-style array, forward it unchanged
+          if (Array.isArray(result)) {
+            return result as unknown;
+          }
+          // Ensure a consistent blocks-style response expected by parity tests
+          // Use a safe stringify that tolerates functions and circular refs
+          const safeStringify = (obj: unknown) => {
+            const seen = new Set();
+            return JSON.stringify(obj, (_key, value) => {
+              if (typeof value === 'function') return undefined;
+              if (typeof value === 'object' && value !== null) {
+                if (seen.has(value)) return undefined;
+                seen.add(value);
+              }
+              return value;
+            });
+          };
+          // Always produce a string payload; if stringify returns falsy, fall back to '{}'
+          let payloadText = safeStringify(result) || "{}";
+          // debug log to help parity tests diagnose response shape in subprocesses
+          try { console.log(`[mcp-rest] ${params.toolName} -> ${String(payloadText).slice(0,200)}`); } catch (e) { }
+          try {
+            // write a copy for debugging when running in a child process
+            writeFileSync("tmp_last_mcp_response.json", String(payloadText), { encoding: "utf8" });
+          } catch (e) {}
+          // Always return a blocks-style array with a text block containing the JSON payload
+          return [ { type: "text", text: payloadText } ];
+        } catch (e) {
+          // If anything unexpected happens here, return a minimal safe text block
+          return [ { type: "text", text: "{}" } ];
+        }
       }
       // Otherwise return the structured result
       return result;

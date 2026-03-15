@@ -1,5 +1,6 @@
-import { memoryStore } from "../../core/services/memoryStore.js";
+import { /* memoryStore replaced by getStore */ } from "../../core/services/memoryStore.js";
 import { eventBus } from "../../shared/eventBus.js";
+import { getStore } from "../../core/services/storeSingleton.js";
 
 export type ToolDefinition = {
   name: string;
@@ -261,7 +262,7 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
       }
 
       // Verify agent credentials
-      const agent = memoryStore.getAgent(agentId);
+      const agent = getStore().getAgent(agentId);
       if (!agent || agent.token !== token) {
         throw new Error("Invalid agent_id or token");
       }
@@ -274,7 +275,7 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
       const templateId = typeof args.template === "string" ? args.template : undefined;
       const systemPrompt = typeof args.system_prompt === "string" ? args.system_prompt : undefined;
       
-      const created = memoryStore.createThread(topic, systemPrompt, templateId);
+      const created = getStore().createThread(topic, systemPrompt, templateId);
       return {
         thread_id: created.thread.id,
         topic: created.thread.topic,
@@ -292,7 +293,7 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
       const limit = typeof args.limit === "number" ? args.limit : 0;
       const before = typeof args.before === "string" ? args.before : undefined;
 
-      let threads = memoryStore.getThreads(includeArchived);
+      let threads = getStore().getThreads(includeArchived);
       
       // Filter by status if provided
       if (status) {
@@ -330,7 +331,7 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
       };
     }
     case "thread_get": {
-      const thread = memoryStore.getThread(String(args.thread_id || ""));
+      const thread = getStore().getThread(String(args.thread_id || ""));
       if (!thread) {
         return { error: "Thread not found" };
       }
@@ -353,16 +354,16 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
         };
       }
 
-      const deleted = memoryStore.deleteThread(threadId);
+      const deleted = getStore().deleteThread(threadId);
       if (!deleted) {
         return { error: "Thread not found" };
       }
       return { ok: true, deleted: threadId };
     }
     case "thread_settings_get":
-      return memoryStore.getThreadSettings(String(args.thread_id || "")) || { found: false };
+      return getStore().getThreadSettings(String(args.thread_id || "")) || { found: false };
     case "thread_settings_update":
-      return memoryStore.updateThreadSettings(String(args.thread_id || ""), {
+      return getStore().updateThreadSettings(String(args.thread_id || ""), {
         auto_administrator_enabled: typeof args.auto_administrator_enabled === "boolean" ? args.auto_administrator_enabled : undefined,
         timeout_seconds: typeof args.timeout_seconds === "number" ? args.timeout_seconds : undefined,
         switch_timeout_seconds: typeof args.switch_timeout_seconds === "number" ? args.switch_timeout_seconds : undefined
@@ -379,7 +380,7 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
       const replyToMsgId = typeof args.reply_to_msg_id === "string" ? args.reply_to_msg_id : undefined;
 
       try {
-        const message = memoryStore.postMessage({
+        const message = getStore().postMessage({
           threadId,
           author,
           content,
@@ -392,9 +393,8 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
         });
 
         // Chain token: issue a fresh reply_token so the agent can post again
-        const chainSync = memoryStore.issueSyncContext(threadId, message.author_id, "msg_post_chain");
-
-        return {
+        const chainSync = getStore().issueSyncContext(threadId, message.author_id, "msg_post_chain");
+        const postPayload = {
           msg_id: message.id,
           seq: message.seq,
           reply_to_msg_id: message.reply_to_msg_id,
@@ -403,6 +403,7 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
           current_seq: chainSync.current_seq,
           reply_window: chainSync.reply_window
         };
+        return [{ type: "text", text: JSON.stringify(postPayload) }];
       } catch (error) {
         const err = error as any;
         if (err.detail) {
@@ -419,7 +420,7 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
       const returnFormat = typeof args.return_format === "string" ? args.return_format : "blocks";
       const includeAttachments = typeof args.include_attachments === "boolean" ? args.include_attachments : true;
 
-      let messages = memoryStore.getMessages(threadId, afterSeq);
+      let messages = getStore().getMessages(threadId, afterSeq);
 
       // Filter by priority if provided
       if (priority) {
@@ -485,13 +486,13 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
     }
     case "msg_get": {
       const messageId = String(args.message_id || "");
-      const message = memoryStore.getMessage(messageId);
+      const message = getStore().getMessage(messageId);
       
       if (!message) {
         return { found: false, message: null };
       }
 
-      const reactions = memoryStore.getReactions(messageId);
+      const reactions = getStore().getReactions(messageId);
       return {
         found: true,
         message: {
@@ -522,7 +523,7 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
 
       // Verify credentials if provided
       if (agentId && token) {
-        const ok = memoryStore.verifyAgentToken(agentId, token);
+        const ok = getStore().verifyAgentToken(agentId, token);
         if (!ok) {
           return { error: "InvalidCredentials", detail: "Invalid agent_id/token for msg_wait." };
         }
@@ -530,14 +531,14 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
 
       try {
         // Delegate to MemoryStore.waitForMessages which records wait states
-        const result = memoryStore.waitForMessages({ threadId, afterSeq, agentId, timeoutMs });
-        return result;
+        const result = getStore().waitForMessages({ threadId, afterSeq, agentId, timeoutMs });
+        return [{ type: "text", text: JSON.stringify(result) }];
       } catch (err) {
-        return { error: (err as Error).message };
+        return [{ type: "text", text: JSON.stringify({ error: (err as Error).message }) }];
       }
     }
     case "template_list": {
-      const templates = memoryStore.getTemplates();
+      const templates = getStore().getTemplates();
       return {
         templates: templates.map(t => ({
           id: t.id,
@@ -550,7 +551,7 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
     }
     case "template_get": {
       const templateId = String(args.template_id || "");
-      const template = memoryStore.getTemplate(templateId);
+      const template = getStore().getTemplate(templateId);
       if (!template) {
         return { error: "Template not found" };
       }
@@ -575,11 +576,11 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
         throw new Error("id and name are required");
       }
 
-      const ok = memoryStore.createTemplate({ id, name, description, system_prompt: systemPrompt, default_metadata: defaultMetadata });
+      const ok = getStore().createTemplate({ id, name, description, system_prompt: systemPrompt, default_metadata: defaultMetadata });
       if (!ok) {
         return { error: "Failed to create template (may already exist)" };
       }
-      const template = memoryStore.getTemplate(id);
+      const template = getStore().getTemplate(id);
       return {
         ok: true,
         id: template?.id,
@@ -597,7 +598,7 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
       const capabilities = Array.isArray(args.capabilities) ? args.capabilities.map(String) : undefined;
       const skills = Array.isArray(args.skills) ? args.skills : undefined;
 
-      const agent = memoryStore.registerAgent({
+      const agent = getStore().registerAgent({
         ide,
         model,
         description,
@@ -628,7 +629,7 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
     case "agent_heartbeat": {
       const agentId = String(args.agent_id || "");
       const token = String(args.token || "");
-      const ok = memoryStore.heartbeatAgent(agentId, token);
+      const ok = getStore().heartbeatAgent(agentId, token);
       if (!ok) {
         return { error: "Invalid agent_id or token" };
       }
@@ -637,7 +638,7 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
     case "agent_resume": {
       const agentId = String(args.agent_id || "");
       const token = String(args.token || "");
-      const agent = memoryStore.resumeAgent(agentId, token);
+      const agent = getStore().resumeAgent(agentId, token);
       if (!agent) {
         return { error: "Invalid agent_id or token", found: false };
       }
@@ -657,14 +658,14 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
     case "agent_unregister": {
       const agentId = String(args.agent_id || "");
       const token = String(args.token || "");
-      const ok = memoryStore.unregisterAgent(agentId, token);
+      const ok = getStore().unregisterAgent(agentId, token);
       if (!ok) {
         return { error: "Invalid agent_id or token" };
       }
       return { ok: true };
     }
     case "agent_list": {
-      const agents = memoryStore.listAgents();
+      const agents = getStore().listAgents();
       return {
         agents: agents.map(a => ({
           agent_id: a.id,
@@ -691,7 +692,7 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
       const capabilities = Array.isArray(args.capabilities) ? args.capabilities.map(String) : undefined;
       const skills = Array.isArray(args.skills) ? args.skills : undefined;
 
-      const agent = memoryStore.updateAgent(agentId, token, {
+      const agent = getStore().updateAgent(agentId, token, {
         description,
         display_name: displayName,
         capabilities,
@@ -727,7 +728,7 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
       const agentId = String(args.agent_id || "");
       const reaction = String(args.reaction || "");
       
-      const message = memoryStore.addReaction(messageId, agentId, reaction);
+      const message = getStore().addReaction(messageId, agentId, reaction);
       if (!message) {
         return { error: "Message not found" };
       }
@@ -736,7 +737,7 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
         reaction_id: `${messageId}-${agentId}-${reaction}`,
         message_id: messageId,
         agent_id: agentId,
-        agent_name: (memoryStore.getAgent(agentId))?.name || agentId,
+        agent_name: (getStore().getAgent(agentId))?.name || agentId,
         reaction: reaction,
         created_at: new Date().toISOString()
       };
@@ -746,7 +747,7 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
       const agentId = String(args.agent_id || "");
       const reaction = String(args.reaction || "");
       
-      const result = memoryStore.removeReaction(messageId, agentId, reaction);
+      const result = getStore().removeReaction(messageId, agentId, reaction);
       if (!result) {
         return { error: "Message not found" };
       }
@@ -765,12 +766,13 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
 
       // Phase 1: Agent Identity (Register or Resume)
       let agent;
+      let wasNewAgent = false;
       const agentIdArg = typeof args.agent_id === "string" ? args.agent_id : undefined;
       const tokenArg = typeof args.token === "string" ? args.token : undefined;
 
       if (agentIdArg && tokenArg) {
         // Resume existing agent
-        agent = memoryStore.resumeAgent(agentIdArg, tokenArg);
+        agent = getStore().resumeAgent(agentIdArg, tokenArg);
         if (!agent) {
           return { error: `Failed to resume agent: Invalid agent_id or token` };
         }
@@ -785,7 +787,7 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
         const capabilities = Array.isArray(args.capabilities) ? args.capabilities.map(String) : undefined;
         const skills = Array.isArray(args.skills) ? args.skills : undefined;
 
-        agent = memoryStore.registerAgent({
+        agent = getStore().registerAgent({
           ide,
           model,
           description,
@@ -793,56 +795,59 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
           capabilities,
           skills
         });
+        wasNewAgent = true;
       }
 
       // Phase 2: Find or Create Thread
-      let thread = memoryStore.getThreads(false).find(t => t.topic === threadName);
+      let thread = getStore().getThreads(false).find(t => t.topic === threadName);
       let threadCreated = false;
 
       if (!thread) {
         const templateId = typeof args.template === "string" ? args.template : undefined;
         const systemPrompt = typeof args.system_prompt === "string" ? args.system_prompt : undefined;
-        const created = memoryStore.createThread(threadName, systemPrompt, templateId);
+        const created = getStore().createThread(threadName, systemPrompt, templateId);
         thread = created.thread;
         threadCreated = true;
       }
 
       // Phase 3: Fetch Messages + Sync Context
       const afterSeq = typeof args.after_seq === "number" ? args.after_seq : 0;
-      const messages = memoryStore.getMessages(thread.id, afterSeq);
+      const messages = getStore().getMessages(thread.id, afterSeq);
 
       // Invalidate old bus_connect tokens and issue new one
-      memoryStore.invalidateReplyTokensForAgentSource(thread.id, agent.id, "bus_connect");
-      const sync = memoryStore.issueSyncContext(thread.id, agent.id, "bus_connect");
+      getStore().invalidateReplyTokensForAgentSource(thread.id, agent.id, "bus_connect");
+      const sync = getStore().issueSyncContext(thread.id, agent.id, "bus_connect");
 
       // Phase 4: Identify Administrator Role
-      const settings = memoryStore.getThreadSettings(thread.id);
+      const settings = getStore().getThreadSettings(thread.id);
       const adminId = (settings as any)?.auto_assigned_admin_id || (settings as any)?.creator_admin_id;
       const adminName = (settings as any)?.auto_assigned_admin_name || (settings as any)?.creator_admin_name;
 
-      const isAdmin = adminId === agent.id;
+      const isAdmin = threadCreated ? true : (adminId === agent.id);
       const roleAssignment = isAdmin
         ? `You are the ADMINISTRATOR for this thread. You are responsible for coordination and task assignment.`
         : adminId
           ? `You are a PARTICIPANT in this thread. Please wait for the administrator (@${adminId}) to coordinate or assign you tasks.`
           : `You are the administrator for thread ${thread.topic}. Coordinate work and keep progress moving.`;
 
-      return {
+      const payload = {
         agent: {
+          id: agent.id,
           agent_id: agent.id,
           name: agent.name,
-          registered: true,
+          registered: wasNewAgent,
           token: agent.token,
           is_administrator: isAdmin,
           role_assignment: roleAssignment
         },
         thread: {
+          id: thread.id,
           thread_id: thread.id,
           topic: thread.topic,
           status: thread.status,
           created: threadCreated,
           ...(threadCreated && thread.system_prompt ? { system_prompt: thread.system_prompt } : {}),
-          ...(adminId ? { administrator: { agent_id: adminId, name: adminName } } : {})
+          ...(adminId ? { administrator: { id: adminId, agent_id: adminId, name: adminName } } : {})
         },
         messages: messages.map(m => ({
           seq: m.seq,
@@ -855,9 +860,10 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
         reply_token: sync.reply_token,
         reply_window: sync.reply_window
       };
+      return [{ type: "text", text: JSON.stringify(payload) }];
     }
     case "bus_get_config": {
-      const settings = memoryStore.getSettings();
+      const settings = getStore().getSettings();
       return {
         preferred_language: (settings as any).preferred_language || "English",
         language_source: "default",
@@ -894,7 +900,7 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
       const threadId = typeof args.thread_id === "string" ? args.thread_id : undefined;
       const limit = typeof args.limit === "number" ? args.limit : 50;
 
-      let results = memoryStore.searchMessages(query);
+      let results = getStore().searchMessages(query);
       
       // Filter by thread if provided
       if (threadId) {
@@ -931,7 +937,7 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
       // Deduce edited_by from connection context (simplified - would need real context in production)
       const editedBy = "system";
       
-      const result = memoryStore.editMessage(messageId, newContent, editedBy);
+      const result = getStore().editMessage(messageId, newContent, editedBy);
       if (!result) {
         return { error: `Message '${messageId}' not found` };
       }
@@ -953,12 +959,12 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
         return { error: "message_id is required" };
       }
 
-      const message = memoryStore.getMessage(messageId);
+      const message = getStore().getMessage(messageId);
       if (!message) {
         return { found: false, message_id: messageId };
       }
 
-      const edits = memoryStore.getMessageHistory(messageId);
+      const edits = getStore().getMessageHistory(messageId);
       return {
         message_id: messageId,
         current_content: message.content,
