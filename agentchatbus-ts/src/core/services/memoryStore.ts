@@ -15,6 +15,85 @@ import { eventBus } from "../../shared/eventBus.js";
 import { generateAgentEmoji } from "../../main.js";
 import { registerStore } from "./storeSingleton.js";
 
+/**
+ * AsyncEvent - 模拟 Python asyncio.Event 语义
+ * 
+ * 与 Node.js EventEmitter + once() 的关键区别：
+ * - 有内部状态记忆：_isSet 标志
+ * - 如果事件已触发，wait() 会立即返回（不会错过事件）
+ * - clear() + wait() 是原子操作模式
+ * 
+ * Python asyncio.Event 语义：
+ * - set(): 设置状态为 true，唤醒所有等待者
+ * - clear(): 重置状态为 false
+ * - wait(): 如果已设置则立即返回；否则阻塞直到 set() 被调用
+ */
+class AsyncEvent {
+  private _isSet = false;
+  private _waiters: Array<() => void> = [];
+
+  /**
+   * 设置事件状态并唤醒所有等待者
+   * 对应 Python: asyncio.Event.set()
+   */
+  set(): void {
+    this._isSet = true;
+    // 唤醒所有等待者并清空等待队列
+    const waiters = this._waiters.splice(0);
+    for (const resolve of waiters) {
+      resolve();
+    }
+  }
+
+  /**
+   * 重置事件状态
+   * 对应 Python: asyncio.Event.clear()
+   */
+  clear(): void {
+    this._isSet = false;
+  }
+
+  /**
+   * 等待事件被设置
+   * 对应 Python: await asyncio.Event.wait()
+   * 
+   * @param timeoutMs 超时时间（毫秒）
+   * @returns true 表示事件被设置唤醒；false 表示超时
+   */
+  async wait(timeoutMs: number): Promise<boolean> {
+    // 如果事件已经设置，立即返回（Python 语义关键点）
+    if (this._isSet) {
+      return true;
+    }
+
+    return new Promise<boolean>((resolve) => {
+      const timer = setTimeout(() => {
+        // 超时时从等待队列中移除该等待者
+        const index = this._waiters.indexOf(resolve);
+        if (index !== -1) {
+          this._waiters.splice(index, 1);
+        }
+        resolve(false);
+      }, timeoutMs);
+
+      // 将 resolve 加入等待队列
+      // 当 set() 被调用时，会执行 resolve() 并清除 timer
+      const wrappedResolve = () => {
+        clearTimeout(timer);
+        resolve(true);
+      };
+      this._waiters.push(wrappedResolve);
+    });
+  }
+
+  /**
+   * 检查事件是否已设置
+   */
+  isSet(): boolean {
+    return this._isSet;
+  }
+}
+
 type IdeSession = {
   instanceId: string;
   ideLabel: string;
@@ -94,7 +173,21 @@ export class MemoryStore {
   private readonly threadSettings = new Map<string, { auto_administrator_enabled: boolean; timeout_seconds: number; switch_timeout_seconds: number }>();
   private readonly messageEditHistory = new Map<string, Array<{ version: number; old_content: string; edited_by: string; created_at: string }>>();
   private ideOwnerInstanceId: string | null = null;
+  // Per-thread AsyncEvent registry for event-driven msg_wait wake-ups (matching Python _thread_events)
+  // When msg_post succeeds, the corresponding event is set so that all waiters wake up immediately.
+  private readonly _threadEvents = new Map<string, AsyncEvent>();
   private logCursor = 0;
+
+  /**
+   * Return (or create) the AsyncEvent for a given thread_id.
+   * Matches Python: _get_thread_event(thread_id: str) -> asyncio.Event
+   */
+  private _getThreadEvent(threadId: string): AsyncEvent {
+    if (!this._threadEvents.has(threadId)) {
+      this._threadEvents.set(threadId, new AsyncEvent());
+    }
+    return this._threadEvents.get(threadId)!;
+  }
   private readonly persistencePath: string;
   private readonly persistenceDb: DatabaseSync;
 
@@ -533,42 +626,47 @@ export class MemoryStore {
     }
   }
 
-  waitForMessages(input: { threadId: string; afterSeq: number; agentId?: string; timeoutMs?: number; forAgent?: string }): {
+  async waitForMessages(input: { threadId: string; afterSeq: number; agentId?: string; timeoutMs?: number; forAgent?: string }): Promise<{
     messages: MessageRecord[];
     current_seq: number;
     reply_token: string;
     reply_window: number;
     fast_return: boolean;
     fast_return_reason?: string;
-  } {
+  }> {
     const thread = this.getThread(input.threadId);
     if (!thread) {
       throw new Error("Thread not found");
     }
 
     const latestSeq = this.getLatestSeq(input.threadId);
-    // Debug: log seq state to help parity test investigation
-    try {
-      const logLine = `[memoryStore.postMessage] thread=${input.threadId} latestSeq=${latestSeq} globalSequence=${this.sequence}\n`;
-      console.log(logLine.trim());
-      try { require('node:fs').appendFileSync('C:\\Users\\hankw\\Documents\\AgentChatBus\\tmp_mcp_seq.log', logLine, { encoding: 'utf8' }); } catch (e) {}
-    } catch (e) {}
+    
     let fastReturn = false;
     let fastReturnReason: string | undefined;
-
-    // Fast-return Scenario 1: Agent is behind (recovery)
-    if (input.afterSeq < latestSeq) {
-      fastReturn = true;
-      fastReturnReason = "BEHIND";
-    }
-
-    // Fast-return Scenario 2: Explicit refresh request
-    if (!fastReturn && input.agentId) {
+    
+    // Match Python logic: fast return only when:
+    // 1. Has refresh request, OR
+    // 2. No issued tokens AND agent is behind (afterSeq < latestSeq)
+    if (input.agentId) {
       const refresh = this.getRefreshRequest(input.threadId, input.agentId);
       if (refresh) {
         fastReturn = true;
         fastReturnReason = refresh.reason;
         this.clearRefreshRequest(input.threadId, input.agentId);
+      } else {
+        // Check issued token count
+        const tokens = Array.from(this.syncTokens.values()).filter((t: ReplyTokenRecord) => 
+          t.threadId === input.threadId && 
+          t.agentId === input.agentId && 
+          t.status === "issued"
+        );
+        const issuedTokenCount = tokens.length;
+        
+        // Only fast return if no tokens AND agent is behind
+        if (issuedTokenCount === 0 && input.afterSeq < latestSeq) {
+          fastReturn = true;
+          fastReturnReason = `no_issued_tokens_and_behind(total_issued=${issuedTokenCount}, after_seq=${input.afterSeq}, latest=${latestSeq})`;
+        }
       }
     }
 
@@ -584,30 +682,130 @@ export class MemoryStore {
       }
     }
 
-    const allMessages = this.getMessages(input.threadId, input.afterSeq);
-    let messages = allMessages;
-    
-    // Support forAgent filtering (Python handle_msg_wait _poll logic)
-    if (input.forAgent) {
-      messages = allMessages.filter(m => {
-        const meta = m.metadata as any;
-        return meta?.handoff_target === input.forAgent;
-      });
-      // If we filtered out all messages, and it wasn't a fast return,
-      // it should behave as if there are no messages (but we don't have async polling here yet).
-      // For unit tests, if no messages match forAgent, return empty.
+    // Fast return: if wants_sync_only, return immediately
+    if (fastReturn) {
+      const sync = this.issueSyncContext(input.threadId, input.agentId, "msg_wait");
+      return {
+        messages: [],
+        current_seq: sync.current_seq,
+        reply_token: sync.reply_token,
+        reply_window: sync.reply_window,
+        fast_return: fastReturn,
+        fast_return_reason: fastReturnReason
+      };
     }
 
-    const sync = this.issueSyncContext(input.threadId, input.agentId, "msg_wait");
-    
-    return {
-      messages: this.projectMessagesForAgent(messages),
-      current_seq: sync.current_seq,
-      reply_token: sync.reply_token,
-      reply_window: sync.reply_window,
-      fast_return: fastReturn,
-      fast_return_reason: fastReturnReason
-    };
+    // Start polling loop (match Python _poll() function)
+    const startTime = Date.now();
+    const timeout = input.timeoutMs || 300_000;
+    const HEARTBEAT_INTERVAL = 40_000; // 40 seconds, match Python
+    let lastHeartbeat = startTime;
+    let localAfterSeq = input.afterSeq;
+    const eventKey = `thread_${input.threadId}`;
+
+    try {
+      while (true) {
+        // Check for new messages (match Python L1205-1206)
+        const allMessages = this.getMessages(input.threadId, localAfterSeq);
+        let messages = allMessages;
+
+        // Apply for_agent filtering (match Python L1208-1223)
+        if (input.forAgent && messages.length > 0) {
+          messages = messages.filter(m => {
+            const meta = m.metadata as any;
+            return meta?.handoff_target === input.forAgent;
+          });
+        }
+
+        if (messages.length > 0) {
+          // Found messages! Exit wait state and return (match Python L1211-1233)
+          if (input.agentId) {
+            this.exitWaitState(input.threadId, input.agentId);
+            const agent = this.getAgent(input.agentId);
+            if (agent) {
+              agent.last_activity = 'msg_received';
+              agent.last_activity_time = new Date().toISOString();
+              this.upsertAgent(agent);
+            }
+          }
+          
+          const sync = this.issueSyncContext(input.threadId, input.agentId, "msg_wait_result");
+          return {
+            messages: this.projectMessagesForAgent(messages),
+            current_seq: sync.current_seq,
+            reply_token: sync.reply_token,
+            reply_window: sync.reply_window,
+            fast_return: false,
+            fast_return_reason: undefined
+          };
+        }
+
+        // Check if we should exit due to sync-only mode (match Python L1236-1243)
+        // This happens when agent has refresh request or no tokens but caught up
+        if (input.agentId) {
+          const refreshNow = this.getRefreshRequest(input.threadId, input.agentId);
+          if (refreshNow) {
+            this.exitWaitState(input.threadId, input.agentId);
+            const sync = this.issueSyncContext(input.threadId, input.agentId, "sync_only");
+            return {
+              messages: [],
+              current_seq: sync.current_seq,
+              reply_token: sync.reply_token,
+              reply_window: sync.reply_window,
+              fast_return: true,
+              fast_return_reason: refreshNow.reason
+            };
+          }
+        }
+
+        // Heartbeat refresh (match Python L1245-1248)
+        const now = Date.now();
+        if (now - lastHeartbeat >= HEARTBEAT_INTERVAL) {
+          // Refresh heartbeat (update agent activity)
+          if (input.agentId) {
+            const agent = this.getAgent(input.agentId);
+            if (agent) {
+              agent.last_activity = 'msg_wait_heartbeat';
+              agent.last_activity_time = new Date().toISOString();
+              this.upsertAgent(agent);
+            }
+          }
+          lastHeartbeat = now;
+        }
+
+        // Check timeout (match Python L1261)
+        const elapsed = now - startTime;
+        if (elapsed >= timeout) {
+          // Timeout - exit wait state and return empty (match Python L1262-1269)
+          if (input.agentId) {
+            this.exitWaitState(input.threadId, input.agentId);
+          }
+          const sync = this.issueSyncContext(input.threadId, input.agentId, "timeout");
+          return {
+            messages: [],
+            current_seq: sync.current_seq,
+            reply_token: sync.reply_token,
+            reply_window: sync.reply_window,
+            fast_return: false,
+            fast_return_reason: undefined
+          };
+        }
+
+        // Event-driven wake-up using Node.js native once() (similar to Python asyncio.Event)
+        // Wait for thread update event with 1 second timeout
+        const eventKey = `thread_${input.threadId}`;
+        try {
+          await Promise.race([
+            once(this.threadEvents, `update_${eventKey}`),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 1000))
+          ]);
+        } catch (e) {
+          // Timeout is expected, just continue loop
+        }
+      }
+    } finally {
+      // No cleanup needed - EventEmitter handles it automatically
+    }
   }
 
   public projectMessagesForAgent(messages: MessageRecord[], audience: "agent" | "human" = "agent"): MessageRecord[] {
@@ -742,6 +940,11 @@ export class MemoryStore {
     
     this.appendLog(`message posted: ${message.id} seq=${message.seq}`);
     eventBus.emit({ type: "msg.new", payload: message });
+    
+    // Emit thread update event to wake up waiting msg_wait calls
+    const eventKey = `thread_${input.threadId}`;
+    this.threadEvents.emit(`update_${eventKey}`);
+    
     this.insertMessage(message);
     this.persistState();
     return message;
@@ -850,6 +1053,28 @@ export class MemoryStore {
 
   issueSyncContext(threadId: string, agentId?: string, source?: string): SyncContext {
     const currentSeq = this.getLatestSeq(threadId);
+    
+    // Match Python logic: reuse existing issued token if available
+    // Python version reuses tokens on repeated msg_wait timeouts
+    if (agentId) {
+      const existingTokens = Array.from(this.syncTokens.values()).filter((t: ReplyTokenRecord) => 
+        t.threadId === threadId && 
+        t.agentId === agentId && 
+        t.status === "issued"
+      );
+      
+      if (existingTokens.length > 0) {
+        // Reuse the first existing token
+        const existingToken = existingTokens[0];
+        return {
+          current_seq: currentSeq,
+          reply_token: existingToken.token,
+          reply_window: 300
+        };
+      }
+    }
+    
+    // Issue new token only if no existing ones
     const token = randomUUID();
     const issuedAt = Date.now();
     const expiresAt = NON_EXPIRING_TOKEN_TS; // Match Python: tokens never expire (9999-12-31)

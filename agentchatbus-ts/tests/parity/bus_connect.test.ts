@@ -15,6 +15,22 @@ async function callMcpTool(toolName: string, params: Record<string, any>) {
         body: JSON.stringify(params)
     });
     const data = await res.json();
+    
+    // Handle error responses - server may return error directly in data[0]
+    if (!data || !data[0]) {
+        throw new Error(`Empty response from ${toolName}`);
+    }
+    
+    // Check if it's an error response
+    if (data[0].error) {
+        return data[0]; // Return error payload directly
+    }
+    
+    // Normal response - parse text field
+    if (!data[0].text) {
+        throw new Error(`Invalid response from ${toolName}: missing text field`);
+    }
+    
     return JSON.parse(data[0].text);
 }
 
@@ -351,4 +367,440 @@ describe('Bus Connect Parity Tests', () => {
         expect(errPayload.new_messages_1st_read).toBeDefined();
         expect(errPayload.new_messages_1st_read.length).toBeGreaterThanOrEqual(6);
     });
+
+    it('msg_post error invalidate tokens uses validated author when no connection context', async () => {
+        // 对应 Python: L247-331
+        // 1. Initial bus_connect
+        const connectOut = await callMcpTool('bus_connect', {
+            thread_name: "Author Fallback Invalidates",
+            ide: "VS Code",
+            model: "GPT-5.3-Codex"
+        });
+        
+        const threadId = connectOut.thread.thread_id;
+        const agentId = connectOut.agent.agent_id;
+        const agentToken = connectOut.agent.token;
+
+        // 2. Consume initial bus_connect token so agent starts clean
+        await callMcpTool('msg_post', {
+            thread_id: threadId,
+            author: agentId,
+            content: "seed",
+            expected_last_seq: connectOut.current_seq,
+            reply_token: connectOut.reply_token,
+            role: "assistant"
+        });
+
+        // 3. Get fresh token via msg_wait
+        const waitPayload = await callMcpTool('msg_wait', {
+            thread_id: threadId,
+            after_seq: 1,
+            timeout_ms: 1,
+            agent_id: agentId,
+            token: agentToken
+        });
+
+        // 4. Force seq mismatch using stale expected_last_seq
+        try {
+            const errPayload = await callMcpTool('msg_post', {
+                thread_id: threadId,
+                author: agentId,
+                content: "stale post",
+                expected_last_seq: 0, // Stale sequence number
+                reply_token: waitPayload.reply_token,
+                role: "assistant"
+            });
+            
+            // If it succeeded (unexpected), check if it's a SeqMismatchError in the payload
+            if (errPayload.error === "SeqMismatchError") {
+                // Expected error response
+            } else {
+                throw new Error("Expected SeqMismatchError but got success");
+            }
+        } catch (err: any) {
+            // Error might be thrown as HTTP error, check message
+            if (!err.message.includes("SeqMismatchError")) {
+                throw err;
+            }
+        }
+
+        // 5. After invalidation from a failed post, the next msg_wait should quick-return
+        const startTime = Date.now();
+        const waitPayload2 = await callMcpTool('msg_wait', {
+            thread_id: threadId,
+            after_seq: 1,
+            timeout_ms: 120,
+            agent_id: agentId,
+            token: agentToken
+        });
+        const elapsed = Date.now() - startTime;
+
+        // Note: The fast return may include messages, so we just verify it returned quickly
+        expect(elapsed).toBeLessThan(80);
+        expect(waitPayload2.reply_token).toBeDefined();
+    }, 15000);
+
+    it('two agents can chat multiple rounds via bus_connect and msg_wait', async () => {
+        // 对应 Python: L716-880
+        const threadName = "Realistic Multi Agent Chat";
+
+        // Agent A connects first
+        const payloadA = await callMcpTool('bus_connect', {
+            thread_name: threadName,
+            ide: "VS Code",
+            model: "GPT-5.3-Codex"
+        });
+        
+        const threadId = payloadA.thread.thread_id;
+        const agentAId = payloadA.agent.agent_id;
+        const agentAToken = payloadA.agent.token;
+
+        // Agent A posts first message
+        const postA1Payload = await callMcpTool('msg_post', {
+            thread_id: threadId,
+            author: agentAId,
+            content: "A1: hello from agent A",
+            expected_last_seq: payloadA.current_seq,
+            reply_token: payloadA.reply_token,
+            role: "assistant"
+        });
+        
+        expect(postA1Payload.seq).toBe(1);
+
+        // Agent B connects to same thread
+        const payloadB = await callMcpTool('bus_connect', {
+            thread_name: threadName,
+            ide: "VS Code",
+            model: "GPT-5.3-Codex"
+        });
+        
+        const agentBId = payloadB.agent.agent_id;
+        const agentBToken = payloadB.agent.token;
+
+        // Verify Agent B sees the existing thread and message
+        expect(payloadB.thread.thread_id).toBe(threadId);
+        expect(payloadB.messages.some((m: any) => m.content === "A1: hello from agent A")).toBe(true);
+        expect(payloadB.current_seq).toBe(1);
+
+        // Agent B posts reply
+        const postB1Payload = await callMcpTool('msg_post', {
+            thread_id: threadId,
+            author: agentBId,
+            content: "B1: hi A, I joined the thread",
+            expected_last_seq: payloadB.current_seq,
+            reply_token: payloadB.reply_token,
+            role: "assistant"
+        });
+        
+        expect(postB1Payload.seq).toBe(2);
+
+        // Agent A waits for Agent B's message
+        const waitA1Payload = await callMcpTool('msg_wait', {
+            thread_id: threadId,
+            after_seq: 1,
+            timeout_ms: 50,
+            agent_id: agentAId,
+            token: agentAToken
+        });
+        
+        expect(waitA1Payload.messages.map((m: any) => m.content)).toEqual(["B1: hi A, I joined the thread"]);
+        expect(waitA1Payload.current_seq).toBe(2);
+
+        // Agent A posts second message
+        const postA2Payload = await callMcpTool('msg_post', {
+            thread_id: threadId,
+            author: agentAId,
+            content: "A2: let's discuss the patch plan",
+            expected_last_seq: waitA1Payload.current_seq,
+            reply_token: waitA1Payload.reply_token,
+            role: "assistant"
+        });
+        
+        expect(postA2Payload.seq).toBe(3);
+
+        // Agent B waits for Agent A's message
+        const waitB1Payload = await callMcpTool('msg_wait', {
+            thread_id: threadId,
+            after_seq: 2,
+            timeout_ms: 50,
+            agent_id: agentBId,
+            token: agentBToken
+        });
+        
+        expect(waitB1Payload.messages.map((m: any) => m.content)).toEqual(["A2: let's discuss the patch plan"]);
+        expect(waitB1Payload.current_seq).toBe(3);
+
+        // Agent B posts second message
+        const postB2Payload = await callMcpTool('msg_post', {
+            thread_id: threadId,
+            author: agentBId,
+            content: "B2: agreed, I will handle the tests",
+            expected_last_seq: waitB1Payload.current_seq,
+            reply_token: waitB1Payload.reply_token,
+            role: "assistant"
+        });
+        
+        expect(postB2Payload.seq).toBe(4);
+
+        // Agent A waits for Agent B's second message
+        const waitA2Payload = await callMcpTool('msg_wait', {
+            thread_id: threadId,
+            after_seq: 3,
+            timeout_ms: 50,
+            agent_id: agentAId,
+            token: agentAToken
+        });
+        
+        expect(waitA2Payload.messages.map((m: any) => m.content)).toEqual(["B2: agreed, I will handle the tests"]);
+        expect(waitA2Payload.current_seq).toBe(4);
+
+        // Verify complete message history via msg_list
+        const listedRes = await fetch(`${BASE_URL}/api/mcp/tool/msg_list`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                thread_id: threadId,
+                after_seq: 0,
+                limit: 20,
+                include_system_prompt: false
+            })
+        });
+        
+        const listedData = await listedRes.json();
+        // Response might be nested - check if it's {messages: [...]} or direct array
+        const dataArray = Array.isArray(listedData) ? listedData : (listedData.messages || []);
+        
+        // Response is array of {type: "text", text: "..."} from MCP tool
+        const messageTexts = dataArray.map((item: any) => item.text).filter(Boolean);
+        
+        // Parse message format: "[seq] id (role) timestamp\ncontent"
+        const messages: Array<{ content: string; header: string }> = [];
+        for (let i = 0; i < messageTexts.length; i += 2) {
+            const header = messageTexts[i];
+            const content = messageTexts[i + 1] || '';
+            
+            // Extract role from header: "[1] id (assistant) timestamp"
+            const roleMatch = header.match(/\((user|assistant|system)\)/);
+            if (roleMatch && roleMatch[1] === 'assistant') {
+                messages.push({ content, header });
+            }
+        }
+        
+        expect(messages.map(m => m.content)).toEqual([
+            "A1: hello from agent A",
+            "B1: hi A, I joined the thread",
+            "A2: let's discuss the patch plan",
+            "B2: agreed, I will handle the tests"
+        ]);
+    }, 20000);
+
+    it('bus_connect does not make next msg_wait fast return', async () => {
+        // 对应 Python: L190-243
+        const connectOut = await callMcpTool('bus_connect', {
+            thread_name: "Fast Return Once",
+            ide: "VS Code",
+            model: "GPT-5.3-Codex"
+        });
+        
+        const threadId = connectOut.thread.thread_id;
+        const agentId = connectOut.agent.agent_id;
+        const agentToken = connectOut.agent.token;
+
+        // First wait after bus_connect should follow normal waiting semantics
+        const startTime = Date.now();
+        const waitedPayload = await callMcpTool('msg_wait', {
+            thread_id: threadId,
+            after_seq: 0,
+            timeout_ms: 120,
+            agent_id: agentId,
+            token: agentToken
+        });
+        const elapsed = Date.now() - startTime;
+
+        expect(waitedPayload.messages).toHaveLength(0);
+        expect(waitedPayload.reply_token).toBeDefined();
+        expect(waitedPayload.current_seq).toBeDefined();
+        
+        // Should wait at least 80ms (not fast return)
+        expect(elapsed).toBeGreaterThanOrEqual(80);
+
+        // Post message with the new sync context
+        const posted2Payload = await callMcpTool('msg_post', {
+            thread_id: threadId,
+            author: agentId,
+            content: "first message with msg_wait sync context",
+            expected_last_seq: waitedPayload.current_seq,
+            reply_token: waitedPayload.reply_token,
+            role: "assistant"
+        });
+        
+        expect(posted2Payload.seq).toBe(1);
+    }, 15000);
+
+    it('bus_connect with system prompt creates thread with prompt', async () => {
+        // 对应 Python: L972-997
+        const args = {
+            thread_name: "Thread With Custom Prompt",
+            ide: "TestIDE",
+            model: "TestModel",
+            system_prompt: "You are a code reviewer. Focus on security issues."
+        };
+
+        const result = await callMcpTool('bus_connect', args);
+        
+        expect(result.thread.created).toBe(true);
+        expect(result.thread.system_prompt).toBe("You are a code reviewer. Focus on security issues.");
+    }, 10000);
+
+    it('bus_connect system prompt ignored when joining existing thread', async () => {
+        // 对应 Python: L1000-1027
+        // First connect creates thread with system prompt
+        const result1 = await callMcpTool('bus_connect', {
+            thread_name: "Pre-Existing Thread",
+            ide: "TestIDE",
+            model: "TestModel",
+            system_prompt: "Original prompt"
+        });
+        
+        expect(result1.thread.created).toBe(true);
+        expect(result1.thread.system_prompt).toBe("Original prompt");
+
+        // Second connect joins existing thread - system prompt should be ignored
+        const result2 = await callMcpTool('bus_connect', {
+            thread_name: "Pre-Existing Thread",
+            ide: "TestIDE",
+            model: "TestModel",
+            system_prompt: "Attempted override prompt"
+        });
+        
+        expect(result2.thread.created).toBe(false);
+        // System prompt should NOT be in response when joining existing thread
+        expect(result2.thread.system_prompt).toBeUndefined();
+    }, 10000);
+
+    it('bus_connect system prompt reflected in response', async () => {
+        // 对应 Python: L1066-1098
+        // First connect creates thread
+        const result1 = await callMcpTool('bus_connect', {
+            thread_name: "Thread With Prompt In Response",
+            ide: "TestIDE",
+            model: "TestModel",
+            system_prompt: "Review all changes for accessibility compliance."
+        });
+        
+        expect(result1.thread.created).toBe(true);
+        expect(result1.thread.system_prompt).toBe("Review all changes for accessibility compliance.");
+
+        // Second connect joins existing thread - system_prompt should NOT be in response
+        const result2 = await callMcpTool('bus_connect', {
+            thread_name: "Thread With Prompt In Response",
+            ide: "TestIDE2",
+            model: "TestModel2"
+        });
+        
+        expect(result2.thread.created).toBe(false);
+        expect(result2.thread.system_prompt).toBeUndefined();
+    }, 10000);
+
+    it('msg_post invalid token does not claim new messages arrived', async () => {
+        // 对应 Python: L587-614
+        const threadResult = await callMcpTool('bus_connect', {
+            thread_name: "Invalid Token Guidance",
+            ide: "VS Code",
+            model: "GPT-5.3-Codex"
+        });
+        
+        const threadId = threadResult.thread.thread_id;
+
+        // Try to post with invalid token
+        const errPayload = await callMcpTool('msg_post', {
+            thread_id: threadId,
+            author: "human",
+            content: "post with bad token",
+            expected_last_seq: 0,
+            reply_token: "not-a-real-token",
+            role: "user"
+        });
+
+        expect(errPayload.error).toBe("ReplyTokenInvalidError");
+        expect(errPayload.action).toBe("CALL_MSG_WAIT");
+        expect(errPayload.REMINDER).toBeDefined();
+        // Should NOT have CRITICAL_REMINDER or new_messages_1st_read
+        expect(errPayload.CRITICAL_REMINDER).toBeUndefined();
+        expect(errPayload.new_messages_1st_read).toBeUndefined();
+    }, 10000);
+
+    it('msg_wait caught up agent waits instead of fast returning', async () => {
+        // 对应 Python: L883-922
+        const threadResult = await callMcpTool('bus_connect', {
+            thread_name: "Caught Up Wait",
+            ide: "VS Code",
+            model: "GPT-5.3-Codex"
+        });
+        
+        const threadId = threadResult.thread.thread_id;
+        const agentId = threadResult.agent.agent_id;
+        const agentToken = threadResult.agent.token;
+
+        // Post seed message
+        await callMcpTool('msg_post', {
+            thread_id: threadId,
+            author: agentId,
+            content: "seed",
+            expected_last_seq: threadResult.current_seq,
+            reply_token: threadResult.reply_token,
+            role: "assistant"
+        });
+
+        // Wait with after_seq=1 (caught up) - should wait normally, not fast return
+        const startTime = Date.now();
+        const payload = await callMcpTool('msg_wait', {
+            thread_id: threadId,
+            after_seq: 1,
+            timeout_ms: 120,
+            agent_id: agentId,
+            token: agentToken
+        });
+        const elapsed = Date.now() - startTime;
+
+        expect(payload.messages).toHaveLength(0);
+        expect(payload.reply_token).toBeDefined();
+        
+        // Should wait at least 80ms (not fast return)
+        expect(elapsed).toBeGreaterThanOrEqual(80);
+    }, 15000);
+
+    it('repeated msg_wait timeouts reuse single token', async () => {
+        // 对应 Python: L925-969
+        const threadResult = await callMcpTool('bus_connect', {
+            thread_name: "Stable Wait Token",
+            ide: "VS Code",
+            model: "GPT-5.3-Codex"
+        });
+        
+        const threadId = threadResult.thread.thread_id;
+        const agentId = threadResult.agent.agent_id;
+        const agentToken = threadResult.agent.token;
+
+        // First msg_wait timeout
+        const firstPayload = await callMcpTool('msg_wait', {
+            thread_id: threadId,
+            after_seq: 0,
+            timeout_ms: 60,
+            agent_id: agentId,
+            token: agentToken
+        });
+
+        // Second msg_wait timeout
+        const secondPayload = await callMcpTool('msg_wait', {
+            thread_id: threadId,
+            after_seq: 0,
+            timeout_ms: 60,
+            agent_id: agentId,
+            token: agentToken
+        });
+
+        // Should reuse the same token
+        expect(secondPayload.reply_token).toBe(firstPayload.reply_token);
+    }, 10000);
 });

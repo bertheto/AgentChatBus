@@ -28,7 +28,11 @@ export class SeqMismatchError extends BusError {
 
 export class ReplyTokenInvalidError extends BusError {
   constructor(public token?: string) {
-    super("TOKEN_INVALID");
+    super("TOKEN_INVALID", {
+      error: "ReplyTokenInvalidError",
+      action: "CALL_MSG_WAIT",
+      REMINDER: "You must call msg_wait to get a valid reply_token before posting."
+    });
     this.name = "ReplyTokenInvalidError";
     Object.setPrototypeOf(this, ReplyTokenInvalidError.prototype);
   }

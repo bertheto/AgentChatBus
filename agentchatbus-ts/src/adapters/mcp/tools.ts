@@ -546,7 +546,7 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
 
       try {
         // Delegate to MemoryStore.waitForMessages which records wait states
-        const result = getStore().waitForMessages({ threadId, afterSeq, agentId, timeoutMs });
+        const result = await getStore().waitForMessages({ threadId, afterSeq, agentId, timeoutMs });
         return [{ type: "text", text: JSON.stringify(result) }];
       } catch (err) {
         return [{ type: "text", text: JSON.stringify({ error: (err as Error).message }) }];
