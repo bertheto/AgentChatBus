@@ -1,16 +1,20 @@
 # agentchatbus-ts
 
-Initial TypeScript backend workspace for AgentChatBus.
+TypeScript backend implementation of AgentChatBus.
 
-Current stage:
+## Contents
 
-- bootstraps a runnable CLI
-- provides a minimal HTTP compatibility shell
-- keeps directory boundaries aligned with the migration design draft
+- `src/` - Source code
+  - `core/` - Core business logic and services
+  - `adapters/mcp/` - MCP protocol implementation
+  - `transports/` - HTTP and stdio transports
+- `tests/` - Test suite (Vitest)
+- `dist/` - Compiled output
 
-Planned modes:
+## Usage
 
-- `agentchatbus serve`
-- `agentchatbus stdio`
-
-This workspace is intended to evolve toward semantic compatibility with the Python backend while preserving user-visible behavior as much as possible.
+```bash
+npm run build    # Compile TypeScript
+npm run dev      # Start development server
+npm test         # Run tests
+```

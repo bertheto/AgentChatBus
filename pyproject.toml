@@ -58,11 +58,12 @@ include = ["src*", "agentchatbus*"]
 
 [tool.setuptools.package-data]
 src = [
-  "static/*.html",
-  "static/*.png",
-  "static/css/*.css",
-  "static/js/*.js",
-  "static/js/components/*.js",
+  "../web-ui/*.html",
+  "../web-ui/*.png",
+  "../web-ui/css/*.css",
+  "../web-ui/js/*.js",
+  "../web-ui/js/components/*.js",
+  "../web-ui/js/vendor/*.js",
 ]
 
 [tool.pytest.ini_options]

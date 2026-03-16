@@ -52,7 +52,7 @@ export function createHttpServer() {
   }
   void fastify.register(multipart);
 
-  const staticPath = join(__dirname, "../../static");
+  const staticPath = join(__dirname, "../../../../web-ui");
   void fastify.register(fastifyStatic, {
     root: staticPath,
     prefix: "/static/",

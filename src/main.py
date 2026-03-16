@@ -170,7 +170,7 @@ def _agent_label(agent: object | None, fallback_id: str | None = None) -> str:
     agent_id = getattr(agent, "id", None)
     return str(display_name or name or agent_id or fallback_id or "Unknown")
 
-STATIC_DIR = Path(__file__).resolve().parent / "static"
+STATIC_DIR = Path(__file__).resolve().parent.parent / "web-ui"
 
 # Database operation timeout (seconds)
 # Support environment variable override via AGENTCHATBUS_DB_TIMEOUT
