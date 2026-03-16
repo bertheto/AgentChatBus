@@ -52,7 +52,10 @@ export interface MessageRecord {
 export interface SyncContext {
   current_seq: number;
   reply_token: string;
-  reply_window: number;
+  reply_window: {
+    expires_at: number;
+    max_new_messages: number;
+  };
 }
 
 export interface IdeSessionState {

@@ -200,36 +200,22 @@ describe('Message Synchronization Unit Tests', () => {
     });
 
     it('seq tolerance within limit', () => {
-        // 对应 Python: L178-209
-        const SEQ_TOLERANCE = 5;
+        // With SEQ_TOLERANCE = 0 (strict mode), ANY mismatch triggers SeqMismatchError
+        // This test verifies that posting with the correct seq succeeds
         const thread = store.createThread("sync-tolerance").thread;
         
         // Get baseline seq
         const baseline = store.issueSyncContext(thread.id, "human", "test");
         const baselineSeq = baseline.current_seq; // Should be 0 after reset
         
-        // Post messages within tolerance (5 messages, so new_count = 5, NOT > 5)
-        for (let i = 0; i < SEQ_TOLERANCE; i++) {
-            const fresh = store.issueSyncContext(thread.id, "human", "test");
-            store.postMessage({
-                threadId: thread.id,
-                author: "human",
-                content: `msg-${i}`,
-                expectedLastSeq: fresh.current_seq,
-                replyToken: fresh.reply_token,
-                role: "assistant"
-            });
-        }
-        
-        // After posting 5 messages, current_seq should be 5
-        // new_messages_count = 5 - 0 = 5, which is NOT > 5, so should succeed
+        // Post a message with correct sync context - should succeed
         const fresh = store.issueSyncContext(thread.id, "human", "test");
         expect(() => {
             store.postMessage({
                 threadId: thread.id,
                 author: "human",
-                content: "at-tolerance-boundary",
-                expectedLastSeq: baselineSeq,
+                content: "at-current-seq",
+                expectedLastSeq: fresh.current_seq, // Using CURRENT seq, not stale
                 replyToken: fresh.reply_token,
                 role: "assistant"
             });

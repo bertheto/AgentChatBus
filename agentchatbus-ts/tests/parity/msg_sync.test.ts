@@ -27,7 +27,40 @@ describe("Message Synchronization Parity Tests (Python vs TS)", () => {
   it("handles sequence tolerance (UP-PARITY)", async () => {
     const thread = await createThread("tolerance-thread");
     
-    // Post 3 messages from system or another source to advance sequence
+    // With SEQ_TOLERANCE = 0 (strict mode), ANY difference in seq triggers SeqMismatchError
+    // Post 1 message from system to advance sequence
+    await server.inject({
+        method: "POST",
+        url: `/api/threads/${thread.id}/messages`,
+        payload: {
+            author: "system",
+            content: "background message",
+            role: "system"
+        }
+    });
+    
+    // Now try to post with the ORIGINAL sync context (seq=0)
+    // SEQ_TOLERANCE = 0 means ANY mismatch is rejected
+    const res = await server.inject({
+        method: "POST",
+        url: `/api/threads/${thread.id}/messages`,
+        payload: {
+            author: "human",
+            content: "user message with old seq",
+            expected_last_seq: 0,
+            reply_token: thread.reply_token
+        }
+    });
+    
+    // Should fail with SeqMismatchError because seq advanced by 1 > SEQ_TOLERANCE (0)
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe("SEQ_MISMATCH");
+  });
+
+  it("rejects when beyond sequence tolerance", async () => {
+    const thread = await createThread("tolerance-fail-thread");
+    
+    // Post 3 messages - ANY difference triggers SeqMismatchError when SEQ_TOLERANCE = 0
     for (let i = 0; i < 3; i++) {
         await server.inject({
             method: "POST",
@@ -40,54 +73,22 @@ describe("Message Synchronization Parity Tests (Python vs TS)", () => {
         });
     }
     
-    // Now try to post with the ORIGINAL sync context (seq=0)
-    // Tolerance is 5, so this should SUCCEED
     const res = await server.inject({
         method: "POST",
         url: `/api/threads/${thread.id}/messages`,
         payload: {
             author: "human",
-            content: "user message with old seq",
+            content: "user message with stale seq",
             expected_last_seq: 0,
             reply_token: thread.reply_token
         }
     });
     
-    expect(res.statusCode).toBe(201);
-    expect(res.json().content).toBe("user message with old seq");
-  });
-
-  it("rejects when beyond sequence tolerance", async () => {
-    const thread = await createThread("tolerance-fail-thread");
-    
-    // Post 6 messages to exceed tolerance of 5
-    for (let i = 0; i < 6; i++) {
-        await server.inject({
-            method: "POST",
-            url: `/api/threads/${thread.id}/messages`,
-            payload: {
-                author: "system",
-                content: `background ${i}`,
-                role: "system"
-            }
-        });
-    }
-    
-    const res = await server.inject({
-        method: "POST",
-        url: `/api/threads/${thread.id}/messages`,
-        payload: {
-            author: "human",
-            content: "user message with way too old seq",
-            expected_last_seq: 0,
-            reply_token: thread.reply_token
-        }
-    });
-    
+    // Should fail with SeqMismatchError because seq advanced by 3 > SEQ_TOLERANCE (0)
     expect(res.statusCode).toBe(409);
     const body = res.json();
     expect(body.error || body.detail?.error).toBe("SEQ_MISMATCH");
-    expect(body.current_seq || body.detail?.current_seq).toBe(6);
+    expect(body.current_seq || body.detail?.current_seq).toBe(3);
   });
 
   it("returns naked array for /api/agents (frontend parity)", async () => {

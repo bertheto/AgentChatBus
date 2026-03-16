@@ -445,7 +445,7 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
       }
 
       if (returnFormat === "blocks") {
-        // Return as MCP content blocks
+        // Return as MCP content blocks (match Python: directly return blocks array)
         const blocks: any[] = [];
         for (const msg of messages) {
           blocks.push({
@@ -474,7 +474,8 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
             }
           }
         }
-        return { messages: blocks };
+        // Match Python: return blocks directly, not wrapped in { messages: blocks }
+        return blocks;
       } else {
         // Return as JSON
         return {
@@ -662,7 +663,8 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
         agent_id: agent.id,
         name: agent.name,
         display_name: agent.display_name,
-        alias_source: (agent as any).alias_source || "user",
+        // Match Python: use stored value, default to "auto" if not set
+        alias_source: (agent as any).alias_source || "auto",
         is_online: agent.is_online,
         last_heartbeat: agent.last_heartbeat,
         last_activity: agent.last_activity,
@@ -847,8 +849,9 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
 
       const payload = {
         agent: {
-          id: agent.id,
           agent_id: agent.id,
+          // Keep id for backward compatibility (tests use connected.agent.id)
+          id: agent.id,
           name: agent.name,
           registered: wasNewAgent,
           token: agent.token,
@@ -856,13 +859,14 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
           role_assignment: roleAssignment
         },
         thread: {
-          id: thread.id,
           thread_id: thread.id,
+          // Keep id for backward compatibility (tests use connected.thread.id)
+          id: thread.id,
           topic: thread.topic,
           status: thread.status,
           created: threadCreated,
           ...(threadCreated && thread.system_prompt ? { system_prompt: thread.system_prompt } : {}),
-          ...(adminId ? { administrator: { id: adminId, agent_id: adminId, name: adminName } } : {})
+          ...(adminId ? { administrator: { agent_id: adminId, name: adminName } } : {})
         },
         messages: getStore().projectMessagesForAgent(messages).map(m => ({
           seq: m.seq,

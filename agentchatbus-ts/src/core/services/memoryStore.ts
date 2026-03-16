@@ -164,7 +164,9 @@ type PersistedState = {
 };
 
 export class MemoryStore {
-  private static readonly SEQ_TOLERANCE = 5;
+  // SEQ_TOLERANCE: 默认 0 (严格模式)，匹配 Python config.py 默认值
+  // Python: SEQ_TOLERANCE = int(os.getenv("AGENTCHATBUS_SEQ_TOLERANCE", "0"))
+  private static readonly SEQ_TOLERANCE = 0;
   private readonly startTime = Date.now();
   private sequence = 0;
   private readonly threads = new Map<string, ThreadRecord>();
@@ -646,6 +648,8 @@ export class MemoryStore {
 
     const latestSeq = this.getLatestSeq(input.threadId);
     
+    console.log(`[DEBUG] waitForMessages called: threadId=${input.threadId}, agentId=${input.agentId}, afterSeq=${input.afterSeq}, latestSeq=${latestSeq}`);
+    
     let fastReturn = false;
     let fastReturnReason: string | undefined;
     
@@ -677,6 +681,7 @@ export class MemoryStore {
 
     this.pruneExpiredWaitStates(input.threadId);
     if (!fastReturn && input.agentId) {
+      console.log(`[DEBUG] Entering wait state for thread=${input.threadId}, agent=${input.agentId}`);
       this.enterWaitState(input.threadId, input.agentId, input.timeoutMs || 300_000);
       // Update agent activity to msg_wait
       const agent = this.getAgent(input.agentId);
@@ -684,7 +689,10 @@ export class MemoryStore {
         agent.last_activity = 'msg_wait';
         agent.last_activity_time = new Date().toISOString();
         this.upsertAgent(agent);
+        console.log(`[DEBUG] Agent ${input.agentId} activity set to msg_wait`);
       }
+    } else {
+      console.log(`[DEBUG] NOT entering wait state: fastReturn=${fastReturn}, agentId=${input.agentId}`);
     }
 
     // Start polling loop (match Python _poll() function)
@@ -879,6 +887,8 @@ export class MemoryStore {
     // Strict Sync Logic (UP-14/15/16)
     if (input.expectedLastSeq !== undefined || input.replyToken !== undefined) {
       if (input.expectedLastSeq === undefined || input.replyToken === undefined) {
+        // Match Python: set refresh_request for all sync errors
+        if (agent) this.setRefreshRequest(thread.id, agent.id, "MISSING_SYNC_FIELDS");
         throw new MissingSyncFieldsError(input.expectedLastSeq === undefined ? ["expected_last_seq"] : ["reply_token"]);
       }
 
@@ -1093,7 +1103,10 @@ export class MemoryStore {
         return {
           current_seq: currentSeq,
           reply_token: existingToken.token,
-          reply_window: 300
+          reply_window: {
+            expires_at: existingToken.expiresAt,
+            max_new_messages: MemoryStore.SEQ_TOLERANCE
+          }
         };
       }
     }
@@ -1120,18 +1133,28 @@ export class MemoryStore {
     return {
       current_seq: currentSeq,
       reply_token: token,
-      reply_window: 300
+      reply_window: {
+        expires_at: expiresAt,
+        max_new_messages: MemoryStore.SEQ_TOLERANCE
+      }
     };
   }
 
   registerAgent(input: { ide: string; model: string; description?: string; capabilities?: string[]; display_name?: string; skills?: unknown[] }): AgentRecord {
     const agentId = randomUUID();
+    const name = `${input.ide} (${input.model})`;
+    
+    // Match Python crud.py L1702-1703:
+    // clean_display_name = (display_name or "").strip() or name
+    // alias_source = "user" if (display_name or "").strip() else "auto"
+    const cleanDisplayName = (input.display_name || "").trim() || name;
+    const aliasSource = (input.display_name || "").trim() ? "user" : "auto";
+    
     const agent: AgentRecord = {
       id: agentId,
-      name: `${input.ide} (${input.model})`,
-      display_name: input.display_name,
-      // 移植自：Python test_agent_registry.py L39 - alias_source 设置为 'user'
-      alias_source: input.display_name ? 'user' : undefined,
+      name: name,
+      display_name: cleanDisplayName,
+      alias_source: aliasSource,
       ide: input.ide,
       model: input.model,
       description: input.description,
@@ -1705,6 +1728,24 @@ export class MemoryStore {
       this.replaceThreadWaitStates(threadId);
       this.persistState();
     }
+  }
+
+  getWaitingAgentsForThread(threadId: string): AgentRecord[] {
+    // Match Python main.py L990-1002: return agents that are
+    // is_online and last_activity === "msg_wait"
+    const waits = this.threadWaitStates.get(threadId);
+    if (!waits || waits.size === 0) {
+      return [];
+    }
+    
+    const waitingAgents: AgentRecord[] = [];
+    for (const [agentId] of waits.entries()) {
+      const agent = this.agents.get(agentId);
+      if (agent && agent.is_online && agent.last_activity === "msg_wait") {
+        waitingAgents.push(agent);
+      }
+    }
+    return waitingAgents;
   }
 
   private pruneExpiredWaitStates(threadId: string): void {

@@ -163,8 +163,22 @@ export function createHttpServer() {
     if (query.status) {
       threads = threads.filter((thread) => thread.status === query.status);
     }
+    
+    // Add waiting_agents for each thread (match Python main.py L990-1002)
+    const threadsWithWaitingAgents = threads.map(thread => {
+      const waitingAgents = store.getWaitingAgentsForThread(thread.id);
+      return {
+        ...thread,
+        waiting_agents: waitingAgents.map(agent => ({
+          id: agent.id,
+          display_name: agent.display_name || agent.name,
+          emoji: agent.emoji || "🤖"
+        }))
+      };
+    });
+    
     return {
-      threads,
+      threads: threadsWithWaitingAgents,
       total: threads.length,
       has_more: false,
       next_cursor: null
