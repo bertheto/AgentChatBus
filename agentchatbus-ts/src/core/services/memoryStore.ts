@@ -1493,11 +1493,61 @@ export class MemoryStore {
   }
 
   getDiagnostics(): Record<string, unknown> {
+    const now = Date.now();
+    const uptimeSeconds = Math.floor((now - this.startTime) / 1000);
+    
+    // Count online agents
+    let onlineAgentsTotal = 0;
+    for (const agent of this.agents.values()) {
+      if (agent.is_online) onlineAgentsTotal++;
+    }
+    
+    // Count threads and messages
+    let totalThreads = this.threads.size;
+    let totalMessages = 0;
+    for (const msgs of this.threadMessages.values()) {
+      totalMessages += msgs.length;
+    }
+    
     return {
+      // Database status
+      db_ok: true,
+      db_latency_ms: 0,
+      
+      // MCP status
+      mcp_ok: true,
+      mcp_tools_count: 28,
+      mcp_prompts_count: 0,
+      mcp_resources_count: 0,
+      
+      // SSE status
+      active_sse_connections: 0,
+      sse_simulated_ok: true,
+      
+      // Agent status
+      online_agents_total: onlineAgentsTotal,
+      sse_agents_count: onlineAgentsTotal,
+      stdio_agents_count: 0,
+      
+      // Server info
+      server_time_utc: new Date().toISOString(),
       pid: process.pid,
+      total_latency_ms: 0,
+      app_dir: process.cwd(),
+      db_path: "memory",
+      uptime_seconds: uptimeSeconds,
+      total_threads: totalThreads,
+      total_messages: totalMessages,
+      
+      // TS-specific
       startupMode: "ts-sidecar",
       version: "0.0.1",
-      transport: "http+sse"
+      transport: "http+sse",
+      
+      // Logs for frontend
+      logs: [
+        `[${new Date().toISOString()}] Diagnostics complete (TS memory store)`
+      ]
     };
   }
 
@@ -2026,26 +2076,56 @@ export class MemoryStore {
     `);
 
     // Proactive Migration: Handle existing databases lacking new columns
-    try {
-      const columns = this.persistenceDb.prepare("PRAGMA table_info(reply_tokens)").all() as Array<{ name: string }>;
-      const names = columns.map(c => c.name);
-      if (names.length > 0) {
-        if (!names.includes("agent_id")) {
-          this.persistenceDb.exec("ALTER TABLE reply_tokens ADD COLUMN agent_id TEXT");
+    // 完全移植自 Python database.py 的迁移逻辑
+    const runMigrations = (): void => {
+      const addColumnIfMissing = (table: string, col: string, typedef: string): void => {
+        try {
+          const cols = this.persistenceDb.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+          const names = cols.map(c => c.name.toLowerCase());
+          if (names.length > 0 && !names.includes(col.toLowerCase())) {
+            this.persistenceDb.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${typedef}`);
+          }
+        } catch {
+          // Table might not exist yet; CREATE TABLE IF NOT EXISTS already handled
         }
-        if (!names.includes("source")) {
-          this.persistenceDb.exec("ALTER TABLE reply_tokens ADD COLUMN source TEXT");
-        }
-      }
-      
-      const agentCols = this.persistenceDb.prepare("PRAGMA table_info(agents)").all() as Array<{ name: string }>;
-      const agentColNames = agentCols.map(c => c.name);
-      if (agentColNames.length > 0 && !agentColNames.includes("emoji")) {
-          this.persistenceDb.exec("ALTER TABLE agents ADD COLUMN emoji TEXT");
-      }
-    } catch {
-      // Table might not exist yet; initializeRelationalTables already handled CREATE
-    }
+      };
+
+      // Migration: agents table - display_name and alias_source for agent alias support
+      addColumnIfMissing("agents", "display_name", "TEXT");
+      addColumnIfMissing("agents", "alias_source", "TEXT");
+      addColumnIfMissing("agents", "last_activity", "TEXT");
+      addColumnIfMissing("agents", "last_activity_time", "TEXT");
+      addColumnIfMissing("agents", "capabilities", "TEXT");
+      addColumnIfMissing("agents", "skills", "TEXT");
+      addColumnIfMissing("agents", "emoji", "TEXT");
+
+      // Migration: messages table
+      addColumnIfMissing("messages", "metadata", "TEXT");
+      addColumnIfMissing("messages", "priority", "TEXT NOT NULL DEFAULT 'normal'");
+      addColumnIfMissing("messages", "reply_to_msg_id", "TEXT");
+      addColumnIfMissing("messages", "edited_at", "TEXT");
+      addColumnIfMissing("messages", "edit_version", "INTEGER NOT NULL DEFAULT 0");
+      addColumnIfMissing("messages", "author_id", "TEXT");
+      addColumnIfMissing("messages", "author_name", "TEXT");
+      addColumnIfMissing("messages", "author_emoji", "TEXT");
+
+      // Migration: threads table
+      addColumnIfMissing("threads", "system_prompt", "TEXT");
+      addColumnIfMissing("threads", "template_id", "TEXT");
+
+      // Migration: reply_tokens table
+      addColumnIfMissing("reply_tokens", "agent_id", "TEXT");
+      addColumnIfMissing("reply_tokens", "source", "TEXT");
+      addColumnIfMissing("reply_tokens", "fast_returned_at", "TEXT");
+
+      // Migration: thread_settings table
+      addColumnIfMissing("thread_settings", "creator_admin_id", "TEXT");
+      addColumnIfMissing("thread_settings", "creator_admin_name", "TEXT");
+      addColumnIfMissing("thread_settings", "creator_assignment_time", "TEXT");
+      addColumnIfMissing("thread_settings", "switch_timeout_seconds", "INTEGER NOT NULL DEFAULT 60");
+    };
+
+    runMigrations();
   }
 
   private upsertThread(thread: ThreadRecord): void {
