@@ -256,7 +256,8 @@ describe("HTTP compatibility shell", () => {
             thread_id: connected.thread.id,
             after_seq: connected.current_seq,  // Use current_seq to check if agent is behind
             agent_id: connected.agent.id,
-            timeout_ms: 1000
+            timeout_ms: 1000,
+            return_format: "json"  // Match Python: use json format for test assertions
           }
         }
       }

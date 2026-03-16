@@ -798,7 +798,38 @@ export class MemoryStore {
           if (input.agentId) {
             this.exitWaitState(input.threadId, input.agentId);
           }
-          const sync = this.issueSyncContext(input.threadId, input.agentId, "timeout");
+          
+          // Match Python L1274-1291: Try to reuse existing token if no messages and seq unchanged
+          const currentSeqAfterWait = this.getLatestSeq(input.threadId);
+          let sync: SyncContext;
+          
+          if (input.agentId && currentSeqAfterWait === latestSeq) {
+            // Try to get latest issued token for reuse
+            const latestToken = this.getLatestIssuedToken(input.threadId, input.agentId);
+            if (latestToken) {
+              // Reuse existing token, invalidate others
+              this.invalidateReplyTokensForAgentExcept(input.threadId, input.agentId, latestToken.token);
+              sync = {
+                current_seq: currentSeqAfterWait,
+                reply_token: latestToken.token,
+                reply_window: {
+                  expires_at: latestToken.expiresAt,
+                  max_new_messages: 0
+                }
+              };
+            } else {
+              // No existing token, issue new one
+              this.invalidateReplyTokensForAgent(input.threadId, input.agentId);
+              sync = this.issueSyncContext(input.threadId, input.agentId, "timeout");
+            }
+          } else {
+            // Seq changed or no agentId, issue new token
+            if (input.agentId) {
+              this.invalidateReplyTokensForAgent(input.threadId, input.agentId);
+            }
+            sync = this.issueSyncContext(input.threadId, input.agentId, "timeout");
+          }
+          
           return {
             messages: [],
             current_seq: sync.current_seq,
@@ -1045,6 +1076,46 @@ export class MemoryStore {
       agent_id: String(row.agent_id),
       reaction: String(row.reaction)
     }));
+  }
+
+  /**
+   * Batch-fetch reactions for multiple messages (match Python crud.msg_reactions_bulk)
+   * Returns a map from message_id to array of reactions
+   */
+  getReactionsBulk(messageIds: string[]): Map<string, Array<{ agent_id: string; reaction: string }>> {
+    const result = new Map<string, Array<{ agent_id: string; reaction: string }>>();
+    
+    if (messageIds.length === 0) {
+      return result;
+    }
+    
+    // Initialize with empty arrays
+    for (const id of messageIds) {
+      result.set(id, []);
+    }
+    
+    // Build IN clause with placeholders
+    const placeholders = messageIds.map(() => '?').join(',');
+    const rows = this.persistenceDb.prepare(
+      `
+        SELECT message_id, agent_id, reaction
+        FROM reactions
+        WHERE message_id IN (${placeholders})
+        ORDER BY message_id, reaction ASC, agent_id ASC
+      `
+    ).all(...messageIds) as Array<Record<string, unknown>>;
+    
+    for (const row of rows) {
+      const msgId = String(row.message_id);
+      const reactions = result.get(msgId) || [];
+      reactions.push({
+        agent_id: String(row.agent_id),
+        reaction: String(row.reaction)
+      });
+      result.set(msgId, reactions);
+    }
+    
+    return result;
   }
 
   addReaction(messageId: string, agentId: string, reaction: string): MessageRecord | undefined {

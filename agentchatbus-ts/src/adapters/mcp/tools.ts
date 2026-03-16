@@ -407,12 +407,23 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
         return [{ type: "text", text: JSON.stringify(postPayload) }];
       } catch (error) {
         if (error instanceof SeqMismatchError) {
+          // Match Python dispatch.py L780-796: include CRITICAL_REMINDER
           const detail = {
             error: "SeqMismatchError",
-            action: "READ_MESSAGES_THEN_CALL_MSG_WAIT",
+            detail: `expected_last_seq=${error.expected_last_seq}, current_seq=${error.current_seq}`,
             expected_last_seq: error.expected_last_seq,
             current_seq: error.current_seq,
-            new_messages_1st_read: error.new_messages
+            CRITICAL_REMINDER: (
+              "Your msg_post was rejected! " +
+              "NEW context arrived while you were trying to post. " +
+              "You MUST read the 'new_messages_1st_read' below NOW to understand what changed. " +
+              "Do NOT blindly retry your old message! " +
+              "Next, you MUST call 'msg_wait' to get a fresh reply_token. " +
+              "When you do, you will receive these messages again (2nd read). " +
+              "Only AFTER that, formulate a NEW response."
+            ),
+            new_messages_1st_read: error.new_messages,
+            action: "READ_MESSAGES_THEN_CALL_MSG_WAIT"
           };
           return [{ type: "text", text: JSON.stringify(detail) }];
         }
@@ -443,6 +454,10 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
       if (limit > 0 && messages.length > limit) {
         messages = messages.slice(0, limit);
       }
+
+      // Batch-fetch reactions for all real message IDs (match Python dispatch.py L861)
+      const realIds = messages.filter(m => !m.id.startsWith("sys-")).map(m => m.id);
+      const reactionsMap = getStore().getReactionsBulk(realIds);
 
       if (returnFormat === "blocks") {
         // Return as MCP content blocks (match Python: directly return blocks array)
@@ -477,7 +492,7 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
         // Match Python: return blocks directly, not wrapped in { messages: blocks }
         return blocks;
       } else {
-        // Return as JSON
+        // Return as JSON with reactions from bulk fetch (match Python dispatch.py L871-884)
         return {
           messages: messages.map(m => ({
             msg_id: m.id,
@@ -491,7 +506,7 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
             created_at: m.created_at,
             metadata: m.metadata,
             reply_to_msg_id: m.reply_to_msg_id,
-            reactions: m.reactions || [],
+            reactions: reactionsMap.get(m.id) || [],
             priority: m.priority
           }))
         };
@@ -536,6 +551,9 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
       const agentId = typeof args.agent_id === "string" ? args.agent_id : undefined;
       const token = typeof args.token === "string" ? args.token : undefined;
       const timeoutMs = typeof args.timeout_ms === "number" ? args.timeout_ms : 300_000;
+      const forAgent = typeof args.for_agent === "string" ? args.for_agent : undefined;
+      const returnFormat = typeof args.return_format === "string" ? args.return_format : "blocks";
+      const includeAttachments = typeof args.include_attachments === "boolean" ? args.include_attachments : true;
 
       // Verify credentials if provided
       if (agentId && token) {
@@ -547,8 +565,72 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
 
       try {
         // Delegate to MemoryStore.waitForMessages which records wait states
-        const result = await getStore().waitForMessages({ threadId, afterSeq, agentId, timeoutMs });
-        return [{ type: "text", text: JSON.stringify(result) }];
+        const result = await getStore().waitForMessages({ 
+          threadId, 
+          afterSeq, 
+          agentId, 
+          timeoutMs,
+          forAgent
+        });
+        
+        // Match Python dispatch.py L1279-1296: support blocks return format
+        if (returnFormat === "blocks") {
+          const blocks: any[] = [];
+          // First block: sync_context (Python L1281-1287)
+          blocks.push({
+            type: "text",
+            text: JSON.stringify({
+              type: "sync_context",
+              current_seq: result.current_seq,
+              reply_token: result.reply_token,
+              reply_window: result.reply_window
+            })
+          });
+          
+          // Add message blocks with metadata header (Python L1288-1291)
+          for (const msg of result.messages) {
+            // Metadata header: [seq] author (role) timestamp
+            blocks.push({
+              type: "text",
+              text: `[${msg.seq}] ${msg.author_name || msg.author} (${msg.role}) ${msg.created_at}`
+            });
+            if (msg.content) {
+              blocks.push({
+                type: "text",
+                text: msg.content
+              });
+            }
+            // Add images/attachments if requested (match Python _message_to_blocks)
+            if (includeAttachments && msg.metadata) {
+              const meta = msg.metadata as any;
+              const attachments = meta.attachments || meta.images || meta.image || [];
+              const attArray = Array.isArray(attachments) ? attachments : [attachments];
+              for (const att of attArray) {
+                if (att && typeof att === 'object' && 'data' in att) {
+                  let imageData = att.data || att.base64;
+                  let mimeType = att.mimeType || att.mime_type || "image/png";
+                  // Handle data URL prefix stripping (Python logic)
+                  if (imageData && imageData.startsWith('data:')) {
+                    const match = imageData.match(/^data:([^;]+);base64,(.*)$/);
+                    if (match) {
+                      mimeType = match[1];
+                      imageData = match[2];
+                    }
+                  }
+                  blocks.push({
+                    type: "image",
+                    data: imageData,
+                    mimeType: mimeType
+                  });
+                }
+              }
+            }
+          }
+          return blocks;
+        } else {
+          // JSON format
+          return [{ type: "text", text: JSON.stringify(result) }];
+        }
       } catch (err) {
         return [{ type: "text", text: JSON.stringify({ error: (err as Error).message }) }];
       }

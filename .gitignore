@@ -34,6 +34,7 @@ bus_test.db
 .idea/
 *.swp
 *.swo
+.lingma
 
 # OS
 .DS_Store

@@ -9,6 +9,11 @@ const BASE_URL = `http://127.0.0.1:${PORT}`;
 
 // Helper function to call MCP tools
 async function callMcpTool(toolName: string, params: Record<string, any>) {
+    // Auto-add return_format: "json" for tools that support it (match Python tests pattern)
+    if (toolName === 'msg_wait' || toolName === 'msg_list') {
+        params = { ...params, return_format: 'json' };
+    }
+    
     const res = await fetch(`${BASE_URL}/api/mcp/tool/${toolName}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -146,7 +151,8 @@ describe('Bus Connect Parity Tests', () => {
                 after_seq: 1,
                 timeout_ms: 100,
                 agent_id: agentId,
-                token: agentToken
+                token: agentToken,
+                return_format: "json"  // Match Python: use json format for test assertions
             })
         });
 
