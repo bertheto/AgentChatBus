@@ -89,8 +89,8 @@ export function createHttpServer() {
     console.log(`[MCP-SSE] POST request: session=${headerSessionId?.slice(0, 8) || 'new'}`);
 
     try {
-      // Get or create transport
-      const { transport, sessionId, isNew } = getOrCreateTransport(headerSessionId);
+      // Get or create transport (async - waits for server to be ready)
+      const { transport, sessionId, isNew } = await getOrCreateTransport(headerSessionId);
       
       // Set session ID header in response
       if (isNew) {
@@ -116,8 +116,8 @@ export function createHttpServer() {
     console.log(`[MCP-SSE] GET request: session=${headerSessionId?.slice(0, 8) || 'new'}`);
 
     try {
-      // Get or create transport
-      const { transport, sessionId, isNew } = getOrCreateTransport(headerSessionId);
+      // Get or create transport (async - waits for server to be ready)
+      const { transport, sessionId, isNew } = await getOrCreateTransport(headerSessionId);
       
       // Set session ID header in response
       if (isNew) {

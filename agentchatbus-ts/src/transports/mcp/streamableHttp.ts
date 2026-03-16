@@ -18,6 +18,7 @@ import { getMemoryStore } from "../http/server.js";
 
 // Store active transports by session ID
 const transports = new Map<string, StreamableHTTPServerTransport>();
+const serverReady = new Map<string, Promise<void>>();
 
 /**
  * Create a new MCP server instance with all handlers configured.
@@ -130,13 +131,19 @@ function createMcpServer(): Server {
 
 /**
  * Get or create a transport for a session.
+ * Returns the transport and a promise that resolves when server is ready.
  */
-export function getOrCreateTransport(sessionId?: string): {
+export async function getOrCreateTransport(sessionId?: string): Promise<{
   transport: StreamableHTTPServerTransport;
   sessionId: string;
   isNew: boolean;
-} {
+}> {
+  // If session exists and server is ready, return it
   if (sessionId && transports.has(sessionId)) {
+    const readyPromise = serverReady.get(sessionId);
+    if (readyPromise) {
+      await readyPromise;
+    }
     return { transport: transports.get(sessionId)!, sessionId, isNew: false };
   }
 
@@ -149,10 +156,15 @@ export function getOrCreateTransport(sessionId?: string): {
 
   // Create and connect MCP server to transport
   const mcpServer = createMcpServer();
-  mcpServer.connect(transport).catch((err) => {
+  const connectPromise = mcpServer.connect(transport).catch((err) => {
     console.error(`[MCP] Failed to connect server to transport: ${err.message}`);
     transports.delete(newSessionId);
+    serverReady.delete(newSessionId);
+    throw err;
   });
+
+  serverReady.set(newSessionId, connectPromise);
+  await connectPromise;
 
   return { transport, sessionId: newSessionId, isNew: true };
 }
@@ -169,6 +181,7 @@ export function getTransport(sessionId: string): StreamableHTTPServerTransport |
  */
 export function deleteTransport(sessionId: string): void {
   transports.delete(sessionId);
+  serverReady.delete(sessionId);
 }
 
 /**
