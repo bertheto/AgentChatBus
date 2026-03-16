@@ -307,14 +307,14 @@ describe("HTTP compatibility shell", () => {
             thread_id: connected.thread.id,
             after_seq: connected.current_seq,
             agent_id: connected.agent.id,
-            timeout_ms: 5000  // Long timeout to allow checking
+            timeout_ms: 2000  // Reasonable timeout
           }
         }
       }
     });
 
     // Give msg_wait time to register the waiting state
-    await new Promise(resolve => setTimeout(resolve, 100));
+    await new Promise(resolve => setTimeout(resolve, 50));
 
     // Check waiting_agents while msg_wait is still running
     const threadsResponse = await server.inject({
