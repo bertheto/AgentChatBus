@@ -173,7 +173,7 @@ describe('Message Synchronization Unit Tests', () => {
         }).not.toThrow();
     });
 
-    it('fast return scenarios', () => {
+    it('fast return scenarios', async () => {
         // 对应 Python: L147-175
         const thread = store.createThread("sync-fast-return").thread;
         
@@ -188,15 +188,14 @@ describe('Message Synchronization Unit Tests', () => {
             role: "assistant"
         });
 
-        // msg_wait with old after_seq should fast return
-        const waitResult = store.waitForMessages({
+        // msg_wait with old after_seq should return messages (agent is behind)
+        const waitResult = await store.waitForMessages({
             threadId: thread.id,
             afterSeq: 0, // Behind current state
             agentId: "human"
         });
 
-        expect(waitResult.fast_return).toBe(true);
-        expect(waitResult.fast_return_reason).toBe("BEHIND");
+        // Should return the message that was posted
         expect(waitResult.messages.length).toBeGreaterThan(0);
     });
 

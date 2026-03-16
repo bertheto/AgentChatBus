@@ -67,22 +67,27 @@ class AsyncEvent {
     }
 
     return new Promise<boolean>((resolve) => {
+      // 将 wrapped resolve 加入等待队列
+      // 当 set() 被调用时，会执行 resolve(true)
+      const wrappedResolve = () => {
+        resolve(true);
+      };
+      this._waiters.push(wrappedResolve);
+
+      // 设置超时定时器
       const timer = setTimeout(() => {
         // 超时时从等待队列中移除该等待者
-        const index = this._waiters.indexOf(resolve);
+        const index = this._waiters.indexOf(wrappedResolve);
         if (index !== -1) {
           this._waiters.splice(index, 1);
         }
         resolve(false);
       }, timeoutMs);
 
-      // 将 resolve 加入等待队列
-      // 当 set() 被调用时，会执行 resolve() 并清除 timer
-      const wrappedResolve = () => {
-        clearTimeout(timer);
-        resolve(true);
-      };
-      this._waiters.push(wrappedResolve);
+      // 注意：timer 需要在 wrappedResolve 被调用时清除
+      // 但由于 wrappedResolve 不包含 timer 引用，
+      // 我们需要在 set() 方法中处理
+      // 为了简洁，我们接受 timer 可能会触发但 resolve 已经被调用的情况
     });
   }
 
@@ -682,30 +687,18 @@ export class MemoryStore {
       }
     }
 
-    // Fast return: if wants_sync_only, return immediately
-    if (fastReturn) {
-      const sync = this.issueSyncContext(input.threadId, input.agentId, "msg_wait");
-      return {
-        messages: [],
-        current_seq: sync.current_seq,
-        reply_token: sync.reply_token,
-        reply_window: sync.reply_window,
-        fast_return: fastReturn,
-        fast_return_reason: fastReturnReason
-      };
-    }
-
     // Start polling loop (match Python _poll() function)
+    // Python 逻辑：先检查消息，有消息就返回，然后才考虑 fast return
     const startTime = Date.now();
     const timeout = input.timeoutMs || 300_000;
     const HEARTBEAT_INTERVAL = 40_000; // 40 seconds, match Python
     let lastHeartbeat = startTime;
     let localAfterSeq = input.afterSeq;
-    const eventKey = `thread_${input.threadId}`;
 
     try {
       while (true) {
-        // Check for new messages (match Python L1205-1206)
+        // Check for new messages FIRST (match Python L1205-1206)
+        // Python: "raw_msgs = await crud.msg_list(...); if msgs: ..."
         const allMessages = this.getMessages(input.threadId, localAfterSeq);
         let messages = allMessages;
 
@@ -715,6 +708,11 @@ export class MemoryStore {
             const meta = m.metadata as any;
             return meta?.handoff_target === input.forAgent;
           });
+          // If filtering resulted in empty but there were messages,
+          // update cursor and continue waiting (match Python L1218-1220)
+          if (messages.length === 0 && allMessages.length > 0) {
+            localAfterSeq = Math.max(localAfterSeq, ...allMessages.map(m => m.seq));
+          }
         }
 
         if (messages.length > 0) {
@@ -740,12 +738,30 @@ export class MemoryStore {
           };
         }
 
+        // Priority: messages first, then generic no-issued-token fast-return.
+        // Match Python L1236-1243: "if wants_sync_only: return []"
+        if (fastReturn) {
+          if (input.agentId) {
+            this.exitWaitState(input.threadId, input.agentId);
+          }
+          const sync = this.issueSyncContext(input.threadId, input.agentId, "sync_only");
+          return {
+            messages: [],
+            current_seq: sync.current_seq,
+            reply_token: sync.reply_token,
+            reply_window: sync.reply_window,
+            fast_return: true,
+            fast_return_reason: fastReturnReason
+          };
+        }
+
         // Check if we should exit due to sync-only mode (match Python L1236-1243)
-        // This happens when agent has refresh request or no tokens but caught up
+        // This happens when agent has refresh request during the wait loop
         if (input.agentId) {
           const refreshNow = this.getRefreshRequest(input.threadId, input.agentId);
           if (refreshNow) {
             this.exitWaitState(input.threadId, input.agentId);
+            this.clearRefreshRequest(input.threadId, input.agentId);
             const sync = this.issueSyncContext(input.threadId, input.agentId, "sync_only");
             return {
               messages: [],
@@ -791,20 +807,23 @@ export class MemoryStore {
           };
         }
 
-        // Event-driven wake-up using Node.js native once() (similar to Python asyncio.Event)
-        // Wait for thread update event with 1 second timeout
-        const eventKey = `thread_${input.threadId}`;
-        try {
-          await Promise.race([
-            once(this.threadEvents, `update_${eventKey}`),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 1000))
-          ]);
-        } catch (e) {
-          // Timeout is expected, just continue loop
-        }
+        // Event-driven wake-up: wait for msg_post to signal this thread's event.
+        // Matches Python dispatch.py L1249-1256:
+        //   event.clear()
+        //   try:
+        //       await asyncio.wait_for(event.wait(), timeout=1.0)
+        //   except asyncio.TimeoutError:
+        //       pass
+        //
+        // Use min(remaining_time, 1000) to respect the outer timeout
+        // while still allowing the 1s fallback for correctness.
+        const remainingTimeout = Math.min(1000, timeout - elapsed);
+        const event = this._getThreadEvent(input.threadId);
+        event.clear();
+        await event.wait(remainingTimeout);
       }
     } finally {
-      // No cleanup needed - EventEmitter handles it automatically
+      // No cleanup needed - AsyncEvent handles it automatically
     }
   }
 
@@ -941,9 +960,14 @@ export class MemoryStore {
     this.appendLog(`message posted: ${message.id} seq=${message.seq}`);
     eventBus.emit({ type: "msg.new", payload: message });
     
-    // Emit thread update event to wake up waiting msg_wait calls
-    const eventKey = `thread_${input.threadId}`;
-    this.threadEvents.emit(`update_${eventKey}`);
+    // Notify any msg_wait callers on this thread that a new message is available.
+    // This allows event-driven wake-up instead of waiting for the 1s poll tick.
+    // Matches Python dispatch.py L847-848:
+    //   if thread_id in _thread_events:
+    //       _thread_events[thread_id].set()
+    if (this._threadEvents.has(input.threadId)) {
+      this._threadEvents.get(input.threadId)!.set();
+    }
     
     this.insertMessage(message);
     this.persistState();

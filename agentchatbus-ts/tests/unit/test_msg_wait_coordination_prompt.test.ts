@@ -17,12 +17,12 @@ describe('Message Wait Coordination and Visibility', () => {
         store.reset();
     });
 
-    it('test_msg_wait_no_admin_prompt_when_no_agent_online', () => {
+    it('test_msg_wait_no_admin_prompt_when_no_agent_online', async () => {
         // 对应 Python: L18-38
         /** Do not emit coordination prompts when there are no online agents. */
         const { thread } = store.createThread("msg-wait-no-online");
 
-        const out = store.waitForMessages({
+        const out = await store.waitForMessages({
             threadId: thread.id,
             afterSeq: 0,
             timeoutMs: 1
@@ -32,13 +32,13 @@ describe('Message Wait Coordination and Visibility', () => {
         expect(out).not.toHaveProperty('coordination_prompt');
     });
 
-    it('test_msg_wait_single_online_agent_has_no_dispatch_coordination_prompt', () => {
+    it('test_msg_wait_single_online_agent_has_no_dispatch_coordination_prompt', async () => {
         // 对应 Python: L69-92
         /** Coordinator prompts are now produced by the backend coordinator loop, not dispatch.msg_wait. */
         const { thread } = store.createThread("msg-wait-one-online");
         const agent = store.registerAgent({ ide: "VS Code", model: "GPT-5.3-Codex" });
 
-        const out = store.waitForMessages({
+        const out = await store.waitForMessages({
             threadId: thread.id,
             afterSeq: 0,
             timeoutMs: 50,
@@ -48,7 +48,7 @@ describe('Message Wait Coordination and Visibility', () => {
         expect(out).not.toHaveProperty('coordination_prompt');
     });
 
-    it('test_msg_wait_and_msg_list_project_human_only_system_messages', () => {
+    it('test_msg_wait_and_msg_list_project_human_only_system_messages', async () => {
         // 对应 Python: L95-148
         /** human_only system notices should reach agents only as placeholder content. */
         const { thread } = store.createThread("msg-wait-human-only");
@@ -67,7 +67,7 @@ describe('Message Wait Coordination and Visibility', () => {
             }
         });
 
-        const out = store.waitForMessages({
+        const out = await store.waitForMessages({
             threadId: thread.id,
             afterSeq: 0,
             timeoutMs: 50,
@@ -100,7 +100,7 @@ describe('Message Wait Coordination and Visibility', () => {
         expect(listedPayload[0].content).toBe("[human-only content hidden]");
     });
 
-    it('test_msg_wait_returns_targeted_takeover_instruction_to_agent', () => {
+    it('test_msg_wait_returns_targeted_takeover_instruction_to_agent', async () => {
         // 对应 Python: L151-187
         /** Targeted coordination instructions must stay visible to the intended agent. */
         const { thread } = store.createThread("msg-wait-targeted-takeover");
@@ -118,7 +118,7 @@ describe('Message Wait Coordination and Visibility', () => {
             }
         });
 
-        const out = store.waitForMessages({
+        const out = await store.waitForMessages({
             threadId: thread.id,
             afterSeq: 0,
             timeoutMs: 50,
@@ -151,7 +151,7 @@ describe('Message Wait Coordination and Visibility', () => {
         });
 
         // First sync call
-        store.waitForMessages({
+        await store.waitForMessages({
             threadId: thread.id,
             afterSeq: 0,
             timeoutMs: 1,
@@ -159,7 +159,7 @@ describe('Message Wait Coordination and Visibility', () => {
         });
 
         // Real poll with for_agent
-        const out = store.waitForMessages({
+        const out = await store.waitForMessages({
             threadId: thread.id,
             afterSeq: 0,
             timeoutMs: 20,
@@ -174,12 +174,12 @@ describe('Message Wait Coordination and Visibility', () => {
         expect(waitingAgents).not.toContain(agent.id);
     });
 
-    it('test_msg_wait_timeout_clears_wait_state', () => {
+    it('test_msg_wait_timeout_clears_wait_state', async () => {
         // 对应 Python: L247-273
         const { thread } = store.createThread("msg-wait-timeout-clears-state");
         const agent = store.registerAgent({ ide: "VS Code", model: "GPT-5.3-Codex" });
 
-        const out = store.waitForMessages({
+        const out = await store.waitForMessages({
             threadId: thread.id,
             afterSeq: 0,
             timeoutMs: 20,

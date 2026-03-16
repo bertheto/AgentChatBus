@@ -295,7 +295,8 @@ describe("HTTP compatibility shell", () => {
     expect(connectResult[0].type).toBe("text");
     const connected = JSON.parse(connectResult[0].text);
 
-    await server.inject({
+    // Start msg_wait in background (don't await it) so we can check waiting_agents during the wait
+    const waitPromise = server.inject({
       method: "POST",
       url: "/mcp/messages/",
       payload: {
@@ -306,12 +307,16 @@ describe("HTTP compatibility shell", () => {
             thread_id: connected.thread.id,
             after_seq: connected.current_seq,
             agent_id: connected.agent.id,
-            timeout_ms: 1000
+            timeout_ms: 5000  // Long timeout to allow checking
           }
         }
       }
     });
 
+    // Give msg_wait time to register the waiting state
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    // Check waiting_agents while msg_wait is still running
     const threadsResponse = await server.inject({
       method: "GET",
       url: "/api/threads"
@@ -322,6 +327,8 @@ describe("HTTP compatibility shell", () => {
     expect(Array.isArray(thread.waiting_agents)).toBe(true);
     expect(thread.waiting_agents.length).toBe(1);
 
+    // Wait for the background msg_wait to complete before closing server
+    await waitPromise;
     await server.close();
   });
 
