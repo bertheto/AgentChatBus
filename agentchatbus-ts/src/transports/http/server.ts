@@ -118,43 +118,39 @@ export function createHttpServer() {
     const body = request.body as Record<string, unknown> | undefined;
     try {
       const result = await callTool(params.toolName, body || {});
-      // For certain tools parity tests expect a blocks-style MCP payload
-      if (params.toolName === "bus_connect" || params.toolName === "msg_post" || params.toolName === "msg_wait") {
-        try {
-          // If the tool already returned a blocks-style array, forward it unchanged
-          if (Array.isArray(result)) {
-            return result as unknown;
-          }
-          // Ensure a consistent blocks-style response expected by parity tests
-          // Use a safe stringify that tolerates functions and circular refs
-          const safeStringify = (obj: unknown) => {
-            const seen = new Set();
-            return JSON.stringify(obj, (_key, value) => {
-              if (typeof value === 'function') return undefined;
-              if (typeof value === 'object' && value !== null) {
-                if (seen.has(value)) return undefined;
-                seen.add(value);
-              }
-              return value;
-            });
-          };
-          // Always produce a string payload; if stringify returns falsy, fall back to '{}'
-          let payloadText = safeStringify(result) || "{}";
-          // debug log to help parity tests diagnose response shape in subprocesses
-          try { console.log(`[mcp-rest] ${params.toolName} -> ${String(payloadText).slice(0,200)}`); } catch (e) { }
-          try {
-            // write a copy for debugging when running in a child process
-            writeFileSync("tmp_last_mcp_response.json", String(payloadText), { encoding: "utf8" });
-          } catch (e) {}
-          // Always return a blocks-style array with a text block containing the JSON payload
-          return [ { type: "text", text: payloadText } ];
-        } catch (e) {
-          // If anything unexpected happens here, return a minimal safe text block
-          return [ { type: "text", text: "{}" } ];
+      // All tools should return a blocks-style MCP payload for consistency
+      try {
+        // If the tool already returned a blocks-style array, forward it unchanged
+        if (Array.isArray(result)) {
+          return result as unknown;
         }
+        // Ensure a consistent blocks-style response expected by parity tests
+        // Use a safe stringify that tolerates functions and circular refs
+        const safeStringify = (obj: unknown) => {
+          const seen = new Set();
+          return JSON.stringify(obj, (_key, value) => {
+            if (typeof value === 'function') return undefined;
+            if (typeof value === 'object' && value !== null) {
+              if (seen.has(value)) return undefined;
+              seen.add(value);
+            }
+            return value;
+          });
+        };
+        // Always produce a string payload; if stringify returns falsy, fall back to '{}'
+        let payloadText = safeStringify(result) || "{}";
+        // debug log to help parity tests diagnose response shape in subprocesses
+        try { console.log(`[mcp-rest] ${params.toolName} -> ${String(payloadText).slice(0,200)}`); } catch (e) { }
+        try {
+          // write a copy for debugging when running in a child process
+          writeFileSync("tmp_last_mcp_response.json", String(payloadText), { encoding: "utf8" });
+        } catch (e) {}
+        // Always return a blocks-style array with a text block containing the JSON payload
+        return [ { type: "text", text: payloadText } ];
+      } catch (e) {
+        // If anything unexpected happens here, return a minimal safe text block
+        return [ { type: "text", text: "{}" } ];
       }
-      // Otherwise return the structured result
-      return result;
     } catch (error) {
       reply.code(400);
       return { error: (error as Error).message };

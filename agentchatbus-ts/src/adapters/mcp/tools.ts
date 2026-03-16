@@ -916,6 +916,14 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
       const threadId = typeof args.thread_id === "string" ? args.thread_id : undefined;
       const limit = typeof args.limit === "number" ? args.limit : 50;
 
+      // Helper to check if message is human_only
+      const isHumanOnly = (meta: any): boolean => {
+        if (!meta) return false;
+        const visibility = String(meta.visibility || "").toLowerCase();
+        const audience = String(meta.audience || "").toLowerCase();
+        return visibility === "human_only" || audience === "human";
+      };
+
       let results = getStore().searchMessages(query);
       
       // Filter by thread if provided
@@ -929,15 +937,19 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
       }
 
       return {
-        results: results.map(m => ({
-          msg_id: m.id,
-          thread_id: m.thread_id,
-          seq: m.seq,
-          author: m.author,
-          content: m.content,
-          created_at: m.created_at,
-          snippet: m.content.substring(0, 200) + (m.content.length > 200 ? "..." : "")
-        })),
+        results: results.map(m => {
+          const isHidden = isHumanOnly(m.metadata);
+          const projectedContent = isHidden ? "[human-only content hidden]" : m.content;
+          return {
+            msg_id: m.id,
+            thread_id: m.thread_id,
+            seq: m.seq,
+            author: m.author,
+            content: projectedContent,
+            created_at: m.created_at,
+            snippet: projectedContent.substring(0, 200) + (projectedContent.length > 200 ? "..." : "")
+          };
+        }),
         total: results.length,
         query: query
       };
@@ -975,17 +987,33 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
         return { error: "message_id is required" };
       }
 
-      const message = getStore().getMessage(messageId);
+      let message = getStore().getMessage(messageId);
       if (!message) {
         return { found: false, message_id: messageId };
       }
 
+      // Project human_only content for agent view (match Python dispatch.py L449-461)
+      const isHumanOnly = (meta: any) => {
+        if (!meta) return false;
+        const visibility = String(meta.visibility || "").toLowerCase();
+        const audience = String(meta.audience || "").toLowerCase();
+        return visibility === "human_only" || audience === "human";
+      };
+
+      const isHidden = isHumanOnly(message.metadata);
+      const projectedContent = isHidden ? "[human-only content hidden]" : message.content;
+
       const edits = getStore().getMessageHistory(messageId);
       return {
         message_id: messageId,
-        current_content: message.content,
+        current_content: projectedContent,
         edit_version: message.edit_version || 1,
-        edits: edits
+        edits: edits.map(e => ({
+          version: e.version,
+          old_content: isHidden ? "[human-only content hidden]" : e.old_content,
+          edited_by: e.edited_by,
+          created_at: e.created_at
+        }))
       };
     }
     default:
