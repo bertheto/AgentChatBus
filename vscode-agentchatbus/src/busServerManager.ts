@@ -8,6 +8,12 @@ import { McpLogProvider } from './providers/mcpLogProvider';
 
 type LaunchMode = 'bundled-ts-service' | 'external-service';
 
+const MIN_HOST_NODE_VERSION = {
+    major: 20,
+    minor: 0,
+    patch: 0,
+};
+
 type LaunchSpec = {
     command: string;
     args: string[];
@@ -62,6 +68,7 @@ export class BusServerManager {
     private readonly ideLabel = vscode.env.appName || 'VS Code';
     private readonly extensionRoot: string;
     private readonly globalStoragePath: string;
+    private readonly hostNodeExecutable: string;
     private ideSessionToken: string | null = null;
     private ownerBootToken: string | null = null;
     private ideSessionState: IdeSessionApiState = {
@@ -77,6 +84,7 @@ export class BusServerManager {
     constructor(context: vscode.ExtensionContext) {
         this.extensionRoot = context.extensionPath;
         this.globalStoragePath = context.globalStorageUri.fsPath;
+        this.hostNodeExecutable = process.execPath;
         this.outputChannel = vscode.window.createOutputChannel('AgentChatBus Server');
         void vscode.commands.executeCommand('setContext', 'agentchatbus:serverStopping', false);
     }
@@ -769,6 +777,7 @@ export class BusServerManager {
             platform: process.platform,
             arch: process.arch,
             nodeVersion: process.version,
+            hostNodeExecutable: this.hostNodeExecutable,
             vscodeVersion: vscode.version,
             ide: {
                 instanceId: this.ideInstanceId,
@@ -812,6 +821,7 @@ export class BusServerManager {
     private async resolveBundledLaunchSpec(): Promise<LaunchSpec | null> {
         const serverEntry = path.join(this.extensionRoot, 'resources', 'bundled-server', 'dist', 'cli', 'index.js');
         const webUiDir = path.join(this.extensionRoot, 'resources', 'web-ui');
+        const hostNodeVersionCheck = this.ensureSupportedHostNodeVersion();
 
         if (!fs.existsSync(serverEntry)) {
             this.recordResolutionAttempt(`Bundled TS entrypoint is missing: ${serverEntry}`);
@@ -820,6 +830,12 @@ export class BusServerManager {
 
         if (!fs.existsSync(webUiDir)) {
             this.recordResolutionAttempt(`Bundled web-ui assets are missing: ${webUiDir}`);
+            return null;
+        }
+
+        if (!hostNodeVersionCheck.ok) {
+            this.recordResolutionAttempt(hostNodeVersionCheck.message);
+            this.log(hostNodeVersionCheck.message, 'error');
             return null;
         }
 
@@ -833,9 +849,14 @@ export class BusServerManager {
 
         this.recordResolutionAttempt(`Resolved bundled TS entrypoint: ${serverEntry}`);
         this.recordResolutionAttempt(`Using extension storage for TS runtime data: ${this.globalStoragePath}`);
+        this.recordResolutionAttempt(
+            `Using IDE host Node runtime ${process.version} from ${this.hostNodeExecutable} to launch bundled MCP.`
+        );
 
         return {
-            command: process.execPath,
+            // Intentionally reuse the IDE extension-host Node runtime.
+            // We do not depend on a separately installed system Node.
+            command: this.hostNodeExecutable,
             args: [serverEntry, 'serve'],
             cwd: this.extensionRoot,
             env: {
@@ -849,6 +870,39 @@ export class BusServerManager {
             },
             launchMode: 'bundled-ts-service',
             resolvedBy: 'Bundled agentchatbus-ts runtime packaged with the VS Code extension.',
+        };
+    }
+
+    private ensureSupportedHostNodeVersion(): { ok: boolean; message: string } {
+        const parsed = /^v?(\d+)\.(\d+)\.(\d+)$/.exec(process.version.trim());
+        if (!parsed) {
+            return {
+                ok: false,
+                message: `Unable to parse IDE host Node version '${process.version}'. Bundled MCP requires Node ${MIN_HOST_NODE_VERSION.major}.${MIN_HOST_NODE_VERSION.minor}.${MIN_HOST_NODE_VERSION.patch}+ from the IDE host runtime.`,
+            };
+        }
+
+        const [, majorRaw, minorRaw, patchRaw] = parsed;
+        const major = Number(majorRaw);
+        const minor = Number(minorRaw);
+        const patch = Number(patchRaw);
+        const minimum = MIN_HOST_NODE_VERSION;
+        const supported = (
+            major > minimum.major
+            || (major === minimum.major && minor > minimum.minor)
+            || (major === minimum.major && minor === minimum.minor && patch >= minimum.patch)
+        );
+
+        if (supported) {
+            return {
+                ok: true,
+                message: `IDE host Node version ${process.version} satisfies bundled MCP requirement ${minimum.major}.${minimum.minor}.${minimum.patch}+ .`,
+            };
+        }
+
+        return {
+            ok: false,
+            message: `IDE host Node version ${process.version} is too old for bundled MCP. AgentChatBus requires the IDE host runtime to provide Node ${minimum.major}.${minimum.minor}.${minimum.patch}+ .`,
         };
     }
 

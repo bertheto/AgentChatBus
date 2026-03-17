@@ -108,6 +108,7 @@ export class StatusPanel {
             <h2>💻 Runtime Environment</h2>
             <div><span class="label">Platform:</span> <span class="value">${m.platform} (${m.arch})</span></div>
             <div><span class="label">Node.js:</span> <span class="value">${m.nodeVersion}</span></div>
+            <div><span class="label">Host Node:</span> <span class="value">${m.hostNodeExecutable || 'N/A'}</span></div>
             <div><span class="label">VS Code:</span> <span class="value">${m.vscodeVersion}</span></div>
         </div>
 
