@@ -8,7 +8,7 @@ import { randomUUID } from "node:crypto";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { callTool, listTools } from "../../adapters/mcp/tools.js";
 import { SeqMismatchError, MissingSyncFieldsError, ReplyTokenInvalidError, ReplyTokenExpiredError, ReplyTokenReplayError, BusError } from "../../core/types/errors.js";
-import { getConfig } from "../../core/config/env.js";
+import { getConfig, getConfigDict, saveConfigDict, ADMIN_TOKEN } from "../../core/config/env.js";
 import { MemoryStore, memoryStore } from "../../core/services/memoryStore.js";
 import { registerStore } from "../../core/services/storeSingleton.js";
 import { eventBus } from "../../shared/eventBus.js";
@@ -638,21 +638,136 @@ export function createHttpServer() {
     return { edits: store.getMessageHistory(params.messageId) };
   });
 
-  fastify.get("/api/settings", async () => store.getSettings());
-  fastify.put("/api/settings", async () => ({ ok: true }));
+  // Settings API - Python parity
+  fastify.get("/api/settings", async () => getConfigDict());
+  
+  fastify.put("/api/settings", async (request, reply) => {
+    const body = request.body as Record<string, unknown>;
+    const adminToken = request.headers["x-admin-token"] as string | undefined;
+    
+    // Validate admin token if ADMIN_TOKEN is configured
+    if (ADMIN_TOKEN && adminToken !== ADMIN_TOKEN) {
+      reply.code(401);
+      return { detail: "Invalid admin token" };
+    }
+    
+    // Allowed settings to update (match Python SettingsUpdate model)
+    const allowedKeys = [
+      "HOST", "PORT", 
+      "AGENT_HEARTBEAT_TIMEOUT", 
+      "MSG_WAIT_TIMEOUT", 
+      "REPLY_TOKEN_LEASE_SECONDS",
+      "SEQ_TOLERANCE",
+      "SEQ_MISMATCH_MAX_MESSAGES",
+      "EXPOSE_THREAD_RESOURCES",
+      "ENABLE_HANDOFF_TARGET",
+      "ENABLE_STOP_REASON", 
+      "ENABLE_PRIORITY"
+    ];
+    
+    // Filter to only allowed keys with non-null values
+    const updateData: Record<string, unknown> = {};
+    for (const key of allowedKeys) {
+      if (key in body && body[key] !== undefined && body[key] !== null) {
+        updateData[key] = body[key];
+      }
+    }
+    
+    // Save to config file (matches Python save_config_dict)
+    if (Object.keys(updateData).length > 0) {
+      saveConfigDict(updateData);
+    }
+    
+    return { 
+      ok: true, 
+      message: "Settings saved. Restart the server to apply changes." 
+    };
+  });
 
-  fastify.get("/api/templates", async () => ({ templates: store.getTemplates() }));
-  fastify.get("/api/templates/:templateId", async (_request, reply) => {
-    reply.code(404);
-    return { detail: "Template not found" };
+  // Templates API - Python parity
+  fastify.get("/api/templates", async () => {
+    const templates = store.getTemplates();
+    // Python returns array directly with subset of fields
+    return templates.map(t => ({
+      id: t.id,
+      name: t.name,
+      description: t.description,
+      is_builtin: t.is_builtin,
+      created_at: t.created_at
+    }));
   });
+
+  fastify.get("/api/templates/:templateId", async (request, reply) => {
+    const params = request.params as { templateId: string };
+    const template = store.getTemplate(params.templateId);
+    if (!template) {
+      reply.code(404);
+      return { detail: "Template not found" };
+    }
+    // Python returns full template details
+    return {
+      id: template.id,
+      name: template.name,
+      description: template.description,
+      system_prompt: template.system_prompt,
+      default_metadata: template.default_metadata,
+      is_builtin: template.is_builtin,
+      created_at: template.created_at
+    };
+  });
+
   fastify.post("/api/templates", async (request, reply) => {
-    reply.code(201);
-    return request.body || {};
+    const body = request.body as JsonBody;
+    try {
+      const success = store.createTemplate({
+        id: String(body.id),
+        name: String(body.name),
+        description: body.description ? String(body.description) : undefined,
+        system_prompt: body.system_prompt ? String(body.system_prompt) : undefined,
+        default_metadata: body.default_metadata as Record<string, unknown> | undefined
+      });
+      if (success) {
+        const template = store.getTemplate(String(body.id));
+        reply.code(201);
+        return {
+          id: template!.id,
+          name: template!.name,
+          description: template!.description,
+          is_builtin: template!.is_builtin
+        };
+      }
+      reply.code(500);
+      return { detail: "Failed to create template" };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown error";
+      if (message.includes("already exists")) {
+        reply.code(409);
+        return { detail: message };
+      }
+      reply.code(400);
+      return { detail: message };
+    }
   });
-  fastify.delete("/api/templates/:templateId", async (_request, reply) => {
-    reply.code(204);
-    return reply.send();
+
+  fastify.delete("/api/templates/:templateId", async (request, reply) => {
+    const params = request.params as { templateId: string };
+    try {
+      const deleted = store.deleteTemplate(params.templateId);
+      if (!deleted) {
+        reply.code(404);
+        return { detail: "Template not found" };
+      }
+      reply.code(204);
+      return reply.send();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown error";
+      if (message.includes("built-in")) {
+        reply.code(403);
+        return { detail: message };
+      }
+      reply.code(404);
+      return { detail: message };
+    }
   });
 
   fastify.get("/api/threads/:threadId/settings", async (request, reply) => {
