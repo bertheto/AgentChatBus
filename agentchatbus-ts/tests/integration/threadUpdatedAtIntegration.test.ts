@@ -17,7 +17,7 @@ describe("thread updated_at integration parity", () => {
     }
   });
 
-  it("sets created_at and (future) updated_at on thread create", async () => {
+  it("sets created_at and updated_at on thread create", async () => {
     const server = createHttpServer();
     const res = await server.inject({
       method: "POST",
@@ -27,8 +27,30 @@ describe("thread updated_at integration parity", () => {
     expect(res.statusCode).toBe(201);
     const body = res.json();
     expect(body.created_at).toBeDefined();
-    // When updated_at is implemented in TS schema, assert here:
-    // expect(body.updated_at).toBeDefined();
+    expect(body.updated_at).toBeDefined();
+    // On creation, updated_at should equal created_at
+    expect(body.updated_at).toBe(body.created_at);
+    await server.close();
+  });
+
+  it("returns updated_at in thread list", async () => {
+    const server = createHttpServer();
+    // Create a thread
+    await server.inject({
+      method: "POST",
+      url: "/api/threads",
+      payload: { topic: "list-thread" }
+    });
+
+    const res = await server.inject({
+      method: "GET",
+      url: "/api/threads"
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.threads).toBeInstanceOf(Array);
+    expect(body.threads.length).toBeGreaterThan(0);
+    expect(body.threads[0].updated_at).toBeDefined();
     await server.close();
   });
 });

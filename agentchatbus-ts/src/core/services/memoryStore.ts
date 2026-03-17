@@ -249,7 +249,7 @@ export class MemoryStore {
   getThreads(includeArchived: boolean): ThreadRecord[] {
     const rows = this.persistenceDb.prepare(
       `
-        SELECT id, topic, status, created_at, system_prompt, template_id
+        SELECT id, topic, status, created_at, updated_at, system_prompt, template_id
         FROM threads
         ${includeArchived ? "" : "WHERE status != 'archived'"}
         ORDER BY created_at DESC
@@ -434,11 +434,13 @@ export class MemoryStore {
       checkContentOrThrow(finalSystemPrompt);
     }
 
+    const now = new Date().toISOString();
     const thread: ThreadRecord = {
       id: randomUUID(),
       topic,
       status: "discuss",
-      created_at: new Date().toISOString(),
+      created_at: now,
+      updated_at: now,
       system_prompt: finalSystemPrompt,
       template_id: templateId
     };
@@ -446,7 +448,6 @@ export class MemoryStore {
     this.threadMessages.set(thread.id, []);
     this.threadParticipants.set(thread.id, new Set());
     this.threadWaitStates.set(thread.id, new Map());
-    const now = new Date().toISOString();
     this.threadSettings.set(thread.id, {
       auto_administrator_enabled: true,
       timeout_seconds: 60,
@@ -463,7 +464,7 @@ export class MemoryStore {
 
   getThread(threadId: string): ThreadRecord | undefined {
     const row = this.persistenceDb.prepare(
-      "SELECT id, topic, status, created_at, system_prompt, template_id FROM threads WHERE id = ?"
+      "SELECT id, topic, status, created_at, updated_at, system_prompt, template_id FROM threads WHERE id = ?"
     ).get(threadId) as Record<string, unknown> | undefined;
     return row ? this.rowToThreadRecord(row) : undefined;
   }
@@ -599,7 +600,7 @@ export class MemoryStore {
     // Hard cap at 200
     const effectiveLimit = limit > 0 ? Math.min(limit, 200) : 0;
 
-    let sql = `SELECT id, topic, status, created_at, system_prompt, template_id FROM threads ${where} ORDER BY created_at DESC`;
+    let sql = `SELECT id, topic, status, created_at, updated_at, system_prompt, template_id FROM threads ${where} ORDER BY created_at DESC`;
     
     if (effectiveLimit > 0) {
       sql += ` LIMIT ?`;
@@ -658,6 +659,7 @@ export class MemoryStore {
     }
     this.threads.set(threadId, thread);
     thread.status = status;
+    thread.updated_at = new Date().toISOString();
     this.appendLog(`thread state updated: ${threadId} ${status}`);
     eventBus.emit({ type: "thread.updated", payload: thread });
     this.upsertThread(thread);
@@ -1379,7 +1381,8 @@ export class MemoryStore {
     
     // Update thread activity time (match Python crud.py L1325)
     this.threadSettingsUpdateActivity(input.threadId);
-    
+    this.touchThreadUpdatedAt(input.threadId);
+
     this.insertMessage(message);
     this.persistState();
     return message;
@@ -1976,6 +1979,31 @@ export class MemoryStore {
     this.persistState();
   }
 
+  touchThreadUpdatedAt(threadId: string): void {
+    const thread = this.getThread(threadId);
+    if (!thread) {
+      return;
+    }
+    thread.updated_at = new Date().toISOString();
+    this.threads.set(threadId, thread);
+    this.upsertThread(thread);
+    this.persistState();
+  }
+
+  updateMessageMetadata(messageId: string, metadataPatch: Record<string, unknown>): MessageRecord | undefined {
+    const message = this.getMessage(messageId);
+    if (!message) {
+      return undefined;
+    }
+    message.metadata = {
+      ...(message.metadata || {}),
+      ...metadataPatch
+    };
+    this.insertMessage(message);
+    this.persistState();
+    return message;
+  }
+
   /**
    * Assign an admin to the thread (automatic coordinator selection).
    * Ported from Python crud.py thread_settings_assign_admin.
@@ -2407,11 +2435,13 @@ export class MemoryStore {
   }
 
   private rowToThreadRecord(row: Record<string, unknown>): ThreadRecord {
+    const createdAt = String(row.created_at);
     return {
       id: String(row.id),
       topic: String(row.topic),
       status: row.status as ThreadStatus,
-      created_at: String(row.created_at),
+      created_at: createdAt,
+      updated_at: row.updated_at ? String(row.updated_at) : createdAt,
       system_prompt: row.system_prompt ? String(row.system_prompt) : undefined,
       template_id: row.template_id ? String(row.template_id) : undefined
     };
@@ -2426,7 +2456,7 @@ export class MemoryStore {
 
   private getThreadByTopic(topic: string): ThreadRecord | undefined {
     const row = this.persistenceDb.prepare(
-      "SELECT id, topic, status, created_at, system_prompt, template_id FROM threads WHERE topic = ?"
+      "SELECT id, topic, status, created_at, updated_at, system_prompt, template_id FROM threads WHERE topic = ?"
     ).get(topic) as Record<string, unknown> | undefined;
     return row ? this.rowToThreadRecord(row) : undefined;
   }
@@ -2575,7 +2605,7 @@ export class MemoryStore {
     this.messageEditHistory.clear();
 
     const threads = this.persistenceDb.prepare(
-      "SELECT id, topic, status, created_at, system_prompt, template_id FROM threads"
+      "SELECT id, topic, status, created_at, updated_at, system_prompt, template_id FROM threads"
     ).all() as Array<Record<string, unknown>>;
     for (const row of threads) {
       const thread = this.rowToThreadRecord(row);
@@ -2682,6 +2712,7 @@ export class MemoryStore {
         topic TEXT NOT NULL,
         status TEXT NOT NULL,
         created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
         closed_at TEXT,
         summary TEXT,
         system_prompt TEXT,
@@ -2821,6 +2852,10 @@ export class MemoryStore {
       // Migration: threads table
       addColumnIfMissing("threads", "system_prompt", "TEXT");
       addColumnIfMissing("threads", "template_id", "TEXT");
+      addColumnIfMissing("threads", "updated_at", "TEXT NOT NULL DEFAULT ''");
+      this.persistenceDb.prepare(
+        "UPDATE threads SET updated_at = created_at WHERE updated_at IS NULL OR updated_at = ''"
+      ).run();
 
       // Migration: reply_tokens table
       addColumnIfMissing("reply_tokens", "agent_id", "TEXT");
@@ -2845,18 +2880,20 @@ export class MemoryStore {
   }
 
   private upsertThread(thread: ThreadRecord): void {
+    const updatedAt = thread.updated_at || new Date().toISOString();
     this.persistenceDb.prepare(
       `
-        INSERT INTO threads (id, topic, status, created_at, system_prompt, template_id)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO threads (id, topic, status, created_at, updated_at, system_prompt, template_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           topic = excluded.topic,
           status = excluded.status,
           created_at = excluded.created_at,
+          updated_at = excluded.updated_at,
           system_prompt = excluded.system_prompt,
           template_id = excluded.template_id
       `
-    ).run(thread.id, thread.topic, thread.status, thread.created_at, thread.system_prompt || null, thread.template_id || null);
+    ).run(thread.id, thread.topic, thread.status as string, thread.created_at, updatedAt, thread.system_prompt || null, thread.template_id || null);
   }
 
   private insertMessage(message: MessageRecord): void {
@@ -2926,7 +2963,7 @@ export class MemoryStore {
       // 移植自：Python test_agent_capabilities.py L90
       // skills 为 undefined 时存储 null，不是 '[]'
       agent.skills ? JSON.stringify(agent.skills) : null,
-      agent.token,
+      agent.token || null,
       agent.emoji || null
     );
   }

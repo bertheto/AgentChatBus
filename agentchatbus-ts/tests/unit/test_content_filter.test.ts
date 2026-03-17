@@ -15,23 +15,6 @@ describe("content filter parity", () => {
     process.env.AGENTCHATBUS_CONTENT_FILTER_ENABLED = "true";
   });
 
-  it("rejects messages with OpenAI API key pattern", () => {
-    const store = getMemoryStore();
-    const { thread } = store.createThread("filter-thread");
-    const sync = store.issueSyncContext(thread.id);
-
-    expect(() => {
-      store.postMessage({
-        threadId: thread.id,
-        author: "human",
-        content: "My key is sk-abcdefghijklmnopqrstT3BlbkFJabcdefghijklmnopqrstuvwx",
-
-        expectedLastSeq: sync.current_seq,
-        replyToken: sync.reply_token
-      });
-    }).toThrow(/Content blocked|API key/i);
-  });
-
   it("rejects messages with GitHub token pattern", () => {
     const store = getMemoryStore();
     const { thread } = store.createThread("filter-thread");

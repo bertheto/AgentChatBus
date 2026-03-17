@@ -26,6 +26,7 @@ export interface ThreadRecord {
   topic: string;
   status: ThreadStatus;
   created_at: string;
+  updated_at?: string;
   system_prompt?: string;
   template_id?: string;
   waiting_agents?: Array<{ id: string; display_name?: string; emoji?: string }>;

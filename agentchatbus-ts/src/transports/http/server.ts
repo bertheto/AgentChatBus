@@ -50,6 +50,13 @@ export function createHttpServer() {
   } else {
     store = getMemoryStore();
   }
+
+  const adminDecisionBySource = new Map<string, {
+    action: string;
+    new_admin_id?: string;
+    notified_admin_id?: string;
+  }>();
+
   void fastify.register(multipart);
 
   const staticPath = join(__dirname, "../../../../web-ui");
@@ -275,7 +282,22 @@ export function createHttpServer() {
       reply.code(400);
       return { detail: "topic is required" };
     }
+
+    const creatorAgentId = typeof body.creator_agent_id === "string" ? body.creator_agent_id : undefined;
+    if (creatorAgentId) {
+      const token = String(request.headers["x-agent-token"] || "");
+      if (!token || !store.verifyAgentToken(creatorAgentId, token)) {
+        reply.code(401);
+        return { detail: "Invalid agent_id/token" };
+      }
+    }
+
     const created = store.createThread(topic, typeof body.system_prompt === "string" ? body.system_prompt : undefined);
+    if (creatorAgentId) {
+      const creator = store.getAgent(creatorAgentId);
+      store.setCreatorAdmin(created.thread.id, creatorAgentId, creator?.display_name || creator?.name || creatorAgentId);
+    }
+
     reply.code(201);
     return {
       id: created.thread.id,
@@ -283,6 +305,7 @@ export function createHttpServer() {
       status: created.thread.status,
       system_prompt: created.thread.system_prompt,
       created_at: created.thread.created_at,
+      updated_at: created.thread.updated_at,
       current_seq: created.sync.current_seq,
       reply_token: created.sync.reply_token,
       reply_window: created.sync.reply_window
