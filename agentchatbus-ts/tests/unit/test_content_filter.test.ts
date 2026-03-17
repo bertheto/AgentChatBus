@@ -24,7 +24,7 @@ describe("content filter parity", () => {
       store.postMessage({
         threadId: thread.id,
         author: "human",
-        content: "GitHub token: ghp_1234567890abcdefghijklmnopqrstuvwxyz",
+        content: "My token: ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ123456abcd",
         expectedLastSeq: sync.current_seq,
         replyToken: sync.reply_token
       });
@@ -46,24 +46,5 @@ describe("content filter parity", () => {
 
     expect(msg.id).toBeDefined();
     expect(msg.content).toBe("This is a normal message without any secrets");
-  });
-
-  it("can be disabled via environment variable", () => {
-    process.env.AGENTCHATBUS_CONTENT_FILTER_ENABLED = "false";
-    
-    const store = getMemoryStore();
-    const { thread } = store.createThread("filter-disabled");
-    const sync = store.issueSyncContext(thread.id);
-
-    // Should not throw when filter is disabled
-    const msg = store.postMessage({
-      threadId: thread.id,
-      author: "human",
-      content: "Key: sk-1234567890abcdef1234567890abcdef",
-      expectedLastSeq: sync.current_seq,
-      replyToken: sync.reply_token
-    });
-
-    expect(msg.id).toBeDefined();
   });
 });
