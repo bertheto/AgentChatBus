@@ -265,6 +265,81 @@ describe("HTTP compatibility shell", () => {
     await server.close();
   });
 
+  it("handles MCP resources/list through the HTTP MCP message endpoint", async () => {
+    const server = createHttpServer();
+    const response = await server.inject({
+      method: "POST",
+      url: "/mcp/messages/",
+      payload: {
+        method: "resources/list",
+      }
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(Array.isArray(body.result.resources)).toBe(true);
+    expect(body.result.resources.some((r: { uri: string }) => r.uri === "chat://bus/config")).toBe(true);
+
+    await server.close();
+  });
+
+  it("handles MCP prompts/list and prompts/get through the HTTP MCP message endpoint", async () => {
+    const server = createHttpServer();
+    const listRes = await server.inject({
+      method: "POST",
+      url: "/mcp/messages/",
+      payload: {
+        method: "prompts/list",
+      }
+    });
+
+    expect(listRes.statusCode).toBe(200);
+    const listBody = listRes.json();
+    expect(Array.isArray(listBody.result.prompts)).toBe(true);
+    expect(listBody.result.prompts.some((p: { name: string }) => p.name === "summarize_thread")).toBe(true);
+
+    const getRes = await server.inject({
+      method: "POST",
+      url: "/mcp/messages/",
+      payload: {
+        method: "prompts/get",
+        params: {
+          name: "summarize_thread",
+          arguments: { topic: "t1", transcript: "hello world" }
+        }
+      }
+    });
+
+    expect(getRes.statusCode).toBe(200);
+    const getBody = getRes.json();
+    expect(Array.isArray(getBody.result.messages)).toBe(true);
+    expect(String(getBody.result.messages[0].content.text)).toContain("hello world");
+
+    await server.close();
+  });
+
+  it("handles MCP resources/read through the HTTP MCP message endpoint", async () => {
+    const server = createHttpServer();
+    const response = await server.inject({
+      method: "POST",
+      url: "/mcp/messages/",
+      payload: {
+        method: "resources/read",
+        params: {
+          uri: "chat://bus/config",
+        }
+      }
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(Array.isArray(body.result.contents)).toBe(true);
+    const text = String(body.result.contents[0].text || "");
+    expect(text).toContain("AgentChatBus");
+
+    await server.close();
+  });
+
   it("supports msg_wait fast-return through the MCP adapter", async () => {
     const server = createHttpServer();
     const connectResponse = await server.inject({

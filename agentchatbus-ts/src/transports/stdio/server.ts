@@ -1,5 +1,6 @@
 import { createInterface } from "node:readline";
 import { callTool, listTools } from "../../adapters/mcp/tools.js";
+import { handleMcpRequest } from "../mcp/handlers.js";
 
 export async function runStdioServer(): Promise<void> {
   const rl = createInterface({
@@ -38,12 +39,27 @@ export async function runStdioServer(): Promise<void> {
       continue;
     }
 
-    process.stdout.write(`${JSON.stringify({
-      result: {
-        ok: false,
-        message: "Initial stdio compatibility shell only. Full MCP stdio semantics still need to be implemented.",
-        request: payload
+    try {
+      const rpc = await handleMcpRequest({
+        id: (payload.id as string | number | null | undefined) ?? null,
+        method: String(payload.method || ""),
+        params: (payload.params as Record<string, unknown> | undefined) || {},
+      });
+
+      if (rpc === null) {
+        // JSON-RPC notifications do not require a response frame.
+        continue;
       }
-    })}\n`);
+
+      // For backward compatibility with existing stdio expectations, unwrap `{result}`.
+      if ("result" in rpc && !("error" in rpc)) {
+        process.stdout.write(`${JSON.stringify({ result: (rpc as { result: unknown }).result })}\n`);
+        continue;
+      }
+
+      process.stdout.write(`${JSON.stringify({ error: (rpc as { error?: { message?: string } }).error?.message || "MCP_ERROR" })}\n`);
+    } catch (error) {
+      process.stdout.write(`${JSON.stringify({ error: (error as Error).message })}\n`);
+    }
   }
 }

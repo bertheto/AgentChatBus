@@ -95,8 +95,11 @@ export function getConfigDict(): Record<string, unknown> {
 
 export function getConfig(): AppConfig {
   const persisted = getPersistedConfig();
+  const host = typeof persisted.HOST === "string"
+    ? persisted.HOST
+    : (process.env.AGENTCHATBUS_HOST || "127.0.0.1");
   return {
-    host: persisted.HOST || process.env.AGENTCHATBUS_HOST || "127.0.0.1",
+    host,
     port: Number(persisted.PORT || process.env.AGENTCHATBUS_PORT || "39765"),
     dbPath: process.env.AGENTCHATBUS_DB || "data/bus-ts.db",
     adminToken: ADMIN_TOKEN,

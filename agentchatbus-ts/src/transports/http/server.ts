@@ -156,29 +156,49 @@ export function createHttpServer() {
   });
 
   // Legacy endpoint for backwards compatibility
+  // Supports the full MCP method set used by Python server parity.
   fastify.post("/mcp/messages/", async (_request, reply) => {
-    const request = _request.body as { method?: string; params?: Record<string, unknown> } | undefined;
-    if (request?.method === "tools/list") {
+    const request = _request.body as
+      | { id?: string | number | null; method?: string; params?: Record<string, unknown> }
+      | undefined;
+    if (!request?.method) {
+      reply.code(400);
+      return { error: "INVALID_REQUEST", detail: "method is required" };
+    }
+
+    // Keep legacy response shape for existing tools/list and tools/call tests.
+    if (request.method === "tools/list") {
       return { result: listTools() };
     }
-    if (request?.method === "tools/call") {
+    if (request.method === "tools/call") {
       try {
         const params = request.params as { name?: string; arguments?: Record<string, unknown> } | undefined;
         const result = await callTool(String(params?.name || ""), params?.arguments || {});
-        try { console.log(`[mcp-call] ${String(params?.name || '')} => ${JSON.stringify(result).slice(0,200)}`); } catch (e) {}
+        try { console.log(`[mcp-call] ${String(params?.name || "")} => ${JSON.stringify(result).slice(0, 200)}`); } catch (_) {}
         return { result };
       } catch (error) {
-        // Log tool call errors for debugging parity
-        try { console.error(`[mcp-call-error] ${String((error as Error).message || error)}`); } catch (e) {}
+        try { console.error(`[mcp-call-error] ${String((error as Error).message || error)}`); } catch (_) {}
         reply.code(400);
         return { error: (error as Error).message };
       }
     }
-    reply.code(501);
-    return {
-      error: "NOT_IMPLEMENTED",
-      detail: "Only tools/list and tools/call are implemented in the initial TS compatibility shell."
-    };
+
+    // For other MCP methods, run through unified MCP handler and expose result payload.
+    const rpc = await handleMcpRequest({
+      id: request.id ?? null,
+      method: request.method,
+      params: request.params || {},
+    });
+
+    if (rpc === null) {
+      reply.code(204);
+      return reply.send();
+    }
+    if ("error" in rpc) {
+      reply.code(400);
+      return { error: (rpc as { error: { message?: string } }).error?.message || "MCP_ERROR", detail: rpc };
+    }
+    return { result: (rpc as { result?: unknown }).result };
   });
 
   // REST-style MCP tool endpoints (for easier testing)

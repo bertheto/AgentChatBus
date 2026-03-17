@@ -14,7 +14,7 @@ import {
   GetPromptRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { callTool, listTools } from "../../adapters/mcp/tools.js";
-import { getMemoryStore } from "../http/server.js";
+import { getPromptResult, getPromptsList, getResourcesList, readResourceText } from "./handlers.js";
 
 // Store active transports by session ID
 const transports = new Map<string, StreamableHTTPServerTransport>();
@@ -60,37 +60,19 @@ function createMcpServer(): Server {
 
   // List resources handler
   server.setRequestHandler(ListResourcesRequestSchema, async () => {
-    const store = getMemoryStore();
-    const threads = store.getThreads(false);
-    return {
-      resources: threads.map((thread: any) => ({
-        uri: `agentchatbus://threads/${thread.id}`,
-        name: thread.topic,
-        mimeType: "application/json",
-      })),
-    };
+    return { resources: getResourcesList() };
   });
 
   // Read resource handler
   server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
     const uri = request.params?.uri as string;
-    // Parse thread ID from URI
-    const match = uri.match(/agentchatbus:\/\/threads\/(.+)/);
-    if (!match) {
-      throw new Error(`Invalid resource URI: ${uri}`);
-    }
-    const threadId = match[1];
-    const store = getMemoryStore();
-    const thread = store.getThread(threadId);
-    if (!thread) {
-      throw new Error(`Thread not found: ${threadId}`);
-    }
+    const text = readResourceText(uri);
     return {
       contents: [
         {
           uri,
-          mimeType: "application/json",
-          text: JSON.stringify(thread),
+          mimeType: uri.endsWith("/transcript") || uri.endsWith("/summary") ? "text/plain" : "application/json",
+          text,
         },
       ],
     };
@@ -98,32 +80,14 @@ function createMcpServer(): Server {
 
   // List prompts handler
   server.setRequestHandler(ListPromptsRequestSchema, async () => {
-    return {
-      prompts: [
-        {
-          name: "agent_coordination",
-          description: "Prompt for agent coordination",
-          arguments: [{ name: "thread_topic", required: true }],
-        },
-      ],
-    };
+    return { prompts: getPromptsList() };
   });
 
   // Get prompt handler
   server.setRequestHandler(GetPromptRequestSchema, async (request) => {
-    const args = request.params?.arguments || {};
-    const topic = (args as any).thread_topic || "General";
-    return {
-      messages: [
-        {
-          role: "user",
-          content: {
-            type: "text",
-            text: `You are coordinating agents for thread: ${topic}. Help manage the conversation flow.`,
-          },
-        },
-      ],
-    };
+    const name = request.params?.name as string;
+    const args = (request.params?.arguments || {}) as Record<string, unknown>;
+    return getPromptResult(name, args);
   });
 
   return server;
