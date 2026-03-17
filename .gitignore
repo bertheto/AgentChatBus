@@ -62,6 +62,8 @@ frontend/dist/
 frontend/coverage/
 .npm/
 .tmp-*
+vscode-agentchatbus/.tmp-*/
+vscode-agentchatbus/.vscode-test/
 
 *.link
 

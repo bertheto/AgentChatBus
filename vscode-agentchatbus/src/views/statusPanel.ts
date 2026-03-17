@@ -51,6 +51,8 @@ export class StatusPanel {
         const serverStatus = m.pid ? 'RUNNING' : 'STOPPED';
         const mcpApiStatus = mcp.apiAvailable ? 'AVAILABLE' : 'UNAVAILABLE';
         const mcpProviderStatus = mcp.providerRegistered ? 'REGISTERED' : 'PENDING';
+        const appDir = m.env?.AGENTCHATBUS_APP_DIR || 'N/A';
+        const dbPath = m.env?.AGENTCHATBUS_DB || 'N/A';
         
         return `<!DOCTYPE html>
 <html lang="en">
@@ -95,11 +97,11 @@ export class StatusPanel {
             <h2>⚙️ Startup Configuration</h2>
             <div><span class="label">Mode:</span> <span class="value">${m.startupMode || 'N/A'}</span></div>
             <div><span class="label">Resolved By:</span> <span class="value">${m.resolvedBy || 'N/A'}</span></div>
-            <div><span class="label">Python:</span> <span class="value">${m.pythonLauncher || 'N/A'}</span></div>
-            <div><span class="label">Source Root:</span> <span class="value">${m.sourceRoot || 'N/A'}</span></div>
             <div><span class="label">Executable:</span> <span class="value">${m.command || 'N/A'}</span></div>
             <div><span class="label">Arguments:</span> <span class="value">${m.args ? m.args.join(' ') : 'N/A'}</span></div>
             <div><span class="label">WorkDir:</span> <span class="value">${m.cwd || 'N/A'}</span></div>
+            <div><span class="label">App Dir:</span> <span class="value">${appDir}</span></div>
+            <div><span class="label">DB Path:</span> <span class="value">${dbPath}</span></div>
         </div>
 
         <div class="card">
@@ -135,7 +137,7 @@ export class StatusPanel {
         </div>
     </div>
 
-    <h2>🖇️ Process Environment Variables (PYTHONPATH+)</h2>
+    <h2>🖇️ Process Environment Variables</h2>
     <div class="card" style="max-width: 100%;">
         <div class="env-list">
             ${this._renderEnv(m.env)}

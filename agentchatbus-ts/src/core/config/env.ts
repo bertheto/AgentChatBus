@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 export interface AppConfig {
   host: string;
@@ -58,8 +58,18 @@ function pickEnvOrPersisted(
 // Admin token for settings endpoint (optional — if unset, PUT /api/settings is unprotected)
 export const ADMIN_TOKEN: string | null = process.env.AGENTCHATBUS_ADMIN_TOKEN || null;
 
-// Config file path (matches Python: data/config.json)
-const CONFIG_FILE = join(process.cwd(), "data", "config.json");
+function getAppDir(): string {
+  const configured = process.env.AGENTCHATBUS_APP_DIR;
+  if (configured && configured.trim().length > 0) {
+    return resolve(configured);
+  }
+  return join(process.cwd(), "data");
+}
+
+// Config file path for packaged extension/runtime use.
+const CONFIG_FILE = process.env.AGENTCHATBUS_CONFIG_FILE
+  ? resolve(process.env.AGENTCHATBUS_CONFIG_FILE)
+  : join(getAppDir(), "config.json");
 
 const persistedConfigForFlags = (() => {
   try {
@@ -183,10 +193,11 @@ export function getConfigDict(): Record<string, unknown> {
 export function getConfig(): AppConfig {
   const persisted = getPersistedConfig();
   const host = pickEnvOrPersisted(process.env.AGENTCHATBUS_HOST, persisted.HOST, "127.0.0.1");
+  const appDir = getAppDir();
   return {
     host,
     port: Number(pickEnvOrPersisted(process.env.AGENTCHATBUS_PORT, persisted.PORT, "39765")),
-    dbPath: process.env.AGENTCHATBUS_DB || "data/bus-ts.db",
+    dbPath: process.env.AGENTCHATBUS_DB || join(appDir, "bus-ts.db"),
     adminToken: ADMIN_TOKEN,
     agentHeartbeatTimeout: Number(
       pickEnvOrPersisted(process.env.AGENTCHATBUS_HEARTBEAT_TIMEOUT, persisted.AGENT_HEARTBEAT_TIMEOUT, "60")

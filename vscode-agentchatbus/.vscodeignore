@@ -10,10 +10,6 @@ build.sh
 .gitignore
 .vscodeignore
 
-# Exclude all node_modules except production dependencies
-node_modules/**
-!node_modules/eventsource/**
-
 # Include only needed runtime files
 !out/**
 !resources/**

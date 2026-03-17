@@ -27,6 +27,11 @@ const __dirname = dirname(__filename);
 
 type JsonBody = Record<string, unknown>;
 
+function isLoopbackRequest(request: FastifyRequest): boolean {
+  const ip = request.ip || request.socket.remoteAddress || "";
+  return ip === "127.0.0.1" || ip === "::1" || ip === "::ffff:127.0.0.1" || ip === "localhost";
+}
+
 export function createHttpServer() {
   const fastify = Fastify({ logger: false });
   // If AGENTCHATBUS_DB env is set for this process, create a dedicated store
@@ -59,7 +64,7 @@ export function createHttpServer() {
 
   void fastify.register(multipart);
 
-  const staticPath = join(__dirname, "../../../../web-ui");
+  const staticPath = process.env.AGENTCHATBUS_WEB_UI_DIR || join(__dirname, "../../../../web-ui");
   void fastify.register(fastifyStatic, {
     root: staticPath,
     prefix: "/static/",
@@ -547,15 +552,25 @@ export function createHttpServer() {
     return store.getIdeStatus(query.instance_id, query.session_token);
   });
 
-  fastify.post("/api/ide/register", async (request) => {
+  fastify.post("/api/ide/register", async (request, reply) => {
+    if (!isLoopbackRequest(request)) {
+      reply.code(403);
+      return { detail: "IDE registration APIs are only available from localhost" };
+    }
     const body = request.body as JsonBody;
     return store.registerIde({
       instance_id: String(body.instance_id || ""),
-      ide_label: String(body.ide_label || "")
+      ide_label: String(body.ide_label || ""),
+      claim_owner: Boolean(body.claim_owner),
+      owner_boot_token: typeof body.owner_boot_token === "string" ? body.owner_boot_token : undefined,
     });
   });
 
   fastify.post("/api/ide/heartbeat", async (request, reply) => {
+    if (!isLoopbackRequest(request)) {
+      reply.code(403);
+      return { detail: "IDE registration APIs are only available from localhost" };
+    }
     try {
       const body = request.body as JsonBody;
       return store.ideHeartbeat({
@@ -569,22 +584,51 @@ export function createHttpServer() {
   });
 
   fastify.post("/api/ide/unregister", async (request, reply) => {
+    if (!isLoopbackRequest(request)) {
+      reply.code(403);
+      return { detail: "IDE registration APIs are only available from localhost" };
+    }
     try {
       const body = request.body as JsonBody;
-      return store.ideUnregister({
+      const result = store.ideUnregister({
         instance_id: String(body.instance_id || ""),
         session_token: String(body.session_token || "")
       });
+      if (result.shutdown_requested) {
+        setTimeout(() => process.exit(0), 50);
+      }
+      return result;
     } catch (error) {
       reply.code(403);
       return { detail: (error as Error).message };
     }
   });
 
-  fastify.post("/api/shutdown", async (_request, reply) => {
+  fastify.post("/api/shutdown", async (request, reply) => {
+    const body = request.body as JsonBody;
+    const force = Boolean(body.force);
+
+    if (!isLoopbackRequest(request)) {
+      reply.code(403);
+      return { detail: "Shutdown is only allowed from localhost" };
+    }
+
+    if (!force) {
+      try {
+        store.authorizeIdeShutdown({
+          instance_id: String(body.instance_id || ""),
+          session_token: String(body.session_token || ""),
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        reply.code(message.includes("registered") ? 404 : 403);
+        return { detail: message };
+      }
+    }
+
     reply.code(200);
     setTimeout(() => process.exit(0), 50);
-    return { ok: true };
+    return { ok: true, force };
   });
 
   fastify.post("/api/threads/:threadId/archive", async (request, reply) => setThreadStatus(request, reply, "archived"));

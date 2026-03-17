@@ -73,4 +73,11 @@ export interface IdeSessionState {
   shutdown_requested?: boolean;
   transferred_to?: string | null;
   was_owner?: boolean;
+  registered_sessions?: Array<{
+    instance_id: string;
+    ide_label: string;
+    registered_at: string;
+    last_seen: string;
+    is_owner: boolean;
+  }>;
 }

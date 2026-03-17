@@ -10,6 +10,7 @@
     "esModuleInterop": true
   },
   "exclude": [
+    "resources",
     "node_modules",
     ".vscode-test"
   ]

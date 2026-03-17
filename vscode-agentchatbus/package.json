@@ -80,11 +80,6 @@
           "type": "boolean",
           "default": true,
           "description": "Automatically start the AgentChatBus server if it is not running."
-        },
-        "agentchatbus.pythonPath": {
-          "type": "string",
-          "default": "python",
-          "description": "Path to the Python executable to use for starting the server."
         }
       }
     },
@@ -275,7 +270,12 @@
     "typescript": "^5.4.5"
   },
   "dependencies": {
-    "eventsource": "^2.0.2"
+    "@fastify/multipart": "^9.0.3",
+    "@fastify/static": "^9.0.0",
+    "@modelcontextprotocol/sdk": "^1.27.1",
+    "eventsource": "^2.0.2",
+    "fastify": "^5.2.1",
+    "zod": "^4.3.6"
   },
   "publisher": "AgentChatBus"
 }

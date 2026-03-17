@@ -79,7 +79,7 @@ function activate(context) {
             }
         }
     }));
-    const serverManager = new busServerManager_1.BusServerManager();
+    const serverManager = new busServerManager_1.BusServerManager(context);
     serverManagerInstance = serverManager;
     cursorConfigManager = new cursorMcpConfig_1.CursorMcpConfigManager();
     const setupProvider = new setupProvider_1.SetupProvider();
@@ -118,7 +118,6 @@ function activate(context) {
     }));
     context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(event => {
         if (!event.affectsConfiguration('agentchatbus.serverUrl') &&
-            !event.affectsConfiguration('agentchatbus.pythonPath') &&
             !event.affectsConfiguration('agentchatbus.autoStartBusServer')) {
             return;
         }

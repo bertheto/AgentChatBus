@@ -192,6 +192,10 @@ export class MemoryStore {
   private readonly syncTokens = new Map<string, ReplyTokenRecord>();
   private readonly logEntries: Array<{ id: number; line: string }> = [];
   private readonly ideSessions = new Map<string, IdeSession>();
+  private readonly ideOwnerBootToken = process.env.AGENTCHATBUS_OWNER_BOOT_TOKEN || "";
+  private readonly ideOwnershipAssignable = Boolean(process.env.AGENTCHATBUS_OWNER_BOOT_TOKEN);
+  private readonly ideHeartbeatTimeoutMs = Number(process.env.AGENTCHATBUS_IDE_HEARTBEAT_TIMEOUT || "45000");
+  private ideHadOwnerOnce = false;
   private readonly threadSettings = new Map<string, {
     auto_administrator_enabled: boolean;
     timeout_seconds: number;
@@ -2334,8 +2338,8 @@ export class MemoryStore {
       server_time_utc: new Date().toISOString(),
       pid: process.pid,
       total_latency_ms: 0,
-      app_dir: process.cwd(),
-      db_path: "memory",
+      app_dir: process.env.AGENTCHATBUS_APP_DIR || process.cwd(),
+      db_path: this.persistencePath,
       uptime_seconds: uptimeSeconds,
       total_threads: totalThreads,
       total_messages: totalMessages,
@@ -2352,7 +2356,13 @@ export class MemoryStore {
     };
   }
 
-  registerIde(body: { instance_id: string; ide_label: string }): IdeSessionState {
+  registerIde(body: {
+    instance_id: string;
+    ide_label: string;
+    claim_owner?: boolean;
+    owner_boot_token?: string;
+  }): IdeSessionState {
+    this.pruneIdeSessions();
     const now = new Date().toISOString();
     const existing = this.ideSessions.get(body.instance_id);
     const sessionToken = existing?.sessionToken || randomUUID();
@@ -2363,14 +2373,33 @@ export class MemoryStore {
       registeredAt: existing?.registeredAt || now,
       lastSeen: now
     });
-    if (!this.ideOwnerInstanceId) {
+
+    const validBootClaim = Boolean(
+      body.claim_owner
+      && this.ideOwnershipAssignable
+      && body.owner_boot_token
+      && body.owner_boot_token === this.ideOwnerBootToken
+    );
+    const implicitReclaim = Boolean(
+      !this.ideOwnerInstanceId
+      && this.ideOwnershipAssignable
+      && this.ideHadOwnerOnce
+    );
+
+    if (!this.ideOwnerInstanceId && this.ideOwnershipAssignable && (validBootClaim || implicitReclaim)) {
       this.ideOwnerInstanceId = body.instance_id;
+      this.ideHadOwnerOnce = true;
+    }
+
+    if (validBootClaim) {
+      this.ideHadOwnerOnce = true;
     }
     this.persistState();
     return this.snapshotIde(body.instance_id, sessionToken);
   }
 
   getIdeStatus(instanceId?: string, sessionToken?: string): IdeSessionState {
+    this.pruneIdeSessions();
     if (!instanceId) {
       return {
         instance_id: null,
@@ -2378,6 +2407,7 @@ export class MemoryStore {
         owner_instance_id: this.ideOwnerInstanceId,
         owner_ide_label: this.ideOwnerInstanceId ? this.ideSessions.get(this.ideOwnerInstanceId)?.ideLabel || null : null,
         registered_sessions_count: this.ideSessions.size,
+        ownership_assignable: this.ideOwnershipAssignable,
         can_shutdown: false,
         is_owner: false,
         registered: false
@@ -2392,6 +2422,7 @@ export class MemoryStore {
         owner_instance_id: this.ideOwnerInstanceId,
         owner_ide_label: this.ideOwnerInstanceId ? this.ideSessions.get(this.ideOwnerInstanceId)?.ideLabel || null : null,
         registered_sessions_count: this.ideSessions.size,
+        ownership_assignable: this.ideOwnershipAssignable,
         can_shutdown: false,
         is_owner: false,
         registered: false
@@ -2421,6 +2452,7 @@ export class MemoryStore {
   }
 
   ideHeartbeat(body: { instance_id: string; session_token: string }): IdeSessionState {
+    this.pruneIdeSessions();
     const session = this.ideSessions.get(body.instance_id);
     if (!session || session.sessionToken !== body.session_token) {
       throw new Error("Invalid IDE session");
@@ -2431,13 +2463,24 @@ export class MemoryStore {
   }
 
   ideUnregister(body: { instance_id: string; session_token: string }): IdeSessionState {
+    this.pruneIdeSessions();
     const session = this.ideSessions.get(body.instance_id);
     if (!session || session.sessionToken !== body.session_token) {
       throw new Error("Invalid IDE session");
     }
+    const wasOwner = this.ideOwnerInstanceId === body.instance_id;
     this.ideSessions.delete(body.instance_id);
-    if (this.ideOwnerInstanceId === body.instance_id) {
-      this.ideOwnerInstanceId = this.ideSessions.keys().next().value || null;
+    let shutdownRequested = false;
+    let transferredTo: string | null = null;
+    if (wasOwner) {
+      const nextOwner = this.getOldestIdeSession();
+      if (nextOwner) {
+        this.ideOwnerInstanceId = nextOwner.instanceId;
+        transferredTo = nextOwner.instanceId;
+      } else {
+        this.ideOwnerInstanceId = null;
+        shutdownRequested = this.ideOwnershipAssignable;
+      }
     }
     this.persistState();
     return {
@@ -2445,12 +2488,14 @@ export class MemoryStore {
       registered: false,
       is_owner: false,
       can_shutdown: false,
+      ownership_assignable: this.ideOwnershipAssignable,
       owner_instance_id: this.ideOwnerInstanceId,
       owner_ide_label: this.ideOwnerInstanceId ? this.ideSessions.get(this.ideOwnerInstanceId)?.ideLabel || null : null,
       registered_sessions_count: this.ideSessions.size,
-      shutdown_requested: this.ideSessions.size === 0,
-      transferred_to: this.ideOwnerInstanceId,
-      was_owner: false
+      registered_sessions: this.buildRegisteredSessions(),
+      shutdown_requested: shutdownRequested,
+      transferred_to: transferredTo,
+      was_owner: wasOwner
     };
   }
 
@@ -2459,16 +2504,97 @@ export class MemoryStore {
       instance_id: instanceId,
       session_token: sessionToken,
       registered: true,
-      ownership_assignable: true,
+      ownership_assignable: this.ideOwnershipAssignable,
       owner_instance_id: this.ideOwnerInstanceId,
       owner_ide_label: this.ideOwnerInstanceId ? this.ideSessions.get(this.ideOwnerInstanceId)?.ideLabel || null : null,
       is_owner: this.ideOwnerInstanceId === instanceId,
       can_shutdown: this.ideOwnerInstanceId === instanceId,
       registered_sessions_count: this.ideSessions.size,
+      registered_sessions: this.buildRegisteredSessions(),
       shutdown_requested: false,
       transferred_to: null,
       was_owner: false
     };
+  }
+
+  authorizeIdeShutdown(body: { instance_id: string; session_token: string }): IdeSessionState {
+    this.pruneIdeSessions();
+    const session = this.ideSessions.get(body.instance_id);
+    if (!session) {
+      throw new Error("IDE session is not registered");
+    }
+    if (session.sessionToken !== body.session_token) {
+      throw new Error("Invalid IDE session token");
+    }
+    const status = this.snapshotIde(body.instance_id, session.sessionToken);
+    if (!status.can_shutdown) {
+      throw new Error("This IDE session does not hold shutdown ownership");
+    }
+    return status;
+  }
+
+  private getOldestIdeSession(): IdeSession | null {
+    let oldest: IdeSession | null = null;
+    for (const session of this.ideSessions.values()) {
+      if (!oldest || session.registeredAt < oldest.registeredAt) {
+        oldest = session;
+      }
+    }
+    return oldest;
+  }
+
+  private buildRegisteredSessions(): Array<{
+    instance_id: string;
+    ide_label: string;
+    registered_at: string;
+    last_seen: string;
+    is_owner: boolean;
+  }> {
+    return [...this.ideSessions.values()]
+      .sort((left, right) => left.registeredAt.localeCompare(right.registeredAt))
+      .map((session) => ({
+        instance_id: session.instanceId,
+        ide_label: session.ideLabel,
+        registered_at: session.registeredAt,
+        last_seen: session.lastSeen,
+        is_owner: session.instanceId === this.ideOwnerInstanceId,
+      }));
+  }
+
+  private pruneIdeSessions(): void {
+    const cutoff = Date.now() - this.ideHeartbeatTimeoutMs;
+    let ownerRemoved = false;
+    let changed = false;
+
+    for (const [instanceId, session] of this.ideSessions.entries()) {
+      const lastSeenAt = Date.parse(session.lastSeen);
+      if (Number.isNaN(lastSeenAt) || lastSeenAt > cutoff) {
+        continue;
+      }
+
+      this.ideSessions.delete(instanceId);
+      changed = true;
+      if (this.ideOwnerInstanceId === instanceId) {
+        this.ideOwnerInstanceId = null;
+        ownerRemoved = true;
+      }
+    }
+
+    if (this.ideOwnerInstanceId && !this.ideSessions.has(this.ideOwnerInstanceId)) {
+      this.ideOwnerInstanceId = null;
+      ownerRemoved = true;
+      changed = true;
+    }
+
+    if (ownerRemoved) {
+      const nextOwner = this.getOldestIdeSession();
+      this.ideOwnerInstanceId = nextOwner?.instanceId || null;
+      changed = true;
+    }
+
+    if (changed) {
+      this.persistState();
+    }
   }
 
   private consumeReplyToken(token: string): void {
