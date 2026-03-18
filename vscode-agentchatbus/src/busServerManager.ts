@@ -92,6 +92,7 @@ export class BusServerManager {
     private readonly extensionRoot: string;
     private readonly globalStoragePath: string;
     private readonly hostNodeExecutable: string;
+    private readonly extensionVersion: string;
     private ideSessionToken: string | null = null;
     private ownerBootToken: string | null = null;
     private ideSessionState: IdeSessionApiState = {
@@ -108,6 +109,7 @@ export class BusServerManager {
         this.extensionRoot = context.extensionPath;
         this.globalStoragePath = context.globalStorageUri.fsPath;
         this.hostNodeExecutable = process.execPath;
+        this.extensionVersion = String(context.extension.packageJSON?.version || 'unknown');
         this.outputChannel = vscode.window.createOutputChannel('AgentChatBus Server');
         void vscode.commands.executeCommand('setContext', 'agentchatbus:serverStopping', false);
     }
@@ -858,6 +860,7 @@ export class BusServerManager {
             arch: process.arch,
             nodeVersion: process.version,
             hostNodeExecutable: this.hostNodeExecutable,
+            extensionVersion: this.extensionVersion,
             vscodeVersion: vscode.version,
             ide: {
                 instanceId: this.ideInstanceId,

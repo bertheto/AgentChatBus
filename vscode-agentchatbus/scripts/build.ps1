@@ -34,6 +34,14 @@ if ($bump -ne "none") {
     }
 }
 
+# 1.5 Sync extension version -> bundled TS backend version metadata
+Write-Host "Syncing extension version into agentchatbus-ts..." -ForegroundColor Yellow
+node .\scripts\sync-versions.mjs
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "Version sync failed."
+    exit $LASTEXITCODE
+}
+
 # 2. Compile
 Write-Host "Compiling TypeScript..." -ForegroundColor Yellow
 npm run compile

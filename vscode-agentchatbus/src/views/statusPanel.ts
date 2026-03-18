@@ -75,7 +75,7 @@ export class StatusPanel {
         }
         h1 { color: var(--vscode-button-background); border-bottom: 1px solid var(--vscode-widget-border); padding-bottom: 10px; font-weight: 300; }
         h2 { font-size: 1.1em; margin-top: 30px; color: var(--vscode-symbolIcon-propertyForeground); text-transform: uppercase; letter-spacing: 1px; }
-        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; }
+        .grid { display: flex; flex-direction: column; gap: 16px; }
         .card { background: var(--vscode-sideBar-background); border: 1px solid var(--vscode-widget-border); padding: 15px; border-radius: 4px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
         .label { font-weight: bold; color: var(--vscode-descriptionForeground); font-size: 0.9em; min-width: 120px; display: inline-block; }
         .value { font-family: 'Courier New', Courier, monospace; color: var(--vscode-textPreformat-foreground); word-break: break-all; }
@@ -130,6 +130,7 @@ export class StatusPanel {
             <div><span class="label">Platform:</span> <span class="value">${m.platform} (${m.arch})</span></div>
             <div><span class="label">Node.js:</span> <span class="value">${m.nodeVersion}</span></div>
             <div><span class="label">Host Node:</span> <span class="value">${m.hostNodeExecutable || 'N/A'}</span></div>
+            <div><span class="label">Extension:</span> <span class="value">${m.extensionVersion || 'N/A'}</span></div>
             <div><span class="label">VS Code:</span> <span class="value">${m.vscodeVersion}</span></div>
         </div>
 
