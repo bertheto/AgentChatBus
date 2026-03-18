@@ -7,7 +7,7 @@ import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { callTool, listTools, withToolCallContext } from "../../adapters/mcp/tools.js";
 import { SeqMismatchError, MissingSyncFieldsError, ReplyTokenInvalidError, ReplyTokenExpiredError, ReplyTokenReplayError, BusError } from "../../core/types/errors.js";
-import { getConfig, getConfigDict, saveConfigDict, ADMIN_TOKEN } from "../../core/config/env.js";
+import { getConfig, getConfigDict, saveConfigDict, ADMIN_TOKEN, BUS_VERSION } from "../../core/config/env.js";
 import { MemoryStore, memoryStore } from "../../core/services/memoryStore.js";
 import { registerStore } from "../../core/services/storeSingleton.js";
 import { eventBus } from "../../shared/eventBus.js";
@@ -94,7 +94,22 @@ export function createHttpServer() {
     return reply.sendFile("index.html");
   });
 
-  fastify.get("/health", async () => ({ status: "ok", service: "AgentChatBus" }));
+  fastify.get("/health", async () => {
+    const ideStatus = store.getIdeStatus();
+    return {
+      status: "ok",
+      service: "AgentChatBus",
+      engine: "node",
+      version: BUS_VERSION,
+      runtime: `node ${process.version}`,
+      transport: "http+sse",
+      management: {
+        ownership_assignable: Boolean(ideStatus.ownership_assignable),
+        owner_instance_id: ideStatus.owner_instance_id ?? null,
+        registered_sessions_count: ideStatus.registered_sessions_count ?? 0,
+      },
+    };
+  });
 
   fastify.get("/events", async (_request, reply) => {
     reply.raw.writeHead(200, {

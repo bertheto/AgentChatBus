@@ -158,7 +158,7 @@ function initializeMainViews(context: vscode.ExtensionContext, serverManager: Bu
         }),
         vscode.commands.registerCommand('agentchatbus.stopServer', async () => {
             const status = serverManager.getStatusMetadata();
-            const isExternal = status.startupMode === 'external-service';
+            const isExternal = String(status.startupMode || '').startsWith('external-service');
             const confirmed = await vscode.window.showWarningMessage(
                 isExternal
                     ? 'Force restart the externally managed AgentChatBus service? The extension will try force-shutdown via API, verify process exit, then kill the process if needed before starting a fresh service.'
@@ -234,11 +234,32 @@ function initializeMainViews(context: vscode.ExtensionContext, serverManager: Bu
         }),
         vscode.commands.registerCommand('agentchatbus.showMcpStatus', async () => {
             const metadata = serverManager.getStatusMetadata();
-            let backendEngine = 'unknown';
-            let backendEngineSource = 'startup-heuristic';
+            let backendEngine = String(metadata.backendEngine || 'unknown').trim().toLowerCase() || 'unknown';
+            let backendEngineSource = metadata.backendEngine ? 'startup-probe' : 'startup-heuristic';
+            let backendVersion = String(metadata.backendVersion || '').trim() || undefined;
+            let backendRuntime = String(metadata.backendRuntime || '').trim() || undefined;
 
             try {
                 if (apiClient) {
+                    try {
+                        const health = await apiClient.getHealth();
+                        const healthEngine = String(health?.engine || '').trim().toLowerCase();
+                        if (healthEngine === 'node' || healthEngine === 'python') {
+                            backendEngine = healthEngine;
+                            backendEngineSource = 'health';
+                        }
+                        const healthVersion = String(health?.version || '').trim();
+                        if (healthVersion) {
+                            backendVersion = healthVersion;
+                        }
+                        const healthRuntime = String(health?.runtime || '').trim();
+                        if (healthRuntime) {
+                            backendRuntime = healthRuntime;
+                        }
+                    } catch {
+                        // Ignore health probe failures and continue with metrics / heuristics.
+                    }
+
                     const metrics = await apiClient.getMetrics();
                     const engine = String(metrics?.engine || '').trim().toLowerCase();
                     if (engine === 'node' || engine === 'python') {
@@ -276,6 +297,8 @@ function initializeMainViews(context: vscode.ExtensionContext, serverManager: Bu
                 ...metadata,
                 backendEngine,
                 backendEngineSource,
+                backendVersion,
+                backendRuntime,
             });
         }),
         vscode.commands.registerCommand('agentchatbus.configureCursorMcp', async () => {

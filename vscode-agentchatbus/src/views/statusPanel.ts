@@ -54,6 +54,8 @@ export class StatusPanel {
         const startupMode = this._getStartupModeSummary(m.startupMode);
         const backend = this._getBackendSummary(m.backendEngine, m.startupMode);
         const backendSource = m.backendEngineSource || 'unknown';
+        const backendVersion = m.backendVersion || 'N/A';
+        const backendRuntime = m.backendRuntime || 'N/A';
         const appDir = m.env?.AGENTCHATBUS_APP_DIR || 'N/A';
         const dbPath = m.env?.AGENTCHATBUS_DB || 'N/A';
         
@@ -99,6 +101,8 @@ export class StatusPanel {
             <div><span class="label">Uptime:</span> <span class="value">${uptime}</span></div>
             <div><span class="label">Started At:</span> <span class="value">${m.startTime || 'N/A'}</span></div>
             <div><span class="label">Backend:</span> <span class="value">${backend}</span></div>
+            <div><span class="label">Backend Version:</span> <span class="value">${backendVersion}</span></div>
+            <div><span class="label">Backend Runtime:</span> <span class="value">${backendRuntime}</span></div>
             <div><span class="label">Backend Source:</span> <span class="value">${backendSource}</span></div>
         </div>
 
@@ -113,9 +117,11 @@ export class StatusPanel {
             <div><span class="label">App Dir:</span> <span class="value">${appDir}</span></div>
             <div><span class="label">DB Path:</span> <span class="value">${dbPath}</span></div>
             <div class="mode-help">
-                <div><span class="label">Supported Modes:</span> <span class="value">2</span></div>
+                <div><span class="label">Supported Modes:</span> <span class="value">4</span></div>
                 <div class="mode-help-item"><code>bundled-ts-service</code>: Extension launches bundled agentchatbus-ts (managed by VS Code extension).</div>
-                <div class="mode-help-item"><code>external-service</code>: Reuses an already-running backend discovered via /health (managed outside extension).</div>
+                <div class="mode-help-item"><code>external-service-extension-managed</code>: External backend detected, ownership is assignable (typically started by an extension-managed bootstrap).</div>
+                <div class="mode-help-item"><code>external-service-manual</code>: External backend detected, ownership is not assignable (typically started manually by command).</div>
+                <div class="mode-help-item"><code>external-service-unknown</code>: External backend detected, but health payload lacks ownership detail (legacy/limited backend).</div>
             </div>
         </div>
 
@@ -188,9 +194,27 @@ export class StatusPanel {
                 description: 'External backend process detected by health probe and attached by this extension.',
             };
         }
+        if (mode === 'external-service-extension-managed') {
+            return {
+                label: 'external-service-extension-managed',
+                description: 'External backend detected with ownership assignable=true (extension-managed bootstrap).',
+            };
+        }
+        if (mode === 'external-service-manual') {
+            return {
+                label: 'external-service-manual',
+                description: 'External backend detected with ownership assignable=false (manual command startup).',
+            };
+        }
+        if (mode === 'external-service-unknown') {
+            return {
+                label: 'external-service-unknown',
+                description: 'External backend detected but ownership metadata is unavailable from /health.',
+            };
+        }
         return {
             label: mode || 'N/A',
-            description: 'Unknown mode. Extension currently documents bundled-ts-service and external-service.',
+            description: 'Unknown mode. Extension currently documents bundled-ts-service and the 3 external-service variants.',
         };
     }
 

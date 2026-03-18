@@ -33,7 +33,7 @@ from pydantic import BaseModel, ConfigDict
 from mcp.server.sse import SseServerTransport
 from starlette.routing import Mount
 
-from src.config import HOST, PORT, DB_PATH, get_config_dict, save_config_dict, ADMIN_TOKEN
+from src.config import HOST, PORT, DB_PATH, BUS_VERSION, get_config_dict, save_config_dict, ADMIN_TOKEN
 from src.db.database import get_db, close_db, SCHEMA_VERSION
 from src.db import crud
 from src.db.crud import (
@@ -2963,7 +2963,20 @@ async def api_search(
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "service": "AgentChatBus"}
+    ide_status = _ide_ownership.snapshot(instance_id=None, session_token=None)
+    return {
+        "status": "ok",
+        "service": "AgentChatBus",
+        "engine": "python",
+        "version": BUS_VERSION,
+        "runtime": f"python {sys.version.split()[0]}",
+        "transport": "http+sse",
+        "management": {
+            "ownership_assignable": bool(ide_status.get("ownership_assignable")),
+            "owner_instance_id": ide_status.get("owner_instance_id"),
+            "registered_sessions_count": int(ide_status.get("registered_sessions_count") or 0),
+        },
+    }
 
 
 @app.post("/api/shutdown")

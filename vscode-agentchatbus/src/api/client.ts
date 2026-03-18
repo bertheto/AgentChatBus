@@ -132,6 +132,12 @@ export class AgentChatBusApiClient {
         return await response.json();
     }
 
+    async getHealth(): Promise<any> {
+        const response = await fetch(`${this.baseUrl}/health`);
+        if (!response.ok) throw new Error(`HTTP ${response.status} fetching health`);
+        return await response.json();
+    }
+
     private async ensureUiAgentAuth(): Promise<{ agent_id: string; token: string }> {
         if (this.uiAgentAuth?.agent_id && this.uiAgentAuth?.token) {
             return this.uiAgentAuth;

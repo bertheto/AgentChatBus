@@ -6,7 +6,12 @@ import { randomUUID } from 'crypto';
 import { SetupProvider } from './providers/setupProvider';
 import { McpLogProvider } from './providers/mcpLogProvider';
 
-type LaunchMode = 'bundled-ts-service' | 'external-service';
+type LaunchMode =
+    | 'bundled-ts-service'
+    | 'external-service'
+    | 'external-service-extension-managed'
+    | 'external-service-manual'
+    | 'external-service-unknown';
 
 const MIN_HOST_NODE_VERSION = {
     major: 20,
@@ -30,7 +35,25 @@ type ServerMetadata = {
     env?: NodeJS.ProcessEnv;
     startupMode?: LaunchMode;
     resolvedBy?: string;
+    backendEngine?: string;
+    backendVersion?: string;
+    backendRuntime?: string;
+    externalOwnershipAssignable?: boolean | null;
     resolutionAttempts?: string[];
+};
+
+type HealthPayload = {
+    status?: string;
+    service?: string;
+    engine?: string;
+    version?: string;
+    runtime?: string;
+    transport?: string;
+    management?: {
+        ownership_assignable?: boolean;
+        owner_instance_id?: string | null;
+        registered_sessions_count?: number;
+    };
 };
 
 type IdeSessionApiState = {
@@ -145,12 +168,25 @@ export class BusServerManager {
         this.log(`Probing server at ${serverUrl}...`, 'sync~spin');
 
         try {
-            const isRunning = await this.checkServer(serverUrl);
-            if (isRunning) {
-                this.serverMetadata.startupMode = 'external-service';
+            const probe = await this.probeServer(serverUrl);
+            if (probe.ok) {
+                const startupMode = this.classifyExternalStartupMode(probe.health);
+                this.serverMetadata.startupMode = startupMode;
                 this.serverMetadata.resolvedBy = 'Existing service detected via /health';
+                this.serverMetadata.backendEngine = this.normalizeHealthString(probe.health?.engine);
+                this.serverMetadata.backendVersion = this.normalizeHealthString(probe.health?.version);
+                this.serverMetadata.backendRuntime = this.normalizeHealthString(probe.health?.runtime);
+                this.serverMetadata.externalOwnershipAssignable =
+                    this.extractOwnershipAssignable(probe.health);
                 this.ownerBootToken = null;
-                this.recordResolutionAttempt('Detected an already-running AgentChatBus service via /health probe.');
+                this.recordResolutionAttempt(
+                    `Detected an already-running AgentChatBus service via /health probe (mode=${startupMode}).`
+                );
+                if (this.serverMetadata.backendEngine || this.serverMetadata.backendVersion) {
+                    this.recordResolutionAttempt(
+                        `External backend details: engine=${this.serverMetadata.backendEngine || 'unknown'}, version=${this.serverMetadata.backendVersion || 'unknown'}.`
+                    );
+                }
                 this.log('Server detected (Managed Externally). Switching to shared log API.', 'warning');
                 this.startExternalLogPolling(serverUrl);
                 await this.ensureIdeSessionRegistered(false);
@@ -190,7 +226,7 @@ export class BusServerManager {
             return false;
         }
 
-        if (!this.serverProcess && this.serverMetadata.startupMode === 'external-service') {
+        if (!this.serverProcess && this.isExternalStartupMode(this.serverMetadata.startupMode)) {
             const stopped = await this.stopExternalService();
             if (!stopped) {
                 return false;
@@ -449,7 +485,7 @@ export class BusServerManager {
                     can_shutdown: false,
                 });
 
-                const shouldClaimOwner = this.serverMetadata.startupMode !== 'external-service'
+                const shouldClaimOwner = !this.isExternalStartupMode(this.serverMetadata.startupMode)
                     || Boolean(this.ideSessionState.ownership_assignable);
                 const recovered = await this.ensureIdeSessionRegistered(shouldClaimOwner);
                 if (!recovered) {
@@ -755,16 +791,60 @@ export class BusServerManager {
         );
     }
 
-    private async checkServer(url: string): Promise<boolean> {
+    private async probeServer(url: string): Promise<{ ok: boolean; health?: HealthPayload }> {
         try {
             const controller = new AbortController();
             const timeoutId = setTimeout(() => controller.abort(), 1000);
             const response = await fetch(`${url}/health`, { signal: controller.signal });
             clearTimeout(timeoutId);
-            return response.ok;
+            if (!response.ok) {
+                return { ok: false };
+            }
+            let health: HealthPayload | undefined;
+            try {
+                health = await response.json() as HealthPayload;
+            } catch {
+                // Allow legacy health endpoints that return non-JSON.
+            }
+            return { ok: true, health };
         } catch {
-            return false;
+            return { ok: false };
         }
+    }
+
+    private async checkServer(url: string): Promise<boolean> {
+        const probe = await this.probeServer(url);
+        return probe.ok;
+    }
+
+    private isExternalStartupMode(mode: LaunchMode | undefined): boolean {
+        return Boolean(mode && mode.startsWith('external-service'));
+    }
+
+    private normalizeHealthString(value: unknown): string | undefined {
+        if (typeof value !== 'string') {
+            return undefined;
+        }
+        const normalized = value.trim();
+        return normalized.length > 0 ? normalized : undefined;
+    }
+
+    private extractOwnershipAssignable(health?: HealthPayload): boolean | null {
+        if (!health?.management || typeof health.management.ownership_assignable !== 'boolean') {
+            return null;
+        }
+        return health.management.ownership_assignable;
+    }
+
+    private classifyExternalStartupMode(health?: HealthPayload): LaunchMode {
+        const ownershipAssignable = this.extractOwnershipAssignable(health);
+        if (ownershipAssignable === true) {
+            return 'external-service-extension-managed';
+        }
+        if (ownershipAssignable === false) {
+            return 'external-service-manual';
+        }
+        return 'external-service-unknown';
     }
 
     getStatusMetadata() {
@@ -923,6 +1003,10 @@ export class BusServerManager {
             env,
             startupMode: spec.launchMode,
             resolvedBy: spec.resolvedBy,
+            backendEngine: 'node',
+            backendVersion: undefined,
+            backendRuntime: `node ${process.version}`,
+            externalOwnershipAssignable: null,
             resolutionAttempts: [...(this.serverMetadata.resolutionAttempts || [])],
         };
         this.lastStartTime = new Date();
