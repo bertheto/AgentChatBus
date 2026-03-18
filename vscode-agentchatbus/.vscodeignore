@@ -17,3 +17,7 @@ build.sh
 !LICENSE.md
 !README.md
 !CHANGELOG.md
+
+# Runtime code is bundled into out/ and resources/bundled-server/dist
+node_modules/**
+**/*.map

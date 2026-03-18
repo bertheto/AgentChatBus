@@ -145,8 +145,12 @@ describe('Thread Settings V2 Basic Tests', () => {
         const fakeId = "00000000-0000-0000-0000-000000000000";
         
         const settings = store.getThreadSettings(fakeId);
-        
-        expect(settings).toBeUndefined();
+
+        // Fix #35: getThreadSettings now auto-creates defaults (Python parity)
+        expect(settings).toBeDefined();
+        expect(settings!.auto_administrator_enabled).toBe(true);
+        expect(settings!.timeout_seconds).toBe(120);
+        expect(settings!.switch_timeout_seconds).toBe(60);
     });
 
     it('update thread settings rejects timeout below minimum', () => {

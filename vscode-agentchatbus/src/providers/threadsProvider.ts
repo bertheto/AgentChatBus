@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import type { AgentChatBusApiClient } from '../api/client';
 import type { Thread } from '../api/types';
+import { getTreeIcon } from '../ui/treeIcons';
 
 export class ThreadsTreeProvider implements vscode.TreeDataProvider<ThreadItem> {
     private _onDidChangeTreeData: vscode.EventEmitter<ThreadItem | undefined | void> = new vscode.EventEmitter<ThreadItem | undefined | void>();
@@ -60,19 +61,33 @@ export class ThreadItem extends vscode.TreeItem {
         public readonly thread: Thread
     ) {
         super(thread.topic || 'Untitled Thread', vscode.TreeItemCollapsibleState.None);
-        
-        let icon = 'comment';
-        if (thread.status === 'done' || thread.status === 'closed') icon = 'check';
-        if (thread.status === 'archived') icon = 'archive';
-        
+
         this.tooltip = `ID: ${thread.id}\nStatus: ${thread.status}`;
         this.description = thread.status;
-        this.iconPath = new vscode.ThemeIcon(icon);
+        this.iconPath = getThreadStatusIcon(thread.status);
         this.contextValue = `thread:${thread.status}`;
         this.command = {
             command: 'agentchatbus.openThread',
             title: 'Open Thread',
             arguments: [thread]
         };
+    }
+}
+
+function getThreadStatusIcon(status: string | undefined): { light: vscode.Uri; dark: vscode.Uri } {
+    switch (status) {
+        case 'implement':
+            return getTreeIcon('thread-implement.svg');
+        case 'review':
+            return getTreeIcon('thread-review.svg');
+        case 'done':
+            return getTreeIcon('thread-done.svg');
+        case 'closed':
+            return getTreeIcon('thread-closed.svg');
+        case 'archived':
+            return getTreeIcon('thread-archived.svg');
+        case 'discuss':
+        default:
+            return getTreeIcon('thread-discuss.svg');
     }
 }

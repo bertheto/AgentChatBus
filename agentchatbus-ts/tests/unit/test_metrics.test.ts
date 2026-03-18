@@ -213,6 +213,28 @@ describe('Metrics Unit Tests', () => {
     expect(m.agents.total).toBe(2);
   });
 
+  it('metrics online count respects configured AGENT_HEARTBEAT_TIMEOUT', () => {
+    const previousTimeout = process.env.AGENTCHATBUS_HEARTBEAT_TIMEOUT;
+    try {
+      process.env.AGENTCHATBUS_HEARTBEAT_TIMEOUT = '5';
+      const localStore = new MemoryStore(':memory:');
+      const agent = localStore.registerAgent({ ide: 'VS Code', model: 'GPT-4' });
+
+      const stale = new Date(Date.now() - 10 * 1000).toISOString();
+      (localStore as any).persistenceDb.prepare('UPDATE agents SET last_heartbeat = ? WHERE id = ?').run(stale, agent.id);
+
+      const m = localStore.getMetrics();
+      expect(m.agents.total).toBe(1);
+      expect(m.agents.online).toBe(0);
+    } finally {
+      if (previousTimeout === undefined) {
+        delete process.env.AGENTCHATBUS_HEARTBEAT_TIMEOUT;
+      } else {
+        process.env.AGENTCHATBUS_HEARTBEAT_TIMEOUT = previousTimeout;
+      }
+    }
+  });
+
   // Ported from Python: test_api_metrics_returns_200 (HTTP layer test - adapted for unit)
   it('metrics returns valid json structure', () => {
     const m = store.getMetrics();

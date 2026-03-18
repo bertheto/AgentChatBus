@@ -707,7 +707,9 @@ describe("HTTP compatibility shell", () => {
       url: `/api/ide/status?instance_id=ide-1&session_token=${register.session_token}`
     });
     expect(statusResponse.statusCode).toBe(200);
-    expect(statusResponse.json().is_owner).toBe(true);
+    // is_owner is only true when AGENTCHATBUS_OWNER_BOOT_TOKEN is set and claimed
+    // Without boot token, ownership_assignable is false, so no one becomes owner
+    expect(statusResponse.json().is_owner).toBe(false);
 
     const heartbeatResponse = await server.inject({
       method: "POST",
@@ -770,6 +772,80 @@ describe("HTTP compatibility shell", () => {
       }
     }
     expect(sawMsgNew).toBe(true);
+
+    await reader?.cancel();
+    await server.close();
+  });
+
+  it("serves the standard Streamable HTTP MCP endpoint on /mcp", async () => {
+    const server = createHttpServer();
+    await server.listen({ host: "127.0.0.1", port: 0 });
+    const address = server.addresses()[0];
+    const baseUrl = `http://${address.address}:${address.port}`;
+
+    const initializeResponse = await fetch(`${baseUrl}/mcp`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        accept: "application/json, text/event-stream",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-03-26",
+          capabilities: {},
+          clientInfo: { name: "vitest", version: "1.0.0" },
+        },
+      }),
+    });
+
+    expect(initializeResponse.ok).toBe(true);
+    expect(initializeResponse.headers.get("content-type")).toContain("text/event-stream");
+    const sessionId = initializeResponse.headers.get("mcp-session-id");
+    expect(sessionId).toBeTruthy();
+
+    const initReader = initializeResponse.body?.getReader();
+    const initChunk = await initReader!.read();
+    const initText = new TextDecoder().decode(initChunk.value);
+    expect(initText).toContain('"protocolVersion":"2025-03-26"');
+    await initReader?.cancel();
+
+    const streamResponse = await fetch(`${baseUrl}/mcp`, {
+      method: "GET",
+      headers: {
+        accept: "text/event-stream",
+        "mcp-session-id": sessionId!,
+      },
+    });
+
+    expect(streamResponse.ok).toBe(true);
+    expect(streamResponse.headers.get("content-type")).toContain("text/event-stream");
+    await streamResponse.body?.cancel();
+    await server.close();
+  });
+
+  it("serves the deprecated SSE fallback transport on /sse and /messages", async () => {
+    const server = createHttpServer();
+    await server.listen({ host: "127.0.0.1", port: 0 });
+    const address = server.addresses()[0];
+    const baseUrl = `http://${address.address}:${address.port}`;
+
+    const sseResponse = await fetch(`${baseUrl}/sse`, {
+      headers: {
+        accept: "text/event-stream",
+      },
+    });
+
+    expect(sseResponse.ok).toBe(true);
+    expect(sseResponse.headers.get("content-type")).toContain("text/event-stream");
+
+    const reader = sseResponse.body?.getReader();
+    const firstChunk = await reader!.read();
+    const firstText = new TextDecoder().decode(firstChunk.value);
+    expect(firstText).toContain("event: endpoint");
+    expect(firstText).toContain("/messages?sessionId=");
 
     await reader?.cancel();
     await server.close();

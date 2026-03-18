@@ -225,9 +225,12 @@ describe('Timeout Handling Tests (Ported from Python)', () => {
       expect(found).toBeUndefined();
     });
 
-    it('thread settings for nonexistent thread returns undefined', () => {
+    it('thread settings for nonexistent thread auto-creates defaults', () => {
       const settings = store.getThreadSettings('nonexistent-thread');
-      expect(settings).toBeUndefined();
+      // Fix #35: getThreadSettings now auto-creates defaults (Python parity)
+      expect(settings).toBeDefined();
+      expect(settings!.auto_administrator_enabled).toBe(true);
+      expect(settings!.timeout_seconds).toBe(120);
     });
   });
 });

@@ -322,16 +322,16 @@ export class ChatPanel {
         
         // Resource paths
         const extensionUri = vscode.Uri.file(ChatPanel._extensionPath);
-        const rendererScriptUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'resources', 'media', 'messageRenderer.js'));
-        const rendererStyleUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'resources', 'media', 'messageRenderer.css'));
-        const panelScriptUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'resources', 'media', 'chatPanel.js'));
-        const panelStyleUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'resources', 'media', 'chatPanel.css'));
+        const rendererScriptUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'resources', 'web-ui', 'extension', 'media', 'messageRenderer.js'));
+        const rendererStyleUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'resources', 'web-ui', 'extension', 'media', 'messageRenderer.css'));
+        const panelScriptUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'resources', 'web-ui', 'extension', 'media', 'chatPanel.js'));
+        const panelStyleUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'resources', 'web-ui', 'extension', 'media', 'chatPanel.css'));
         const config = {
             threadId: this._thread.id,
             threadTopic: this._thread.topic || this._thread.id.substring(0, 8),
             threadStatus: this._thread.status,
             baseUrl: this._apiClient.getBaseUrl(),
-            mermaidScriptUrl: webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'resources', 'media', 'mermaid.min.js')).toString(),
+            mermaidScriptUrl: webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'resources', 'web-ui', 'extension', 'media', 'mermaid.min.js')).toString(),
             theme: vscode.window.activeColorTheme.kind === vscode.ColorThemeKind.Dark ? 'dark' : 'light'
         };
         return buildChatPanelHtml(

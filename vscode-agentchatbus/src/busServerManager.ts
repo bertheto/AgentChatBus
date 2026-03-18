@@ -749,7 +749,7 @@ export class BusServerManager {
     private createMcpServerDefinition(): vscode.McpHttpServerDefinition {
         return new vscode.McpHttpServerDefinition(
             BusServerManager.MCP_PROVIDER_LABEL,
-            vscode.Uri.parse(`${this.getServerUrl()}/mcp/sse`),
+            vscode.Uri.parse(`${this.getServerUrl()}/mcp`),
             undefined,
             '1.0.0'
         );
@@ -797,7 +797,7 @@ export class BusServerManager {
                 providerLabel: BusServerManager.MCP_PROVIDER_LABEL,
                 transport: 'http+sse',
                 serverUrl,
-                sseEndpoint: `${serverUrl}/mcp/sse`,
+                sseEndpoint: `${serverUrl}/mcp`,
                 requiredVscodeVersion: '^1.105.0'
             }
         };
@@ -907,12 +907,14 @@ export class BusServerManager {
     }
 
     private async spawnServer(spec: LaunchSpec): Promise<boolean> {
+        const shouldForceElectronRunAsNode = spec.command === this.hostNodeExecutable;
         this.ownerBootToken = randomUUID();
         const env = {
             ...process.env,
             ...(spec.env || {}),
             AGENTCHATBUS_OWNER_BOOT_TOKEN: this.ownerBootToken,
             AGENTCHATBUS_RELOAD: '0',
+            ...(shouldForceElectronRunAsNode ? { ELECTRON_RUN_AS_NODE: '1' } : {}),
         };
         this.serverMetadata = {
             command: spec.command,
@@ -928,6 +930,9 @@ export class BusServerManager {
 
         this.log(`Starting server process using ${spec.launchMode}.`, 'play');
         this.log(`Exec: ${spec.command} ${spec.args.join(' ')}`.trim(), 'terminal');
+        if (shouldForceElectronRunAsNode) {
+            this.log('Launching the IDE executable in Node compatibility mode via ELECTRON_RUN_AS_NODE=1.', 'info');
+        }
         this.log(`Resolution: ${spec.resolvedBy}`, 'info');
 
         try {
@@ -959,8 +964,11 @@ export class BusServerManager {
                 this.log(`Spawn error: ${err.message}`, 'error');
             });
 
-            this.serverProcess.on('close', code => {
-                this.log(`Server exited (code ${code})`, 'warning');
+            this.serverProcess.on('close', (code, signal) => {
+                const exitDetail = signal
+                    ? `signal ${signal}`
+                    : `code ${code ?? 'unknown'}`;
+                this.log(`Server exited (${exitDetail}). Check "MCP Server Logs" for startup details.`, 'warning');
                 this.serverProcess = null;
                 this.setServerReady(false);
                 void vscode.commands.executeCommand('setContext', 'agentchatbus:mcpServerActive', false);
@@ -980,7 +988,7 @@ export class BusServerManager {
                 retries--;
             }
 
-            this.log('Server failed to respond to health checks.', 'error');
+            this.log('Server failed to respond to health checks. Review the MCP Server Logs panel for startup stderr/stdout.', 'error');
             return false;
         } catch (error) {
             const message = error instanceof Error ? error.message : String(error);

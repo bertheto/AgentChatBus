@@ -91,3 +91,26 @@ export class PermissionError extends BusError {
     Object.setPrototypeOf(this, PermissionError.prototype);
   }
 }
+
+export class MessageEditNoChangeError extends BusError {
+  constructor(public currentVersion: number) {
+    super(`Content unchanged (current version: ${currentVersion})`, {
+      error: "MessageEditNoChangeError",
+      no_change: true,
+      version: currentVersion
+    });
+    this.name = "MessageEditNoChangeError";
+    Object.setPrototypeOf(this, MessageEditNoChangeError.prototype);
+  }
+}
+
+export class ContentFilterError extends BusError {
+  constructor(public patternName: string) {
+    super(`Content blocked: detected ${patternName}`, {
+      error: "ContentFilterError",
+      pattern: patternName
+    });
+    this.name = "ContentFilterError";
+    Object.setPrototypeOf(this, ContentFilterError.prototype);
+  }
+}

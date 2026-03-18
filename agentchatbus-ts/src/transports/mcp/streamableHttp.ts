@@ -5,6 +5,7 @@
 import { randomUUID } from "node:crypto";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import {
   ListToolsRequestSchema,
   CallToolRequestSchema,
@@ -18,13 +19,14 @@ import { BUS_VERSION } from "../../core/config/env.js";
 import { getPromptResult, getPromptsList, getResourcesList, readResourceText } from "./handlers.js";
 
 // Store active transports by session ID
-const transports = new Map<string, StreamableHTTPServerTransport>();
-const serverReady = new Map<string, Promise<void>>();
+const streamableTransports = new Map<string, StreamableHTTPServerTransport>();
+const streamableServerReady = new Map<string, Promise<void>>();
+const sseTransports = new Map<string, SSEServerTransport>();
 
 /**
  * Create a new MCP server instance with all handlers configured.
  */
-function createMcpServer(): Server {
+export function createMcpServer(): Server {
   const server = new Server(
     {
       name: "agentchatbus",
@@ -104,12 +106,12 @@ export async function getOrCreateTransport(sessionId?: string): Promise<{
   isNew: boolean;
 }> {
   // If session exists and server is ready, return it
-  if (sessionId && transports.has(sessionId)) {
-    const readyPromise = serverReady.get(sessionId);
+  if (sessionId && streamableTransports.has(sessionId)) {
+    const readyPromise = streamableServerReady.get(sessionId);
     if (readyPromise) {
       await readyPromise;
     }
-    return { transport: transports.get(sessionId)!, sessionId, isNew: false };
+    return { transport: streamableTransports.get(sessionId)!, sessionId, isNew: false };
   }
 
   const newSessionId = sessionId || randomUUID();
@@ -117,18 +119,23 @@ export async function getOrCreateTransport(sessionId?: string): Promise<{
     sessionIdGenerator: () => newSessionId,
   });
 
-  transports.set(newSessionId, transport);
+  transport.onclose = () => {
+    streamableTransports.delete(newSessionId);
+    streamableServerReady.delete(newSessionId);
+  };
+
+  streamableTransports.set(newSessionId, transport);
 
   // Create and connect MCP server to transport
   const mcpServer = createMcpServer();
   const connectPromise = mcpServer.connect(transport).catch((err) => {
     console.error(`[MCP] Failed to connect server to transport: ${err.message}`);
-    transports.delete(newSessionId);
-    serverReady.delete(newSessionId);
+    streamableTransports.delete(newSessionId);
+    streamableServerReady.delete(newSessionId);
     throw err;
   });
 
-  serverReady.set(newSessionId, connectPromise);
+  streamableServerReady.set(newSessionId, connectPromise);
   await connectPromise;
 
   return { transport, sessionId: newSessionId, isNew: true };
@@ -138,20 +145,51 @@ export async function getOrCreateTransport(sessionId?: string): Promise<{
  * Get an existing transport by session ID.
  */
 export function getTransport(sessionId: string): StreamableHTTPServerTransport | undefined {
-  return transports.get(sessionId);
+  return streamableTransports.get(sessionId);
+}
+
+/**
+ * Register a legacy SSE transport after it has been created in the HTTP layer.
+ */
+export function registerLegacySseTransport(transport: SSEServerTransport): string {
+  const sessionId = transport.sessionId;
+  sseTransports.set(sessionId, transport);
+  transport.onclose = () => {
+    sseTransports.delete(sessionId);
+  };
+  return sessionId;
+}
+
+/**
+ * Connect a legacy SSE transport to a fresh MCP server instance.
+ */
+export async function connectLegacySseTransport(transport: SSEServerTransport): Promise<void> {
+  const mcpServer = createMcpServer();
+  await mcpServer.connect(transport);
+}
+
+/**
+ * Get an existing legacy SSE transport by session ID.
+ */
+export function getLegacySseTransport(sessionId: string): SSEServerTransport | undefined {
+  return sseTransports.get(sessionId);
 }
 
 /**
  * Delete a transport (cleanup).
  */
 export function deleteTransport(sessionId: string): void {
-  transports.delete(sessionId);
-  serverReady.delete(sessionId);
+  streamableTransports.delete(sessionId);
+  streamableServerReady.delete(sessionId);
+  sseTransports.delete(sessionId);
 }
 
 /**
  * Get all active session IDs.
  */
 export function getActiveSessions(): string[] {
-  return Array.from(transports.keys());
+  return Array.from(new Set([
+    ...streamableTransports.keys(),
+    ...sseTransports.keys(),
+  ]));
 }

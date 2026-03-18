@@ -1,4 +1,4 @@
 {
-  "type": "module",
-  "private": true
+  "private": true,
+  "type": "commonjs"
 }

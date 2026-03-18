@@ -10,6 +10,7 @@ import { SetupProvider } from './providers/setupProvider';
 import { McpLogProvider } from './providers/mcpLogProvider';
 import { SettingsProvider } from './providers/settingsProvider';
 import { StatusPanel } from './views/statusPanel';
+import { SettingsPanel } from './views/settingsPanel';
 
 let apiClient: AgentChatBusApiClient | undefined;
 let mcpLogProvider: McpLogProvider | undefined;
@@ -17,6 +18,18 @@ let settingsProvider: SettingsProvider | undefined;
 let cursorConfigManager: CursorMcpConfigManager | undefined;
 let serverManagerInstance: BusServerManager | undefined;
 let mainViewsInitialized = false;
+
+function getBrowserOpenUrl(rawUrl: string): string {
+    try {
+        const normalized = new URL(rawUrl);
+        if (normalized.hostname === '0.0.0.0' || normalized.hostname === '::' || normalized.hostname === '[::]') {
+            normalized.hostname = '127.0.0.1';
+        }
+        return normalized.toString();
+    } catch {
+        return rawUrl;
+    }
+}
 
 export function activate(context: vscode.ExtensionContext) {
     console.log('[AgentChatBus] Activating extension...');
@@ -183,14 +196,11 @@ function initializeMainViews(context: vscode.ExtensionContext, serverManager: Bu
         vscode.commands.registerCommand('agentchatbus.openWebConsole', () => {
             const config = vscode.workspace.getConfiguration('agentchatbus');
             const url = config.get<string>('serverUrl', 'http://127.0.0.1:39765');
-            vscode.env.openExternal(vscode.Uri.parse(url));
+            const browserUrl = getBrowserOpenUrl(url);
+            vscode.env.openExternal(vscode.Uri.parse(browserUrl));
         }),
         vscode.commands.registerCommand('agentchatbus.serverSettings', () => {
-            vscode.window.showInformationMessage('Server settings are currently managed via VS Code Configuration.', { modal: true }, 'Open Settings').then(selection => {
-                if (selection === 'Open Settings') {
-                    vscode.commands.executeCommand('workbench.action.openSettings', 'agentchatbus');
-                }
-            });
+            SettingsPanel.createOrShow();
         }),
         vscode.commands.registerCommand('agentchatbus.filterThreads', async () => {
             const statuses = ['discuss', 'implement', 'review', 'done', 'closed', 'archived'];
@@ -231,10 +241,10 @@ function initializeMainViews(context: vscode.ExtensionContext, serverManager: Bu
             const serverUrl = config.get<string>('serverUrl', 'http://127.0.0.1:39765');
             const previewPath = cursorConfigManager.getGlobalConfigPath();
             const normalizedServerUrl = serverUrl.replace(/\/+$/, '');
-            const sseUrl = `${normalizedServerUrl}/mcp/sse`;
+            const mcpUrl = `${normalizedServerUrl}/mcp/sse`;
 
             const confirmed = await vscode.window.showInformationMessage(
-                `Update Cursor global MCP config at ${previewPath} to point ${'agentchatbus'} at ${sseUrl}?`,
+                `Update Cursor global MCP config at ${previewPath} to point ${'agentchatbus'} at ${mcpUrl}?`,
                 { modal: true },
                 'Configure Cursor'
             );
@@ -246,7 +256,7 @@ function initializeMainViews(context: vscode.ExtensionContext, serverManager: Bu
                 const result = await cursorConfigManager.configureGlobalAgentChatBus(serverUrl);
                 const action = result.changed ? 'configured' : 'already up to date';
                 const followUp = await vscode.window.showInformationMessage(
-                    `Cursor MCP ${action}: ${result.serverName} -> ${result.sseUrl}`,
+                    `Cursor MCP ${action}: ${result.serverName} -> ${result.serverUrl}`,
                     'Open Config'
                 );
                 if (followUp === 'Open Config') {

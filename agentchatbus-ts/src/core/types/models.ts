@@ -19,6 +19,7 @@ export interface AgentRecord {
   // 移植自：Python test_agent_registry.py L39
   // alias_source 用于追踪 display_name 的来源 ('user' | 'auto')
   alias_source?: string;
+  registered_at?: string;
 }
 
 export interface ThreadRecord {
@@ -30,6 +31,9 @@ export interface ThreadRecord {
   system_prompt?: string;
   template_id?: string;
   waiting_agents?: Array<{ id: string; display_name?: string; emoji?: string }>;
+  closed_at?: string;
+  summary?: string;
+  metadata?: Record<string, unknown>;
 }
 
 export interface MessageRecord {

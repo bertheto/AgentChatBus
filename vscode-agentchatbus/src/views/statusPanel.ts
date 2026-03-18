@@ -133,7 +133,7 @@ export class StatusPanel {
             <div><span class="label">Label:</span> <span class="value">${mcp.providerLabel || 'N/A'}</span></div>
             <div><span class="label">Transport:</span> <span class="value">${mcp.transport || 'N/A'}</span></div>
             <div><span class="label">Server URL:</span> <span class="value">${mcp.serverUrl || 'N/A'}</span></div>
-            <div><span class="label">SSE Endpoint:</span> <span class="value">${mcp.sseEndpoint || 'N/A'}</span></div>
+            <div><span class="label">MCP Endpoint:</span> <span class="value">${mcp.sseEndpoint || 'N/A'}</span></div>
             <div><span class="label">Required VS Code:</span> <span class="value">${mcp.requiredVscodeVersion || 'N/A'}</span></div>
         </div>
     </div>

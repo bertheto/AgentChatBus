@@ -16,31 +16,6 @@ const bundledWebUiRoot = path.join(extensionRoot, 'resources', 'web-ui');
 
 const mappings = [
   {
-    from: path.join(repoRoot, 'web-ui', 'extension', 'media', 'chatPanel.js'),
-    to: path.join(extensionRoot, 'resources', 'media', 'chatPanel.js'),
-    label: 'extension chat panel script',
-  },
-  {
-    from: path.join(repoRoot, 'web-ui', 'extension', 'media', 'chatPanel.css'),
-    to: path.join(extensionRoot, 'resources', 'media', 'chatPanel.css'),
-    label: 'extension chat panel style',
-  },
-  {
-    from: path.join(repoRoot, 'web-ui', 'extension', 'media', 'messageRenderer.js'),
-    to: path.join(extensionRoot, 'resources', 'media', 'messageRenderer.js'),
-    label: 'extension message renderer script',
-  },
-  {
-    from: path.join(repoRoot, 'web-ui', 'extension', 'media', 'messageRenderer.css'),
-    to: path.join(extensionRoot, 'resources', 'media', 'messageRenderer.css'),
-    label: 'extension message renderer style',
-  },
-  {
-    from: path.join(repoRoot, 'web-ui', 'extension', 'media', 'mermaid.min.js'),
-    to: path.join(extensionRoot, 'resources', 'media', 'mermaid.min.js'),
-    label: 'mermaid vendor',
-  },
-  {
     from: path.join(repoRoot, 'web-ui', 'extension', 'index.html'),
     to: path.join(extensionRoot, 'resources', 'webui-extension', 'index.html'),
     label: 'extension debug html',
@@ -50,6 +25,14 @@ const mappings = [
     to: path.join(extensionRoot, 'resources', 'webui-extension', 'vscodeBridgeBrowser.js'),
     label: 'extension debug browser bridge',
   },
+];
+
+const legacyMediaArtifacts = [
+  path.join(extensionRoot, 'resources', 'media', 'chatPanel.js'),
+  path.join(extensionRoot, 'resources', 'media', 'chatPanel.css'),
+  path.join(extensionRoot, 'resources', 'media', 'messageRenderer.js'),
+  path.join(extensionRoot, 'resources', 'media', 'messageRenderer.css'),
+  path.join(extensionRoot, 'resources', 'media', 'mermaid.min.js'),
 ];
 
 async function ensureParentDir(filePath) {
@@ -86,8 +69,17 @@ async function runTsServerBuild() {
   });
 }
 
+async function removeDirectory(targetPath) {
+  await rm(targetPath, {
+    recursive: true,
+    force: true,
+    maxRetries: 5,
+    retryDelay: 200,
+  });
+}
+
 async function syncDirectory(from, to, label) {
-  await rm(to, { recursive: true, force: true });
+  await removeDirectory(to);
   await mkdir(path.dirname(to), { recursive: true });
   await cp(from, to, {
     recursive: true,
@@ -104,8 +96,8 @@ async function writeBundledServerPackageJson() {
   await mkdir(bundledServerRoot, { recursive: true });
   const packageJsonPath = path.join(bundledServerRoot, 'package.json');
   const packageJson = {
-    type: 'module',
     private: true,
+    type: 'commonjs',
   };
   await writeFile(packageJsonPath, `${JSON.stringify(packageJson, null, 2)}\n`, 'utf8');
   return packageJsonPath;
@@ -114,6 +106,8 @@ async function writeBundledServerPackageJson() {
 async function main() {
   console.log('[sync:webui-assets] building agentchatbus-ts...');
   await runTsServerBuild();
+
+  await Promise.all(legacyMediaArtifacts.map((filePath) => rm(filePath, { force: true })));
 
   const copied = [];
   for (const mapping of mappings) {

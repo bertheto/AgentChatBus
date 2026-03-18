@@ -5,7 +5,7 @@ import * as os from 'os';
 
 type CursorMcpServerDefinition = {
     url: string;
-    type: 'sse';
+    type: 'streamable-http' | 'sse';
 };
 
 type CursorMcpConfig = {
@@ -17,7 +17,7 @@ export type CursorConfigResult = {
     path: string;
     changed: boolean;
     serverName: string;
-    sseUrl: string;
+    serverUrl: string;
 };
 
 export class CursorMcpConfigManager {
@@ -30,7 +30,7 @@ export class CursorMcpConfigManager {
     async configureGlobalAgentChatBus(serverUrl: string): Promise<CursorConfigResult> {
         const configPath = this.getGlobalConfigPath();
         const normalizedServerUrl = serverUrl.replace(/\/+$/, '');
-        const sseUrl = `${normalizedServerUrl}/mcp/sse`;
+        const mcpUrl = `${normalizedServerUrl}/mcp/sse`;
         const currentConfig = await this.readConfig(configPath);
 
         const nextConfig: CursorMcpConfig = {
@@ -38,7 +38,7 @@ export class CursorMcpConfigManager {
             mcpServers: {
                 ...(currentConfig.mcpServers || {}),
                 [CursorMcpConfigManager.SERVER_NAME]: {
-                    url: sseUrl,
+                    url: mcpUrl,
                     type: 'sse'
                 }
             }
@@ -54,7 +54,7 @@ export class CursorMcpConfigManager {
             path: configPath,
             changed,
             serverName: CursorMcpConfigManager.SERVER_NAME,
-            sseUrl
+            serverUrl: mcpUrl
         };
     }
 

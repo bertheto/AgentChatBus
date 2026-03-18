@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { getTreeIcon } from '../ui/treeIcons';
 
 export class SettingsProvider implements vscode.TreeDataProvider<SettingItem> {
     private _onDidChangeTreeData: vscode.EventEmitter<SettingItem | undefined | void> = new vscode.EventEmitter<SettingItem | undefined | void>();
@@ -15,31 +16,31 @@ export class SettingsProvider implements vscode.TreeDataProvider<SettingItem> {
             new SettingItem(
                 "MCP Integration Status",
                 "Inspect MCP provider registration, transport, and target endpoint",
-                "plug",
+                "mgmt-mcp-status.svg",
                 "agentchatbus.showMcpStatus"
             ),
             new SettingItem(
                 "Configure Cursor MCP",
                 "Update Cursor's global mcp.json with an AgentChatBus SSE entry",
-                "symbol-event",
+                "mgmt-cursor-configure.svg",
                 "agentchatbus.configureCursorMcp"
             ),
             new SettingItem(
                 "Open Cursor MCP Config",
                 "Open Cursor's global mcp.json for inspection",
-                "go-to-file",
+                "mgmt-cursor-open.svg",
                 "agentchatbus.openCursorMcpConfig"
             ),
             new SettingItem(
                 "Open Web Console", 
                 "Open the AgentChatBus dashboard in your browser", 
-                "browser", 
+                "mgmt-web-console.svg", 
                 "agentchatbus.openWebConsole"
             ),
             new SettingItem(
                 "Server Settings", 
                 "Configure AgentChatBus server parameters", 
-                "settings-gear", 
+                "mgmt-server-settings.svg", 
                 "agentchatbus.serverSettings"
             )
         ];
@@ -50,12 +51,12 @@ class SettingItem extends vscode.TreeItem {
     constructor(
         public readonly label: string,
         public readonly tooltip: string,
-        public readonly icon: string,
+        public readonly iconFile: string,
         public readonly commandId: string
     ) {
         super(label, vscode.TreeItemCollapsibleState.None);
         this.tooltip = tooltip;
-        this.iconPath = new vscode.ThemeIcon(icon);
+        this.iconPath = getTreeIcon(iconFile);
         this.command = {
             title: label,
             command: commandId

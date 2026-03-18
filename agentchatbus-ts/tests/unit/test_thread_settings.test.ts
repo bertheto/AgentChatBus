@@ -62,9 +62,13 @@ describe("thread settings admin parity", () => {
     expect(updated!.timeout_seconds).toBe(3600);
   });
 
-  it("returns undefined for non-existent thread settings", () => {
+  it("auto-creates default settings for non-existent thread", () => {
     const store = getMemoryStore();
     const settings = store.getThreadSettings("non-existent-thread-id");
-    expect(settings).toBeUndefined();
+    // Fix #35: getThreadSettings now auto-creates defaults (Python parity)
+    expect(settings).toBeDefined();
+    expect(settings!.auto_administrator_enabled).toBe(true);
+    expect(settings!.timeout_seconds).toBe(120);
+    expect(settings!.switch_timeout_seconds).toBe(60);
   });
 });

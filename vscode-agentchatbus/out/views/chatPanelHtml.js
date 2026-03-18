@@ -1,37 +1,4 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.getChatPanelWebviewOptions = getChatPanelWebviewOptions;
-exports.getRecoveredChatPanelWebviewOptions = getRecoveredChatPanelWebviewOptions;
-exports.buildRecoveredChatPanelHtml = buildRecoveredChatPanelHtml;
-exports.buildChatPanelHtml = buildChatPanelHtml;
-function escapeHtml(value) {
-    return String(value)
-        .replace(/&/g, '&amp;')
-        .replace(/"/g, '&quot;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;');
-}
-function escapeText(value) {
-    return String(value)
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;');
-}
-function getChatPanelWebviewOptions(localResourceRoot) {
-    return {
-        enableScripts: true,
-        retainContextWhenHidden: true,
-        localResourceRoots: [localResourceRoot],
-    };
-}
-function getRecoveredChatPanelWebviewOptions(localResourceRoot) {
-    return {
-        enableScripts: false,
-        localResourceRoots: [localResourceRoot],
-    };
-}
-function buildRecoveredChatPanelHtml() {
-    return `<!DOCTYPE html>
+"use strict";var d=Object.defineProperty;var r=Object.getOwnPropertyDescriptor;var s=Object.getOwnPropertyNames;var l=Object.prototype.hasOwnProperty;var c=(t,e)=>{for(var n in e)d(t,n,{get:e[n],enumerable:!0})},p=(t,e,n,o)=>{if(e&&typeof e=="object"||typeof e=="function")for(let a of s(e))!l.call(t,a)&&a!==n&&d(t,a,{get:()=>e[a],enumerable:!(o=r(e,a))||o.enumerable});return t};var h=t=>p(d({},"__esModule",{value:!0}),t);var g={};c(g,{buildChatPanelHtml:()=>m,buildRecoveredChatPanelHtml:()=>u,getChatPanelWebviewOptions:()=>v,getRecoveredChatPanelWebviewOptions:()=>b});module.exports=h(g);function i(t){return String(t).replace(/&/g,"&amp;").replace(/"/g,"&quot;").replace(/</g,"&lt;").replace(/>/g,"&gt;")}function v(t){return{enableScripts:!0,retainContextWhenHidden:!0,localResourceRoots:[t]}}function b(t){return{enableScripts:!1,localResourceRoots:[t]}}function u(){return`<!DOCTYPE html>
         <html lang="en">
         <head>
             <meta charset="UTF-8">
@@ -49,25 +16,22 @@ function buildRecoveredChatPanelHtml() {
                 <p class="hint">Please open the thread again from the Threads panel.</p>
             </div>
         </body>
-        </html>`;
-}
-function buildChatPanelHtml(resources, config) {
-    return `<!DOCTYPE html>
+        </html>`}function m(t,e){return`<!DOCTYPE html>
         <html lang="en">
         <head>
             <meta charset="UTF-8">
             <meta name="viewport" content="width=device-width, initial-scale=1.0">
             <title>Chat</title>
-            <link rel="stylesheet" href="${resources.rendererStyleUri}">
-            <link rel="stylesheet" href="${resources.panelStyleUri}">
+            <link rel="stylesheet" href="${t.rendererStyleUri}">
+            <link rel="stylesheet" href="${t.panelStyleUri}">
         </head>
         <body
-            data-theme="${escapeHtml(config.theme)}"
-            data-thread-id="${escapeHtml(config.threadId)}"
-            data-thread-topic="${escapeHtml(config.threadTopic)}"
-            data-thread-status="${escapeHtml(config.threadStatus)}"
-            data-base-url="${escapeHtml(config.baseUrl)}"
-            data-mermaid-script-url="${escapeHtml(config.mermaidScriptUrl)}"
+            data-theme="${i(e.theme)}"
+            data-thread-id="${i(e.threadId)}"
+            data-thread-topic="${i(e.threadTopic)}"
+            data-thread-status="${i(e.threadStatus)}"
+            data-base-url="${i(e.baseUrl)}"
+            data-mermaid-script-url="${i(e.mermaidScriptUrl)}"
         >
             <div id="chat-shell">
                 <header id="chat-header">
@@ -160,9 +124,7 @@ function buildChatPanelHtml(resources, config) {
 
             <div id="toast" class="hidden"></div>
 
-            <script src="${resources.rendererScriptUri}"></script>
-            <script src="${resources.panelScriptUri}"></script>
+            <script src="${t.rendererScriptUri}"></script>
+            <script src="${t.panelScriptUri}"></script>
         </body>
-        </html>`;
-}
-//# sourceMappingURL=chatPanelHtml.js.map
+        </html>`}0&&(module.exports={buildChatPanelHtml,buildRecoveredChatPanelHtml,getChatPanelWebviewOptions,getRecoveredChatPanelWebviewOptions});

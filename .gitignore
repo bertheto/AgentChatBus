@@ -35,6 +35,7 @@ bus_test.db
 *.swp
 *.swo
 .lingma
+.claude
 
 # OS
 .DS_Store

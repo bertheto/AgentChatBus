@@ -1,10 +1,9 @@
 import Fastify from "fastify";
 import multipart from "@fastify/multipart";
 import fastifyStatic from "@fastify/static";
-import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
-import { writeFileSync } from "node:fs";
-import { randomUUID } from "node:crypto";
+import { existsSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { callTool, listTools } from "../../adapters/mcp/tools.js";
 import { SeqMismatchError, MissingSyncFieldsError, ReplyTokenInvalidError, ReplyTokenExpiredError, ReplyTokenReplayError, BusError } from "../../core/types/errors.js";
@@ -13,7 +12,13 @@ import { MemoryStore, memoryStore } from "../../core/services/memoryStore.js";
 import { registerStore } from "../../core/services/storeSingleton.js";
 import { eventBus } from "../../shared/eventBus.js";
 import { handleMcpRequest } from "../mcp/handlers.js";
-import { getOrCreateTransport, deleteTransport } from "../mcp/streamableHttp.js";
+import {
+  getOrCreateTransport,
+  deleteTransport,
+  registerLegacySseTransport,
+  connectLegacySseTransport,
+  getLegacySseTransport,
+} from "../mcp/streamableHttp.js";
 
 // Allow tests to override the global memoryStore instance
 export let memoryStoreInstance: MemoryStore | null = null;
@@ -22,10 +27,25 @@ export function getMemoryStore(): MemoryStore {
   return memoryStoreInstance || memoryStore;
 }
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-
 type JsonBody = Record<string, unknown>;
+
+function resolveStaticPath(): string {
+  const envStaticPath = process.env.AGENTCHATBUS_WEB_UI_DIR;
+  const candidates = [
+    envStaticPath,
+    join(process.cwd(), "resources", "web-ui"),
+    join(process.cwd(), "web-ui"),
+    join(process.cwd(), "..", "web-ui"),
+  ].filter((value): value is string => Boolean(value));
+
+  for (const candidate of candidates) {
+    if (existsSync(join(candidate, "index.html"))) {
+      return candidate;
+    }
+  }
+
+  return candidates[0] ?? join(process.cwd(), "web-ui");
+}
 
 function isLoopbackRequest(request: FastifyRequest): boolean {
   const ip = request.ip || request.socket.remoteAddress || "";
@@ -64,7 +84,7 @@ export function createHttpServer() {
 
   void fastify.register(multipart);
 
-  const staticPath = process.env.AGENTCHATBUS_WEB_UI_DIR || join(__dirname, "../../../../web-ui");
+  const staticPath = resolveStaticPath();
   void fastify.register(fastifyStatic, {
     root: staticPath,
     prefix: "/static/",
@@ -74,7 +94,7 @@ export function createHttpServer() {
     return reply.sendFile("index.html");
   });
 
-  fastify.get("/health", async () => ({ ok: true, service: "agentchatbus-ts" }));
+  fastify.get("/health", async () => ({ status: "ok", service: "AgentChatBus" }));
 
   fastify.get("/events", async (_request, reply) => {
     reply.raw.writeHead(200, {
@@ -92,72 +112,138 @@ export function createHttpServer() {
     return reply;
   });
 
-  // POST /mcp/sse - Streamable HTTP endpoint (for VS Code and new MCP clients)
-  // Uses official MCP SDK StreamableHTTPServerTransport
-  fastify.post("/mcp/sse", async (request, reply) => {
+  async function handleStreamableHttpRequest(request: FastifyRequest, reply: FastifyReply) {
     // Get session ID from header (MCP SDK uses 'mcp-session-id')
     const headerSessionId = request.headers["mcp-session-id"] as string | undefined;
-    
-    console.log(`[MCP-SSE] POST request: session=${headerSessionId?.slice(0, 8) || 'new'}`);
+
+    console.log(`[MCP] ${request.method} request: session=${headerSessionId?.slice(0, 8) || "new"}`);
 
     try {
       // Get or create transport (async - waits for server to be ready)
       const { transport, sessionId, isNew } = await getOrCreateTransport(headerSessionId);
-      
+
       // Set session ID header in response
       if (isNew) {
         reply.header("mcp-session-id", sessionId);
       }
-      
+
       // Use native Node.js request/response objects for StreamableHTTPServerTransport
       await transport.handleRequest(request.raw, reply.raw, request.body);
-      
-      // Return undefined to let the transport handle the response
+
       return reply;
     } catch (error: any) {
-      console.error(`[MCP-SSE] Error: ${error.message}`);
+      console.error(`[MCP] ${request.method} Error: ${error.message}`);
       reply.code(500);
       return { error: error.message };
     }
-  });
+  }
 
-  // GET /mcp/sse - SSE stream endpoint for server-initiated notifications
-  fastify.get("/mcp/sse", async (request, reply) => {
+  // POST /mcp - Streamable HTTP endpoint (preferred modern MCP endpoint)
+  fastify.post("/mcp", handleStreamableHttpRequest);
+
+  // GET /mcp - SSE stream for the modern Streamable HTTP transport
+  fastify.get("/mcp", async (request, reply) => {
     const headerSessionId = request.headers["mcp-session-id"] as string | undefined;
-    
-    console.log(`[MCP-SSE] GET request: session=${headerSessionId?.slice(0, 8) || 'new'}`);
 
     try {
-      // Get or create transport (async - waits for server to be ready)
-      const { transport, sessionId, isNew } = await getOrCreateTransport(headerSessionId);
-      
-      // Set session ID header in response
-      if (isNew) {
-        reply.header("mcp-session-id", sessionId);
+      if (!headerSessionId) {
+        reply.code(400);
+        return { error: "Missing mcp-session-id header" };
       }
-      
-      // Use native Node.js request/response objects
+
+      const { transport } = await getOrCreateTransport(headerSessionId);
       await transport.handleRequest(request.raw, reply.raw);
-      
+
       return reply;
     } catch (error: any) {
-      console.error(`[MCP-SSE] GET Error: ${error.message}`);
+      console.error(`[MCP] GET Error: ${error.message}`);
       reply.code(500);
       return { error: error.message };
     }
   });
 
-  // DELETE /mcp/sse - Close session endpoint
-  fastify.delete("/mcp/sse", async (request, reply) => {
+  // DELETE /mcp - Close modern Streamable HTTP session
+  fastify.delete("/mcp", async (request, reply) => {
     const headerSessionId = request.headers["mcp-session-id"] as string | undefined;
-    
+
     if (headerSessionId) {
       deleteTransport(headerSessionId);
-      console.log(`[MCP-SSE] DELETE session: ${headerSessionId.slice(0, 8)}`);
+      console.log(`[MCP] DELETE session: ${headerSessionId.slice(0, 8)}`);
     }
-    
+
     reply.code(204);
     return reply;
+  });
+
+  // Keep /mcp/sse as an alias for existing configs already shipped to users.
+  fastify.post("/mcp/sse", handleStreamableHttpRequest);
+  fastify.get("/mcp/sse", async (request, reply) => {
+    const headerSessionId = request.headers["mcp-session-id"] as string | undefined;
+    if (!headerSessionId) {
+      reply.code(400);
+      return { error: "Missing mcp-session-id header" };
+    }
+    try {
+      const { transport } = await getOrCreateTransport(headerSessionId);
+      await transport.handleRequest(request.raw, reply.raw);
+      return reply;
+    } catch (error: any) {
+      console.error(`[MCP-ALIAS] GET Error: ${error.message}`);
+      reply.code(500);
+      return { error: error.message };
+    }
+  });
+  fastify.delete("/mcp/sse", async (request, reply) => {
+    const headerSessionId = request.headers["mcp-session-id"] as string | undefined;
+    if (headerSessionId) {
+      deleteTransport(headerSessionId);
+    }
+    reply.code(204);
+    return reply;
+  });
+
+  // Deprecated HTTP+SSE transport for clients that still fall back to the old protocol.
+  fastify.get("/sse", async (_request, reply) => {
+    try {
+      const transport = new SSEServerTransport("/messages", reply.raw);
+      registerLegacySseTransport(transport);
+      await connectLegacySseTransport(transport);
+      return reply;
+    } catch (error: any) {
+      console.error(`[MCP-SSE-LEGACY] GET Error: ${error.message}`);
+      if (!reply.sent) {
+        reply.code(500);
+        return { error: error.message };
+      }
+      return reply;
+    }
+  });
+
+  fastify.post("/messages", async (request, reply) => {
+    const query = request.query as { sessionId?: string };
+    const sessionId = typeof query.sessionId === "string" ? query.sessionId : "";
+    if (!sessionId) {
+      reply.code(400);
+      return { error: "Missing sessionId parameter" };
+    }
+
+    const transport = getLegacySseTransport(sessionId);
+    if (!transport) {
+      reply.code(404);
+      return { error: "Session not found" };
+    }
+
+    try {
+      await transport.handlePostMessage(request.raw, reply.raw, request.body);
+      return reply;
+    } catch (error: any) {
+      console.error(`[MCP-SSE-LEGACY] POST Error: ${error.message}`);
+      if (!reply.sent) {
+        reply.code(500);
+        return { error: error.message };
+      }
+      return reply;
+    }
   });
 
   // Legacy endpoint for backwards compatibility
@@ -633,7 +719,17 @@ export function createHttpServer() {
 
   fastify.post("/api/threads/:threadId/archive", async (request, reply) => setThreadStatus(request, reply, "archived"));
   fastify.post("/api/threads/:threadId/unarchive", async (request, reply) => setThreadStatus(request, reply, "discuss"));
-  fastify.post("/api/threads/:threadId/close", async (request, reply) => setThreadStatus(request, reply, "closed"));
+  fastify.post("/api/threads/:threadId/close", async (request, reply) => {
+    const params = request.params as { threadId: string };
+    const body = (request.body || {}) as JsonBody;
+    const summary = typeof body.summary === "string" ? body.summary : undefined;
+    const ok = store.closeThread(params.threadId, summary);
+    if (!ok) {
+      reply.code(404);
+      return { detail: "Thread not found" };
+    }
+    return { ok: true, thread_id: params.threadId, status: "closed" };
+  });
   fastify.post("/api/threads/:threadId/state", async (request, reply) => {
     const body = request.body as JsonBody;
     return setThreadStatus(request, reply, String(body.state || "discuss") as never);
@@ -783,6 +879,11 @@ export function createHttpServer() {
   fastify.post("/api/templates", async (request, reply) => {
     const body = request.body as JsonBody;
     try {
+      // Fix #7: Content filter on system_prompt
+      if (body.system_prompt) {
+        const { checkContentOrThrow } = await import("../../core/services/contentFilter.js");
+        checkContentOrThrow(String(body.system_prompt));
+      }
       const success = store.createTemplate({
         id: String(body.id),
         name: String(body.name),
@@ -870,7 +971,7 @@ export function createHttpServer() {
     // Priority: creator_admin > auto_assigned_admin
     const adminId = settings?.creator_admin_id || settings?.auto_assigned_admin_id || null;
     const adminName = settings?.creator_admin_name || settings?.auto_assigned_admin_name || null;
-    const adminType = settings?.creator_admin_id ? "creator" : (settings?.auto_assigned_admin_id ? "auto" : null);
+    const adminType = settings?.creator_admin_id ? "creator" : (settings?.auto_assigned_admin_id ? "auto_assigned" : null);
     const assignedAt = settings?.creator_assignment_time || settings?.admin_assignment_time || null;
     
     // Get emoji from agent record
@@ -1242,6 +1343,21 @@ export function createHttpServer() {
     } catch (e) {
       // ignore
     }
+  });
+
+  // Fix #4: Background tasks (Python parity)
+  // Event cleanup every 60s — remove events older than 1 hour
+  const cleanupInterval = setInterval(() => {
+    try { store.cleanupOldEvents(3600); } catch (_) { /* ignore */ }
+  }, 60_000);
+  // Thread timeout sweep — configurable interval
+  const timeoutInterval = setInterval(() => {
+    try { store.threadTimeoutSweep(30); } catch (_) { /* ignore */ }
+  }, 30_000);
+  // Cleanup intervals on server close
+  fastify.addHook("onClose", () => {
+    clearInterval(cleanupInterval);
+    clearInterval(timeoutInterval);
   });
 
   return fastify;

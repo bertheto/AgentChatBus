@@ -79,4 +79,29 @@ describe('Agent Registry (Ported from test_agent_registry.py)', () => {
     expect(emoji1).toBe(emoji2);
     expect(emoji1).toBe(emoji3);
   });
+
+  it('agent_list marks stale heartbeat agents offline even if persisted is_online is true', () => {
+    const agent = store.registerAgent({ ide: 'VSCode', model: 'GPT' });
+    const stale = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+    (store as any).persistenceDb
+      .prepare('UPDATE agents SET is_online = 1, last_heartbeat = ?, last_activity_time = ? WHERE id = ?')
+      .run(stale, stale, agent.id);
+
+    const found = store.listAgents().find((a) => a.id === agent.id);
+    expect(found).toBeDefined();
+    expect(found?.is_online).toBe(false);
+  });
+
+  it('agent_list treats recent activity as online even when heartbeat is stale', () => {
+    const agent = store.registerAgent({ ide: 'VSCode', model: 'GPT' });
+    const stale = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+    const recent = new Date().toISOString();
+    (store as any).persistenceDb
+      .prepare('UPDATE agents SET last_heartbeat = ?, last_activity_time = ? WHERE id = ?')
+      .run(stale, recent, agent.id);
+
+    const found = store.listAgents().find((a) => a.id === agent.id);
+    expect(found).toBeDefined();
+    expect(found?.is_online).toBe(true);
+  });
 });

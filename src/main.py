@@ -2,7 +2,7 @@
 AgentChatBus main entry point.
 
 Starts a FastAPI HTTP server that:
-  1. Mounts the MCP Server (SSE + JSON-RPC) at /mcp
+  1. Exposes MCP transports for both modern Streamable HTTP and legacy SSE clients
   2. Serves a lightweight web console at /  (static HTML)
   3. Provides a simple SSE broadcast endpoint at /events for the web console
 """
@@ -691,10 +691,12 @@ app = FastAPI(
 )
 
 # ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
-# MCP SSE Transport (mounted at /mcp)
+# MCP transports
 # ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
-
+# Legacy SSE endpoint used by older MCP clients already configured against /mcp/sse.
 sse_transport = SseServerTransport("/mcp/messages/")
+# Standard legacy SSE endpoint that pairs with GET /sse.
+legacy_sse_transport = SseServerTransport("/messages/")
 
 # Live `/mcp/sse` stream registry (real TCP SSE streams currently connected).
 # This is independent from per-session message mapping in src.mcp_server.
@@ -721,28 +723,29 @@ class _SseCompletedResponse(Response):
         pass  # intentional no-op ΓÇö SSE transport already sent the response
 
 
-@app.get("/mcp/sse")
-async def mcp_sse_endpoint(request: Request):
-    """MCP SSE endpoint consumed by legacy MCP clients (Claude Desktop, etc.)."""
+async def _run_legacy_sse_endpoint(
+    request: Request,
+    transport: SseServerTransport,
+    transport_label: str,
+) -> Response:
+    """Run a legacy SSE endpoint backed by the provided transport."""
     from src.mcp_server import init_session_id, pop_agent_for_session, mark_sse_connected, mark_sse_disconnected, _session_language
     from src.db import crud
     from src.mcp_server import server as mcp_server
-    
-    # Track real `/mcp/sse` stream connection lifetime.
+
     stream_id = str(uuid.uuid4())
     _live_mcp_sse_streams[stream_id] = time.time()
 
-    # Initialize unique session ID for this SSE connection
     session_id = init_session_id()
-    mark_sse_connected(session_id)  # register live TCP connection immediately
-    logger.debug(f"New MCP SSE connection: session_id={session_id[:8]}")
-    
+    mark_sse_connected(session_id)
+    logger.debug(f"New {transport_label} connection: session_id={session_id[:8]}")
+
     lang = request.query_params.get("lang")
     if lang:
         _session_language.set(lang)
 
     try:
-        async with sse_transport.connect_sse(
+        async with transport.connect_sse(
             request.scope, request.receive, request._send
         ) as streams:
             await mcp_server.run(
@@ -750,28 +753,35 @@ async def mcp_sse_endpoint(request: Request):
                 mcp_server.create_initialization_options(),
             )
     except Exception as exc:
-        # Most are normal disconnects (anyio.ClosedResourceError, CancelledError…).
-        # Mark agent as offline if it was registered for this connection.
         agent_id, token = pop_agent_for_session(session_id)
         if agent_id and token:
             try:
                 db = await get_db()
                 await crud.agent_unregister(db, agent_id, token)
-                logger.info(f"Agent {agent_id} marked offline (SSE disconnect)")
+                logger.info(f"Agent {agent_id} marked offline ({transport_label} disconnect)")
             except Exception as db_err:
                 logger.warning(f"Failed to mark agent {agent_id} offline: {db_err}")
         else:
-            logger.debug("MCP SSE session ended (no agent registered): %s: %s", type(exc).__name__, exc)
+            logger.debug("%s session ended (no agent registered): %s: %s", transport_label, type(exc).__name__, exc)
     finally:
         _live_mcp_sse_streams.pop(stream_id, None)
-        mark_sse_disconnected(session_id)  # always remove from live-connection set
+        mark_sse_disconnected(session_id)
     return _SseCompletedResponse()
+
+@app.get("/mcp/sse")
+async def mcp_sse_endpoint(request: Request):
+    """Legacy MCP SSE endpoint preserved for existing clients configured at /mcp/sse."""
+    return await _run_legacy_sse_endpoint(request, sse_transport, "MCP SSE")
+
+@app.get("/sse")
+async def legacy_sse_endpoint(request: Request):
+    """Standard legacy SSE endpoint paired with /messages for old MCP clients."""
+    return await _run_legacy_sse_endpoint(request, legacy_sse_transport, "Legacy SSE")
 
 _streamable_transports = {}
 
-@app.post("/mcp/sse")
-async def mcp_streamable_http_endpoint(request: Request):
-    """MCP Streamable HTTP endpoint consumed by new MCP clients (Cursor V2)."""
+async def _handle_streamable_http_request(request: Request) -> Response:
+    """Handle Streamable HTTP requests on the standard /mcp endpoint."""
     try:
         from mcp.server.streamable_http import StreamableHTTPServerTransport, MCP_SESSION_ID_HEADER
     except ImportError:
@@ -787,6 +797,9 @@ async def mcp_streamable_http_endpoint(request: Request):
         if k.lower() == MCP_SESSION_ID_HEADER.lower():
             session_id = v
             break
+
+    if not session_id and request.method != "POST":
+        return Response("Missing mcp-session-id header", status_code=400)
 
     if not session_id:
         session_id = init_session_id()
@@ -848,6 +861,18 @@ async def mcp_streamable_http_endpoint(request: Request):
     return _SseCompletedResponse()
 
 
+@app.api_route("/mcp", methods=["GET", "POST", "DELETE"])
+async def mcp_streamable_http_endpoint(request: Request):
+    """Standard modern MCP Streamable HTTP endpoint."""
+    return await _handle_streamable_http_request(request)
+
+
+@app.api_route("/mcp/sse", methods=["POST", "DELETE"])
+async def mcp_streamable_http_alias_endpoint(request: Request):
+    """Backward-compatible modern MCP alias for clients still targeting /mcp/sse."""
+    return await _handle_streamable_http_request(request)
+
+
 # Mount handle_post_message as a raw ASGI app ΓÇö NOT a FastAPI route.
 # The transport sends its own 202 Accepted internally; a FastAPI route wrapper
 # would attempt a second response and produce ASGI errors.
@@ -862,6 +887,19 @@ async def _mcp_messages_asgi(scope, receive, send):
 
 
 app.mount("/mcp/messages/", app=_mcp_messages_asgi)
+
+
+async def _legacy_mcp_messages_asgi(scope, receive, send):
+    if scope.get("type") == "http":
+        try:
+            from src.mcp_server import bind_session_id_from_scope
+            bind_session_id_from_scope(scope)
+        except Exception:
+            pass
+    await legacy_sse_transport.handle_post_message(scope, receive, send)
+
+
+app.mount("/messages/", app=_legacy_mcp_messages_asgi)
 
 
 # ΓöÇΓöÇ Suppress leftover ASGI RuntimeErrors caused by client disconnects ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ

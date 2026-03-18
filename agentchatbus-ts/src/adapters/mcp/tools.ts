@@ -7,8 +7,10 @@ import {
   MissingSyncFieldsError,
   ReplyTokenInvalidError,
   ReplyTokenExpiredError,
-  ReplyTokenReplayError
+  ReplyTokenReplayError,
+  RateLimitExceeded
 } from "../../core/types/errors.js";
+import { ContentFilterError } from "../../core/services/contentFilter.js";
 import {
   BUS_VERSION,
   ENABLE_HANDOFF_TARGET,
@@ -302,7 +304,7 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
 
       // Verify agent credentials
       const agent = getStore().getAgent(agentId);
-      if (!agent || agent.token !== token) {
+      if (!agent || !getStore().verifyAgentToken(agentId, token)) {
         return {
           error: "Invalid agent_id or token",
           hint: "Pass agent_id and token explicitly in thread_create input.",
@@ -318,6 +320,8 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
       const systemPrompt = typeof args.system_prompt === "string" ? args.system_prompt : undefined;
       
       const created = getStore().createThread(topic, systemPrompt, templateId);
+      // Fix #10: Set creator as admin (Python parity)
+      getStore().setCreatorAdmin(created.thread.id, agentId, agent.display_name || agent.name);
       return {
         thread_id: created.thread.id,
         topic: created.thread.topic,
@@ -457,6 +461,11 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
           replyToMsgId
         });
 
+        // Fix #6: Exit wait state for the posting agent
+        if (message.author_id) {
+          getStore().exitWaitState(threadId, message.author_id);
+        }
+
         // Chain token: issue a fresh reply_token so the agent can post again
         const chainSync = getStore().issueSyncContext(threadId, message.author_id, "msg_post_chain");
         const postPayload: Record<string, unknown> = {
@@ -552,6 +561,20 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
 
         if (error instanceof BusError && error.detail) {
           return [{ type: "text", text: JSON.stringify(error.detail) }];
+        }
+        if (error instanceof RateLimitExceeded) {
+          return [{ type: "text", text: JSON.stringify({
+            error: "RateLimitExceeded",
+            detail: error.message,
+            retry_after: error.retryAfter
+          }) }];
+        }
+        if (error instanceof ContentFilterError) {
+          return [{ type: "text", text: JSON.stringify({
+            error: "ContentFilterError",
+            detail: error.message,
+            pattern: error.patternName
+          }) }];
         }
         throw error;
       }
@@ -984,8 +1007,10 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
       const threadId = String(args.thread_id || "");
       const agentId = String(args.agent_id || "");
       const isTyping = Boolean(args.is_typing);
-      // Emit typing event via eventBus
-      eventBus.emit({ type: "agent.typing", payload: { thread_id: threadId, agent_id: agentId, is_typing: isTyping } });
+      // Fix #18: Resolve agent display_name for typing event
+      const typingAgent = getStore().getAgent(agentId);
+      const agentName = typingAgent?.display_name || typingAgent?.name || agentId;
+      eventBus.emit({ type: "agent.typing", payload: { thread_id: threadId, agent_id: agentId, agent_name: agentName, is_typing: isTyping } });
       return { ok: true, thread_id: threadId, agent_id: agentId, is_typing: isTyping };
     }
     case "msg_react": {

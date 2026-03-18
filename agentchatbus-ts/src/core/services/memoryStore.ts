@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -17,7 +17,19 @@ import { eventBus } from "../../shared/eventBus.js";
 import { generateAgentEmoji } from "../../main.js";
 import { registerStore } from "./storeSingleton.js";
 import { checkContentOrThrow, ContentFilterError } from "./contentFilter.js";
-import { ENABLE_HANDOFF_TARGET, ENABLE_STOP_REASON, ENABLE_PRIORITY } from "../config/env.js";
+import { ENABLE_HANDOFF_TARGET, ENABLE_STOP_REASON, ENABLE_PRIORITY, getConfig } from "../config/env.js";
+
+/** Constant-time string comparison to prevent timing attacks on tokens */
+function safeCompare(a: string, b: string): boolean {
+  const bufA = Buffer.from(a);
+  const bufB = Buffer.from(b);
+  if (bufA.length !== bufB.length) {
+    // Compare against self to keep constant time, then return false
+    timingSafeEqual(bufA, bufA);
+    return false;
+  }
+  return timingSafeEqual(bufA, bufB);
+}
 
 /**
  * AsyncEvent - 模拟 Python asyncio.Event 语义
@@ -195,6 +207,7 @@ export class MemoryStore {
   private readonly ideOwnerBootToken = process.env.AGENTCHATBUS_OWNER_BOOT_TOKEN || "";
   private readonly ideOwnershipAssignable = Boolean(process.env.AGENTCHATBUS_OWNER_BOOT_TOKEN);
   private readonly ideHeartbeatTimeoutMs = Number(process.env.AGENTCHATBUS_IDE_HEARTBEAT_TIMEOUT || "45000");
+  private readonly agentHeartbeatTimeoutMs = Math.max(1, getConfig().agentHeartbeatTimeout) * 1000;
   private ideHadOwnerOnce = false;
   private readonly threadSettings = new Map<string, {
     auto_administrator_enabled: boolean;
@@ -338,9 +351,8 @@ export class MemoryStore {
       }
     } catch {}
 
-    // Count online agents based on heartbeat timeout (Python parity)
-    const heartbeatTimeoutMs = 30 * 1000; // 30 seconds
-    const heartbeatCutoff = new Date(now.getTime() - heartbeatTimeoutMs).toISOString();
+    // Count online agents based on configured heartbeat timeout (Python parity)
+    const heartbeatCutoff = new Date(now.getTime() - this.agentHeartbeatTimeoutMs).toISOString();
     let agentsOnline = 0;
     try {
       const row = this.persistenceDb.prepare(
@@ -481,7 +493,7 @@ export class MemoryStore {
     this.threads.set(threadId, thread);
     thread.status = status as ThreadStatus;
     this.appendLog(`thread state updated: ${threadId} ${status}`);
-    eventBus.emit({ type: "thread.updated", payload: thread });
+    eventBus.emit({ type: "thread.state", payload: thread });
     this.upsertThread(thread);
     this.persistState();
     return true;
@@ -665,7 +677,7 @@ export class MemoryStore {
     thread.status = status;
     thread.updated_at = new Date().toISOString();
     this.appendLog(`thread state updated: ${threadId} ${status}`);
-    eventBus.emit({ type: "thread.updated", payload: thread });
+    eventBus.emit({ type: "thread.state", payload: thread });
     this.upsertThread(thread);
     this.persistState();
     return true;
@@ -1482,6 +1494,8 @@ export class MemoryStore {
     if (message.content === newContent) {
       return { no_change: true, version: message.edit_version || 0 };
     }
+    // Fix #7: Content filter on edited content
+    checkContentOrThrow(newContent);
     const newVersion = (message.edit_version || 0) + 1;
     const edits = this.messageEditHistory.get(messageId) || [];
     edits.push({
@@ -1494,7 +1508,7 @@ export class MemoryStore {
     message.content = newContent;
     message.edited_at = new Date().toISOString();
     message.edit_version = newVersion;
-    eventBus.emit({ type: "msg.updated", payload: message });
+    eventBus.emit({ type: "msg.edit", payload: message });
     this.insertMessage(message);
     this.insertMessageEdit(messageId, edits.at(-1));
     this.persistState();
@@ -1583,7 +1597,7 @@ export class MemoryStore {
       reactions.push({ agent_id: agentId, reaction });
     }
     message.reactions = reactions;
-    eventBus.emit({ type: "msg.updated", payload: message });
+    eventBus.emit({ type: "msg.react", payload: message });
     this.replaceMessageReactions(messageId, message.reactions || []);
     this.persistState();
     return message;
@@ -1598,7 +1612,7 @@ export class MemoryStore {
     message.reactions = (message.reactions || []).filter((item) => !(item.agent_id === agentId && item.reaction === reaction));
     const removed = (message.reactions || []).length !== before;
     if (removed) {
-      eventBus.emit({ type: "msg.updated", payload: message });
+      eventBus.emit({ type: "msg.unreact", payload: message });
       this.replaceMessageReactions(messageId, message.reactions || []);
       this.persistState();
     }
@@ -1662,7 +1676,17 @@ export class MemoryStore {
 
   registerAgent(input: { ide: string; model: string; description?: string; capabilities?: string[]; display_name?: string; skills?: unknown[] }): AgentRecord {
     const agentId = randomUUID();
-    const name = `${input.ide} (${input.model})`;
+    let name = `${input.ide} (${input.model})`;
+
+    // Fix #14: Agent name deduplication — append numeric suffix if name exists
+    const existingNames = new Set(this.listAgents().map(a => a.name));
+    if (existingNames.has(name)) {
+      let suffix = 2;
+      while (existingNames.has(`${name} #${suffix}`)) {
+        suffix++;
+      }
+      name = `${name} #${suffix}`;
+    }
     
     // Match Python crud.py L1702-1703:
     // clean_display_name = (display_name or "").strip() or name
@@ -1689,11 +1713,12 @@ export class MemoryStore {
       token: randomUUID(),
       // 移植自：Python src/main.py::_agent_emoji (L132-140)
       // 基于 agent_id 生成确定性的 emoji
-      emoji: generateAgentEmoji(agentId)
+      emoji: generateAgentEmoji(agentId),
+      registered_at: new Date().toISOString()
     };
     this.agents.set(agent.id, agent);
     this.appendLog(`agent registered: ${agent.id}`);
-    eventBus.emit({ type: "agent.updated", payload: agent });
+    eventBus.emit({ type: "agent.online", payload: agent });
     this.upsertAgent(agent);
     this.persistState();
     return agent;
@@ -1728,7 +1753,7 @@ export class MemoryStore {
 
   updateAgent(agentId: string, token: string, input: { description?: string; display_name?: string; capabilities?: string[]; skills?: unknown[] }): AgentRecord | undefined {
     const agent = this.getAgent(agentId);
-    if (!agent || agent.token !== token) {
+    if (!agent || !agent.token || !safeCompare(agent.token, token)) {
       return undefined;
     }
     if (input.description !== undefined) {
@@ -1736,6 +1761,8 @@ export class MemoryStore {
     }
     if (input.display_name !== undefined) {
       agent.display_name = input.display_name;
+      // Fix #28: update alias_source based on display_name
+      agent.alias_source = (input.display_name || "").trim() ? "user" : "auto";
     }
     if (input.capabilities !== undefined) {
       agent.capabilities = input.capabilities;
@@ -1743,7 +1770,7 @@ export class MemoryStore {
     if (input.skills !== undefined) {
       agent.skills = input.skills;
     }
-    agent.last_activity = "updated";
+    agent.last_activity = "update";
     agent.last_activity_time = new Date().toISOString();
     eventBus.emit({ type: "agent.updated", payload: agent });
     this.upsertAgent(agent);
@@ -1753,7 +1780,7 @@ export class MemoryStore {
 
   resumeAgent(agentId: string, token: string): AgentRecord | undefined {
     const agent = this.getAgent(agentId);
-    if (!agent || agent.token !== token) {
+    if (!agent || !agent.token || !safeCompare(agent.token, token)) {
       // 移植自：Python test_agent_registry.py L83-84
       // 应该抛出 ValueError 而不是返回 undefined
       throw new Error('Invalid agent_id or token');
@@ -1771,7 +1798,7 @@ export class MemoryStore {
 
   heartbeatAgent(agentId: string, token: string): boolean {
     const agent = this.getAgent(agentId);
-    if (!agent || agent.token !== token) {
+    if (!agent || !agent.token || !safeCompare(agent.token, token)) {
       return false;
     }
     agent.is_online = true;
@@ -1790,7 +1817,7 @@ export class MemoryStore {
    */
   agentMsgWait(agentId: string, token: string): boolean {
     const agent = this.getAgent(agentId);
-    if (!agent || agent.token !== token) {
+    if (!agent || !agent.token || !safeCompare(agent.token, token)) {
       throw new Error('Invalid agent_id or token');
     }
     
@@ -1826,7 +1853,7 @@ export class MemoryStore {
 
   unregisterAgent(agentId: string, token: string): boolean {
     const agent = this.getAgent(agentId);
-    if (!agent || agent.token !== token) {
+    if (!agent || !agent.token || !safeCompare(agent.token, token)) {
       return false;
     }
     agent.is_online = false;
@@ -1841,7 +1868,7 @@ export class MemoryStore {
 
   verifyAgentToken(agentId: string, token: string): boolean {
     const agent = this.getAgent(agentId);
-    return agent !== undefined && agent.token === token;
+    return agent !== undefined && agent.token !== undefined && safeCompare(agent.token, token);
   }
 
   getThreadAgents(threadId: string): AgentRecord[] {
@@ -1902,10 +1929,11 @@ export class MemoryStore {
         SELECT a.id, a.display_name, a.name, a.emoji
         FROM thread_wait_states w
         JOIN agents a ON a.id = w.agent_id
-        WHERE w.thread_id = ? AND a.is_online = 1
+        WHERE w.thread_id = ?
       `
     ).all(threadId) as Array<Record<string, unknown>>;
     return rows
+      .filter((row) => this.computeAgentOnline(row))
       .map((agent) => ({
         id: String(agent.id),
         display_name: agent.display_name ? String(agent.display_name) : String(agent.name),
@@ -1917,7 +1945,7 @@ export class MemoryStore {
     return {
       preferred_language: "English",
       content_filter_enabled: true,
-      heartbeat_timeout_seconds: 30,
+      heartbeat_timeout_seconds: Math.max(1, getConfig().agentHeartbeatTimeout),
       SHOW_AD: false
     };
   }
@@ -2000,7 +2028,24 @@ export class MemoryStore {
       `
     ).get(threadId) as Record<string, unknown> | undefined;
     if (!row) {
-      return undefined;
+      // Fix #35: Auto-create default settings when not found (Python parity)
+      const now = new Date().toISOString();
+      this.persistenceDb.prepare(
+        `INSERT OR IGNORE INTO thread_settings (thread_id, auto_administrator_enabled, timeout_seconds, switch_timeout_seconds, last_activity_time)
+         VALUES (?, 1, 120, 60, ?)`
+      ).run(threadId, now);
+      return {
+        auto_administrator_enabled: true,
+        timeout_seconds: 120,
+        switch_timeout_seconds: 60,
+        last_activity_time: now,
+        auto_assigned_admin_id: undefined,
+        auto_assigned_admin_name: undefined,
+        admin_assignment_time: undefined,
+        creator_admin_id: undefined,
+        creator_admin_name: undefined,
+        creator_assignment_time: undefined
+      };
     }
     return {
       auto_administrator_enabled: Boolean(row.auto_administrator_enabled),
@@ -2016,11 +2061,14 @@ export class MemoryStore {
     };
   }
 
-  updateThreadSettings(threadId: string, input: { auto_administrator_enabled?: boolean; timeout_seconds?: number; switch_timeout_seconds?: number }) {
+  updateThreadSettings(threadId: string, input: { auto_administrator_enabled?: boolean; auto_coordinator_enabled?: boolean; timeout_seconds?: number; switch_timeout_seconds?: number }) {
     const existing = this.getThreadSettings(threadId);
     if (!existing) {
       return undefined;
     }
+
+    // Fix #40: backward compat alias
+    const autoAdminEnabled = input.auto_administrator_enabled ?? input.auto_coordinator_enabled;
     
     // Validate timeout_seconds minimum (match Python crud.py L847-849)
     if (input.timeout_seconds !== undefined) {
@@ -2036,8 +2084,8 @@ export class MemoryStore {
       }
     }
     
-    if (input.auto_administrator_enabled !== undefined) {
-      existing.auto_administrator_enabled = input.auto_administrator_enabled;
+    if (autoAdminEnabled !== undefined) {
+      existing.auto_administrator_enabled = autoAdminEnabled;
     }
     if (input.timeout_seconds !== undefined) {
       existing.timeout_seconds = input.timeout_seconds;
@@ -2454,7 +2502,7 @@ export class MemoryStore {
   ideHeartbeat(body: { instance_id: string; session_token: string }): IdeSessionState {
     this.pruneIdeSessions();
     const session = this.ideSessions.get(body.instance_id);
-    if (!session || session.sessionToken !== body.session_token) {
+    if (!session || !safeCompare(session.sessionToken, body.session_token)) {
       throw new Error("Invalid IDE session");
     }
     session.lastSeen = new Date().toISOString();
@@ -2465,7 +2513,7 @@ export class MemoryStore {
   ideUnregister(body: { instance_id: string; session_token: string }): IdeSessionState {
     this.pruneIdeSessions();
     const session = this.ideSessions.get(body.instance_id);
-    if (!session || session.sessionToken !== body.session_token) {
+    if (!session || !safeCompare(session.sessionToken, body.session_token)) {
       throw new Error("Invalid IDE session");
     }
     const wasOwner = this.ideOwnerInstanceId === body.instance_id;
@@ -2523,7 +2571,7 @@ export class MemoryStore {
     if (!session) {
       throw new Error("IDE session is not registered");
     }
-    if (session.sessionToken !== body.session_token) {
+    if (!safeCompare(session.sessionToken, body.session_token)) {
       throw new Error("Invalid IDE session token");
     }
     const status = this.snapshotIde(body.instance_id, session.sessionToken);
@@ -2730,6 +2778,25 @@ export class MemoryStore {
     };
   }
 
+  private parseAgentTime(value: unknown): number | null {
+    if (typeof value !== "string" || value.length === 0) {
+      return null;
+    }
+    const ts = Date.parse(value);
+    return Number.isFinite(ts) ? ts : null;
+  }
+
+  private computeAgentOnline(row: Record<string, unknown>): boolean {
+    const now = Date.now();
+    const heartbeatTs = this.parseAgentTime(row.last_heartbeat);
+    const activityTs = this.parseAgentTime(row.last_activity_time);
+    const freshestTs = Math.max(heartbeatTs ?? -1, activityTs ?? -1);
+    if (freshestTs >= 0) {
+      return now - freshestTs < this.agentHeartbeatTimeoutMs;
+    }
+    return Boolean(row.is_online);
+  }
+
   private rowToAgentRecord(row: Record<string, unknown>): AgentRecord {
     return {
       id: String(row.id),
@@ -2740,7 +2807,8 @@ export class MemoryStore {
       ide: row.ide ? String(row.ide) : undefined,
       model: row.model ? String(row.model) : undefined,
       description: row.description ? String(row.description) : undefined,
-      is_online: Boolean(row.is_online),
+      // Python parity: online status should be derived from recent heartbeat/activity.
+      is_online: this.computeAgentOnline(row),
       last_heartbeat: String(row.last_heartbeat),
       last_activity: row.last_activity ? String(row.last_activity) : undefined,
       last_activity_time: row.last_activity_time ? String(row.last_activity_time) : undefined,
@@ -3378,9 +3446,27 @@ export class MemoryStore {
     return tokens.length > 0 ? tokens[0] : undefined;
   }
 
+  /** Fix #4: Clean up old events from the persistence DB */
+  cleanupOldEvents(maxAgeSeconds: number): number {
+    const cutoff = new Date(Date.now() - maxAgeSeconds * 1000).toISOString();
+    const result = this.persistenceDb.prepare(
+      `DELETE FROM events WHERE created_at < ?`
+    ).run(cutoff);
+    return Number(result.changes);
+  }
+
   private appendLog(line: string): void {
+    // Fix #9: Noise filter — skip noisy log entries
+    const NOISY_PATTERNS = ["heartbeat", "logs API", "/api/logs"];
+    if (NOISY_PATTERNS.some(p => line.includes(p))) {
+      return;
+    }
     this.logCursor += 1;
     this.logEntries.push({ id: this.logCursor, line });
+    // Fix #9: Ring buffer — cap at 2000 entries
+    while (this.logEntries.length > 2000) {
+      this.logEntries.shift();
+    }
   }
 
   // Close underlying persistence DB if supported by the runtime.
