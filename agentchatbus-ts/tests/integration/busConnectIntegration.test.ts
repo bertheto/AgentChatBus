@@ -146,4 +146,75 @@ describe("bus_connect integration parity", () => {
 
     await server.close();
   });
+
+  it("returns built-in and custom thread system prompt when creating a thread", async () => {
+    const server = createHttpServer();
+    const customPrompt = "Coordinate carefully and ask for human confirmation before risky changes.";
+
+    const res = await server.inject({
+      method: "POST",
+      url: "/mcp/messages/",
+      payload: {
+        method: "tools/call",
+        params: {
+          name: "bus_connect",
+          arguments: {
+            thread_name: "Custom System Prompt Thread",
+            ide: "TestIDE",
+            model: "TestModel",
+            system_prompt: customPrompt
+          }
+        }
+      }
+    });
+
+    expect(res.statusCode).toBe(200);
+    const payload = JSON.parse(res.json().result[0].text);
+    expect(payload.thread.created).toBe(true);
+    expect(payload.thread.system_prompt).toBe(customPrompt);
+    expect(payload.messages.length).toBeGreaterThan(0);
+
+    const firstMsg = payload.messages[0];
+    expect(firstMsg.role).toBe("system");
+    expect(firstMsg.content).toContain("## Section: System (Built-in)");
+    expect(firstMsg.content).toContain("## Section: Thread Create (Provided By Creator)");
+    expect(firstMsg.content).toContain(customPrompt);
+
+    await server.close();
+  });
+
+  it("persists creator admin when bus_connect creates a new thread", async () => {
+    const server = createHttpServer();
+
+    const res = await server.inject({
+      method: "POST",
+      url: "/mcp/messages/",
+      payload: {
+        method: "tools/call",
+        params: {
+          name: "bus_connect",
+          arguments: {
+            thread_name: "Bus Connect Creator Admin",
+            ide: "TestIDE",
+            model: "TestModel"
+          }
+        }
+      }
+    });
+
+    expect(res.statusCode).toBe(200);
+    const payload = JSON.parse(res.json().result[0].text);
+
+    const adminRes = await server.inject({
+      method: "GET",
+      url: `/api/threads/${payload.thread.id}/admin`
+    });
+
+    expect(adminRes.statusCode).toBe(200);
+    const adminPayload = adminRes.json();
+    expect(adminPayload.admin_id).toBe(payload.agent.agent_id);
+    expect(adminPayload.admin_type).toBe("creator");
+
+    await server.close();
+  });
 });

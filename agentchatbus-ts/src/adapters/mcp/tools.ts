@@ -1101,6 +1101,7 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
         const systemPrompt = typeof args.system_prompt === "string" ? args.system_prompt : undefined;
         const created = getStore().createThread(threadName, systemPrompt, templateId);
         thread = created.thread;
+        getStore().setCreatorAdmin(thread.id, agent.id, agent.display_name || agent.name);
         threadCreated = true;
       }
 
