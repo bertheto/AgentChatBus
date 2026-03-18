@@ -6,6 +6,22 @@ import { createHttpServer, getMemoryStore, memoryStoreInstance } from "../../src
  */
 
 describe("msg_wait integration parity", () => {
+  async function createAuthedThread(server: ReturnType<typeof createHttpServer>, topic: string) {
+    const auth = (await server.inject({
+      method: "POST",
+      url: "/api/agents/register",
+      payload: { ide: "VSCode", model: "msg-wait-thread-creator" }
+    })).json();
+    const threadRes = await server.inject({
+      method: "POST",
+      url: "/api/threads",
+      headers: { "x-agent-token": auth.token },
+      payload: { topic, creator_agent_id: auth.agent_id }
+    });
+    expect(threadRes.statusCode).toBe(201);
+    return threadRes.json();
+  }
+
   beforeAll(() => {
     process.env.AGENTCHATBUS_TEST_DB = ":memory:";
   });
@@ -22,11 +38,7 @@ describe("msg_wait integration parity", () => {
 
     // Register agent and create thread
     const agent = store.registerAgent({ ide: "VSCode", model: "Test" });
-    const thread = (await server.inject({
-      method: "POST",
-      url: "/api/threads",
-      payload: { topic: "fast-return-thread" }
-    })).json();
+    const thread = await createAuthedThread(server, "fast-return-thread");
 
     // Post a message so agent is behind
     await server.inject({
@@ -146,11 +158,7 @@ describe("msg_wait integration parity", () => {
     const store = getMemoryStore();
 
     const agent = store.registerAgent({ ide: "VSCode", model: "Test" });
-    const thread = (await server.inject({
-      method: "POST",
-      url: "/api/threads",
-      payload: { topic: "timeout-thread" }
-    })).json();
+    const thread = await createAuthedThread(server, "timeout-thread");
 
     const startTime = Date.now();
     

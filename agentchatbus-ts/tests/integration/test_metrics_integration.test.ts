@@ -2,6 +2,22 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { createHttpServer } from '../../src/transports/http/server.js';
 
 describe('Metrics Integration (Ported from tests/test_metrics.py)', () => {
+  async function createAuthedThread(server: ReturnType<typeof createHttpServer>, topic: string) {
+    const auth = (await server.inject({
+      method: 'POST',
+      url: '/api/agents/register',
+      payload: { ide: 'Test', model: 'metrics-thread-creator' }
+    })).json() as any;
+    const threadResp = await server.inject({
+      method: 'POST',
+      url: '/api/threads',
+      headers: { 'x-agent-token': auth.token },
+      payload: { topic, creator_agent_id: auth.agent_id }
+    });
+    expect(threadResp.statusCode).toBe(201);
+    return threadResp.json();
+  }
+
   beforeEach(() => {
     process.env.AGENTCHATBUS_TEST_DB = ':memory:';
   });
@@ -25,13 +41,7 @@ describe('Metrics Integration (Ported from tests/test_metrics.py)', () => {
 
     const before = (await server.inject({ method: 'GET', url: '/api/metrics' })).json() as any;
 
-    const threadResp = await server.inject({
-      method: 'POST',
-      url: '/api/threads',
-      payload: { topic: 'metrics-thread' }
-    });
-    expect([200, 201]).toContain(threadResp.statusCode);
-    const thread = threadResp.json();
+    const thread = await createAuthedThread(server, 'metrics-thread');
 
     await server.inject({
       method: 'POST',

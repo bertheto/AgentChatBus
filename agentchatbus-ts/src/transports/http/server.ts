@@ -219,9 +219,13 @@ export function createHttpServer() {
     }
   });
 
-  fastify.post("/messages", async (request, reply) => {
+  const handleLegacySsePost = async (request: FastifyRequest, reply: FastifyReply) => {
     const query = request.query as { sessionId?: string };
-    const sessionId = typeof query.sessionId === "string" ? query.sessionId : "";
+    // Accept both sessionId and session_id for wider legacy compatibility.
+    const fallbackQuery = request.query as { session_id?: string };
+    const sessionId =
+      (typeof query.sessionId === "string" ? query.sessionId : "") ||
+      (typeof fallbackQuery.session_id === "string" ? fallbackQuery.session_id : "");
     if (!sessionId) {
       reply.code(400);
       return { error: "Missing sessionId parameter" };
@@ -244,11 +248,14 @@ export function createHttpServer() {
       }
       return reply;
     }
-  });
+  };
+
+  fastify.post("/messages", handleLegacySsePost);
+  fastify.post("/messages/", handleLegacySsePost);
 
   // Legacy endpoint for backwards compatibility
   // Supports the full MCP method set used by Python server parity.
-  fastify.post("/mcp/messages/", async (_request, reply) => {
+  const handleLegacyMcpMessages = async (_request: FastifyRequest, reply: FastifyReply) => {
     const request = _request.body as
       | { id?: string | number | null; method?: string; params?: Record<string, unknown> }
       | undefined;
@@ -290,7 +297,10 @@ export function createHttpServer() {
       return { error: (rpc as { error: { message?: string } }).error?.message || "MCP_ERROR", detail: rpc };
     }
     return { result: (rpc as { result?: unknown }).result };
-  });
+  };
+
+  fastify.post("/mcp/messages/", handleLegacyMcpMessages);
+  fastify.post("/mcp/messages", handleLegacyMcpMessages);
 
   // REST-style MCP tool endpoints (for easier testing)
   fastify.post("/api/mcp/tool/:toolName", async (request, reply) => {
@@ -394,20 +404,31 @@ export function createHttpServer() {
       return { detail: "topic is required" };
     }
 
-    const creatorAgentId = typeof body.creator_agent_id === "string" ? body.creator_agent_id : undefined;
-    if (creatorAgentId) {
-      const token = String(request.headers["x-agent-token"] || "");
-      if (!token || !store.verifyAgentToken(creatorAgentId, token)) {
-        reply.code(401);
-        return { detail: "Invalid agent_id/token" };
-      }
+    const creatorAgentIdRaw = typeof body.creator_agent_id === "string" ? body.creator_agent_id : "";
+    const creatorAgentId = creatorAgentIdRaw.trim();
+    if (!creatorAgentId) {
+      reply.code(400);
+      return { detail: "creator_agent_id is required" };
+    }
+
+    const token = String(request.headers["x-agent-token"] || "");
+    if (!token) {
+      reply.code(401);
+      return { detail: "X-Agent-Token header required to create thread as a registered agent" };
+    }
+    if (!store.verifyAgentToken(creatorAgentId, token)) {
+      reply.code(401);
+      return { detail: "Invalid agent_id/token" };
+    }
+
+    const creator = store.getAgent(creatorAgentId);
+    if (!creator) {
+      reply.code(401);
+      return { detail: "Invalid agent_id/token" };
     }
 
     const created = store.createThread(topic, typeof body.system_prompt === "string" ? body.system_prompt : undefined);
-    if (creatorAgentId) {
-      const creator = store.getAgent(creatorAgentId);
-      store.setCreatorAdmin(created.thread.id, creatorAgentId, creator?.display_name || creator?.name || creatorAgentId);
-    }
+    store.setCreatorAdmin(created.thread.id, creatorAgentId, creator.display_name || creator.name || creatorAgentId);
 
     reply.code(201);
     return {
@@ -457,14 +478,7 @@ export function createHttpServer() {
         replyToMsgId: typeof body.reply_to_msg_id === "string" ? body.reply_to_msg_id : undefined,
         priority: (typeof body.priority === "string" ? body.priority : "normal") as any
       });
-      
-      // Chain token: issue a fresh reply_token so the agent can post again
-      // Match Python dispatch.py L816-825
-      if (message.author_id) {
-        store.invalidateReplyTokensForAgent(params.threadId, message.author_id);
-      }
-      const chainSync = store.issueSyncContext(params.threadId, message.author_id, "msg_post_chain");
-      
+
       reply.code(201);
       return {
         id: message.id,
@@ -478,11 +492,7 @@ export function createHttpServer() {
         created_at: message.created_at,
         metadata: message.metadata,
         reply_to_msg_id: message.reply_to_msg_id,
-        priority: message.priority,
-        // Sync context for next post
-        reply_token: chainSync.reply_token,
-        current_seq: chainSync.current_seq,
-        reply_window: chainSync.reply_window
+        priority: message.priority
       };
     } catch (error) {
       // Prefer structured BusError handling
@@ -816,13 +826,10 @@ export function createHttpServer() {
       "HOST", "PORT", 
       "AGENT_HEARTBEAT_TIMEOUT", 
       "MSG_WAIT_TIMEOUT", 
-      "REPLY_TOKEN_LEASE_SECONDS",
-      "SEQ_TOLERANCE",
-      "SEQ_MISMATCH_MAX_MESSAGES",
-      "EXPOSE_THREAD_RESOURCES",
       "ENABLE_HANDOFF_TARGET",
       "ENABLE_STOP_REASON", 
-      "ENABLE_PRIORITY"
+      "ENABLE_PRIORITY",
+      "SHOW_AD"
     ];
     
     // Filter to only allowed keys with non-null values

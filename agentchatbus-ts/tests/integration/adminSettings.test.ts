@@ -6,6 +6,22 @@ import { createHttpServer, getMemoryStore, memoryStoreInstance } from "../../src
  */
 
 describe("thread admin endpoints parity", () => {
+  async function createAuthedThread(server: ReturnType<typeof createHttpServer>, topic: string) {
+    const auth = (await server.inject({
+      method: "POST",
+      url: "/api/agents/register",
+      payload: { ide: "Test", model: "admin-settings-thread-creator" }
+    })).json() as any;
+    const threadRes = await server.inject({
+      method: "POST",
+      url: "/api/threads",
+      headers: { "x-agent-token": auth.token },
+      payload: { topic, creator_agent_id: auth.agent_id }
+    });
+    expect(threadRes.statusCode).toBe(201);
+    return { thread: threadRes.json(), auth };
+  }
+
   beforeAll(() => {
     process.env.AGENTCHATBUS_TEST_DB = ":memory:";
   });
@@ -16,14 +32,9 @@ describe("thread admin endpoints parity", () => {
     }
   });
 
-  it("returns default admin payload with null admin_agent_id", async () => {
+  it("returns creator admin payload for authenticated thread creation", async () => {
     const server = createHttpServer();
-    const threadRes = await server.inject({
-      method: "POST",
-      url: "/api/threads",
-      payload: { topic: "admin-thread" }
-    });
-    const thread = threadRes.json();
+    const { thread, auth } = await createAuthedThread(server, "admin-thread");
 
     const adminRes = await server.inject({
       method: "GET",
@@ -32,11 +43,11 @@ describe("thread admin endpoints parity", () => {
 
     expect(adminRes.statusCode).toBe(200);
     const body = adminRes.json();
-    expect(body.admin_id).toBeNull();
-    expect(body.admin_name).toBeNull();
-    expect(body.admin_emoji).toBeNull();
-    expect(body.admin_type).toBeNull();
-    expect(body.assigned_at).toBeNull();
+    expect(body.admin_id).toBe(auth.agent_id);
+    expect(body.admin_name).toBeDefined();
+    expect(body.admin_emoji).toBeDefined();
+    expect(body.admin_type).toBe("creator");
+    expect(body.assigned_at).toBeDefined();
 
     await server.close();
   });

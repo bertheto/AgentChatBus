@@ -22,7 +22,8 @@ describe('Search Integration (Ported from tests/test_search_integration.py)', ()
     const threadResp = await server.inject({
       method: 'POST',
       url: '/api/threads',
-      payload: { topic }
+      headers: { "x-agent-token": agent.token },
+      payload: { topic, creator_agent_id: agent.agent_id }
     });
     expect([200, 201]).toContain(threadResp.statusCode);
     const thread = threadResp.json();

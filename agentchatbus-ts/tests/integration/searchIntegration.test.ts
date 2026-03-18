@@ -6,6 +6,22 @@ import { createHttpServer, getMemoryStore, memoryStoreInstance } from "../../src
  */
 
 describe("message search parity", () => {
+  async function createAuthedThread(server: ReturnType<typeof createHttpServer>, topic: string) {
+    const auth = (await server.inject({
+      method: "POST",
+      url: "/api/agents/register",
+      payload: { ide: "Test", model: "search-thread-creator" }
+    })).json() as any;
+    const threadRes = await server.inject({
+      method: "POST",
+      url: "/api/threads",
+      headers: { "x-agent-token": auth.token },
+      payload: { topic, creator_agent_id: auth.agent_id }
+    });
+    expect(threadRes.statusCode).toBe(201);
+    return threadRes.json();
+  }
+
   beforeAll(() => {
     process.env.AGENTCHATBUS_TEST_DB = ":memory:";
   });
@@ -20,11 +36,7 @@ describe("message search parity", () => {
     const server = createHttpServer();
     
     // Create thread and post messages
-    const thread = (await server.inject({
-      method: "POST",
-      url: "/api/threads",
-      payload: { topic: "search-thread" }
-    })).json();
+    const thread = await createAuthedThread(server, "search-thread");
 
     await server.inject({
       method: "POST",
@@ -105,29 +117,26 @@ describe("message search parity", () => {
     const server = createHttpServer();
     
     // Create thread with many messages
-    const thread = (await server.inject({
-      method: "POST",
-      url: "/api/threads",
-      payload: { topic: "limit-thread" }
-    })).json();
+    const thread = await createAuthedThread(server, "limit-thread");
 
     // Post 10 messages
-    let currentSeq = thread.current_seq;
-    let currentToken = thread.reply_token;
-    
     for (let i = 0; i < 10; i++) {
+      const sync = (await server.inject({
+        method: "POST",
+        url: `/api/threads/${thread.id}/sync-context`,
+        payload: {}
+      })).json();
       const msg = (await server.inject({
         method: "POST",
         url: `/api/threads/${thread.id}/messages`,
         payload: {
           author: "human",
           content: `Test message ${i}`,
-          expected_last_seq: currentSeq,
-          reply_token: currentToken
+          expected_last_seq: sync.current_seq,
+          reply_token: sync.reply_token
         }
       })).json();
-      currentSeq = msg.seq;
-      currentToken = msg.reply_token;
+      expect(msg.seq).toBeGreaterThan(0);
     }
 
     // Search with limit

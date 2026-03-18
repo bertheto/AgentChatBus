@@ -6,6 +6,22 @@ import { createHttpServer, getMemoryStore, memoryStoreInstance } from "../../src
  */
 
 describe("error handling and edge cases parity", () => {
+  async function createAuthedThread(server: ReturnType<typeof createHttpServer>, topic: string) {
+    const auth = (await server.inject({
+      method: "POST",
+      url: "/api/agents/register",
+      payload: { ide: "Test", model: "error-handling-thread-creator" }
+    })).json() as any;
+    const threadRes = await server.inject({
+      method: "POST",
+      url: "/api/threads",
+      headers: { "x-agent-token": auth.token },
+      payload: { topic, creator_agent_id: auth.agent_id }
+    });
+    expect(threadRes.statusCode).toBe(201);
+    return threadRes.json();
+  }
+
   beforeAll(() => {
     process.env.AGENTCHATBUS_TEST_DB = ":memory:";
   });
@@ -48,11 +64,7 @@ describe("error handling and edge cases parity", () => {
     const server = createHttpServer();
 
     // Create thread first
-    const thread = (await server.inject({
-      method: "POST",
-      url: "/api/threads",
-      payload: { topic: "validation-thread" }
-    })).json();
+    const thread = await createAuthedThread(server, "validation-thread");
 
     // Try to post with invalid reply_to_msg_id (should return 400)
     const res = await server.inject({
@@ -76,11 +88,7 @@ describe("error handling and edge cases parity", () => {
     const server = createHttpServer();
     const store = getMemoryStore();
 
-    const thread = (await server.inject({
-      method: "POST",
-      url: "/api/threads",
-      payload: { topic: "concurrent-thread" }
-    })).json();
+    const thread = await createAuthedThread(server, "concurrent-thread");
 
     // Create multiple agents
     const agent1 = store.registerAgent({ ide: "IDE1", model: "M1" });
@@ -144,11 +152,7 @@ describe("error handling and edge cases parity", () => {
   it("validates reply_to_msg_id exists", async () => {
     const server = createHttpServer();
 
-    const thread = (await server.inject({
-      method: "POST",
-      url: "/api/threads",
-      payload: { topic: "reply-validation" }
-    })).json();
+    const thread = await createAuthedThread(server, "reply-validation");
 
     // Try to reply to non-existent message
     const res = await server.inject({

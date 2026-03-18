@@ -23,10 +23,17 @@ describe("Message Synchronization Parity Tests (Python vs TS)", () => {
   });
 
   async function createThread(topic: string) {
+    const authRes = await server.inject({
+      method: "POST",
+      url: "/api/agents/register",
+      payload: { ide: "ParityTest", model: "ThreadCreator" }
+    });
+    const auth = authRes.json();
     const res = await server.inject({
       method: "POST",
       url: "/api/threads",
-      payload: { topic }
+      headers: { "x-agent-token": auth.token },
+      payload: { topic, creator_agent_id: auth.agent_id }
     });
     return res.json();
   }

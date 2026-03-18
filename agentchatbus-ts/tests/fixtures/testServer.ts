@@ -186,9 +186,16 @@ export async function registerAgent(ide = 'VS Code', model = 'GPT-4'): Promise<{
 }
 
 export async function createThread(topic: string, creatorId?: string, token?: string): Promise<string> {
+  let resolvedCreatorId = creatorId;
+  let resolvedToken = token;
+  if (!resolvedCreatorId || !resolvedToken) {
+    const registered = await registerAgent('Test Runner', 'integration');
+    resolvedCreatorId = registered.agentId;
+    resolvedToken = registered.token;
+  }
   const { body } = await request('POST', '/api/threads', {
-    body: { topic, creator_agent_id: creatorId },
-    token,
+    body: { topic, creator_agent_id: resolvedCreatorId },
+    token: resolvedToken,
   });
   return (body as any).id;
 }

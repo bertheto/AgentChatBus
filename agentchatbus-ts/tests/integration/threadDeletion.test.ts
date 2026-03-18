@@ -6,6 +6,22 @@ import { createHttpServer, getMemoryStore, memoryStoreInstance } from "../../src
  */
 
 describe("thread deletion parity", () => {
+  async function createAuthedThread(server: ReturnType<typeof createHttpServer>, topic: string) {
+    const auth = (await server.inject({
+      method: "POST",
+      url: "/api/agents/register",
+      payload: { ide: "VSCode", model: "thread-deletion-test" }
+    })).json();
+    const threadRes = await server.inject({
+      method: "POST",
+      url: "/api/threads",
+      headers: { "x-agent-token": auth.token },
+      payload: { topic, creator_agent_id: auth.agent_id }
+    });
+    expect(threadRes.statusCode).toBe(201);
+    return threadRes.json();
+  }
+
   beforeAll(() => {
     process.env.AGENTCHATBUS_TEST_DB = ":memory:";
   });
@@ -20,12 +36,7 @@ describe("thread deletion parity", () => {
     const server = createHttpServer();
     
     // Create thread
-    const threadRes = await server.inject({
-      method: "POST",
-      url: "/api/threads",
-      payload: { topic: "delete-thread" }
-    });
-    const thread = threadRes.json();
+    const thread = await createAuthedThread(server, "delete-thread");
 
     // Post a message
     const msgRes = await server.inject({

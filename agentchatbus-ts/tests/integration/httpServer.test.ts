@@ -2,6 +2,22 @@ import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createHttpServer, getMemoryStore, memoryStoreInstance } from "../../src/transports/http/server.js";
 
 describe("HTTP compatibility shell", () => {
+  async function createAuthedThread(server: ReturnType<typeof createHttpServer>, topic: string) {
+    const auth = (await server.inject({
+      method: "POST",
+      url: "/api/agents/register",
+      payload: { ide: "VSCode", model: "test-thread-creator" }
+    })).json();
+    const threadResponse = await server.inject({
+      method: "POST",
+      url: "/api/threads",
+      headers: { "x-agent-token": auth.token },
+      payload: { topic, creator_agent_id: auth.agent_id }
+    });
+    expect(threadResponse.statusCode).toBe(201);
+    return threadResponse.json();
+  }
+
   // Set test database to use in-memory database
   beforeAll(() => {
     process.env.AGENTCHATBUS_TEST_DB = ':memory:';
@@ -16,14 +32,7 @@ describe("HTTP compatibility shell", () => {
 
   it("creates a thread and returns initial sync context", async () => {
     const server = createHttpServer();
-    const response = await server.inject({
-      method: "POST",
-      url: "/api/threads",
-      payload: { topic: "integration-thread" }
-    });
-
-    expect(response.statusCode).toBe(201);
-    const body = response.json();
+    const body = await createAuthedThread(server, "integration-thread");
     expect(body.id).toBeTruthy();
     expect(body.topic).toBe("integration-thread");
     expect(body.current_seq).toBe(0);
@@ -34,12 +43,7 @@ describe("HTTP compatibility shell", () => {
 
   it("posts a message with sync fields", async () => {
     const server = createHttpServer();
-    const threadResponse = await server.inject({
-      method: "POST",
-      url: "/api/threads",
-      payload: { topic: "message-thread" }
-    });
-    const thread = threadResponse.json();
+    const thread = await createAuthedThread(server, "message-thread");
 
     const messageResponse = await server.inject({
       method: "POST",
@@ -63,11 +67,7 @@ describe("HTTP compatibility shell", () => {
 
   it("rejects replayed reply tokens", async () => {
     const server = createHttpServer();
-    const thread = (await server.inject({
-      method: "POST",
-      url: "/api/threads",
-      payload: { topic: "replay-thread" }
-    })).json();
+    const thread = await createAuthedThread(server, "replay-thread");
 
     const first = await server.inject({
       method: "POST",
@@ -101,11 +101,7 @@ describe("HTTP compatibility shell", () => {
   it("rejects cross-agent reply token misuse (Python parity)", async () => {
     const server = createHttpServer();
     // Create thread via HTTP to keep state consistent with the store instance
-    const thread = (await server.inject({
-      method: "POST",
-      url: "/api/threads",
-      payload: { topic: "cross-agent-thread" }
-    })).json();
+    const thread = await createAuthedThread(server, "cross-agent-thread");
 
     // Use the same in-process store instance
     const store = getMemoryStore();
@@ -147,11 +143,7 @@ describe("HTTP compatibility shell", () => {
 
   it("auto-issues sync context on REST message post when sync fields are omitted", async () => {
     const server = createHttpServer();
-    const thread = (await server.inject({
-      method: "POST",
-      url: "/api/threads",
-      payload: { topic: "rest-auto-sync-thread" }
-    })).json();
+    const thread = await createAuthedThread(server, "rest-auto-sync-thread");
 
     const response = await server.inject({
       method: "POST",
@@ -602,11 +594,7 @@ describe("HTTP compatibility shell", () => {
 
   it("supports message edit history and reactions", async () => {
     const server = createHttpServer();
-    const thread = (await server.inject({
-      method: "POST",
-      url: "/api/threads",
-      payload: { topic: "reaction-thread" }
-    })).json();
+    const thread = await createAuthedThread(server, "reaction-thread");
 
     const message = (await server.inject({
       method: "POST",
@@ -745,11 +733,7 @@ describe("HTTP compatibility shell", () => {
     const firstText = new TextDecoder().decode(firstChunk.value);
     expect(firstText).toContain("connected");
 
-    const thread = (await server.inject({
-      method: "POST",
-      url: "/api/threads",
-      payload: { topic: "sse-thread" }
-    })).json();
+    const thread = await createAuthedThread(server, "sse-thread");
 
     await server.inject({
       method: "POST",

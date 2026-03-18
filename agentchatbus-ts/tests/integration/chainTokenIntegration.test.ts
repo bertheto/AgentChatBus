@@ -28,7 +28,8 @@ describe("chain token integration parity", () => {
     const thread = (await server.inject({
       method: "POST",
       url: "/api/threads",
-      payload: { topic: "chain-thread" }
+      headers: { "x-agent-token": register.token },
+      payload: { topic: "chain-thread", creator_agent_id: register.agent_id }
     })).json();
 
     // First post
@@ -44,25 +45,31 @@ describe("chain token integration parity", () => {
     });
     expect(first.statusCode).toBe(201);
     const firstBody = first.json();
-    expect(firstBody.reply_token).toBeDefined();
+    expect(firstBody.reply_token).toBeUndefined();
 
-    // Second post should use the returned chain token, and a new one should be issued
+    // REST parity with Python: fetch a fresh sync-context for follow-up post.
+    const syncRes = await server.inject({
+      method: "POST",
+      url: `/api/threads/${thread.id}/sync-context`,
+      payload: {}
+    });
+    const sync = syncRes.json();
+
+    // Second post should use the fresh sync token.
     const second = await server.inject({
       method: "POST",
       url: `/api/threads/${thread.id}/messages`,
       payload: {
         author: register.agent_id,
         content: "second",
-        expected_last_seq: firstBody.seq,
-        reply_token: firstBody.reply_token
+        expected_last_seq: sync.current_seq,
+        reply_token: sync.reply_token
       }
     });
     expect(second.statusCode).toBe(201);
-    const secondBody = second.json();
-    expect(secondBody.reply_token).toBeDefined();
-    expect(secondBody.reply_token).not.toBe(firstBody.reply_token);
+    expect(second.json().reply_token).toBeUndefined();
 
-    // Replaying the first token should now fail
+    // Replaying the original thread token should now fail.
     const replay = await server.inject({
       method: "POST",
       url: `/api/threads/${thread.id}/messages`,
@@ -70,7 +77,7 @@ describe("chain token integration parity", () => {
         author: register.agent_id,
         content: "replay",
         expected_last_seq: firstBody.seq,
-        reply_token: firstBody.reply_token
+        reply_token: thread.reply_token
       }
     });
     expect(replay.statusCode).toBe(400);

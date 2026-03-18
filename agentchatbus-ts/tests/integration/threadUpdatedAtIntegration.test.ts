@@ -7,6 +7,22 @@ import { createHttpServer, getMemoryStore, memoryStoreInstance } from "../../src
  */
 
 describe("thread updated_at integration parity", () => {
+  async function createAuthedThread(server: ReturnType<typeof createHttpServer>, topic: string) {
+    const auth = (await server.inject({
+      method: "POST",
+      url: "/api/agents/register",
+      payload: { ide: "VSCode", model: "thread-updated-at-test" }
+    })).json();
+    const threadRes = await server.inject({
+      method: "POST",
+      url: "/api/threads",
+      headers: { "x-agent-token": auth.token },
+      payload: { topic, creator_agent_id: auth.agent_id }
+    });
+    expect(threadRes.statusCode).toBe(201);
+    return threadRes.json();
+  }
+
   beforeAll(() => {
     process.env.AGENTCHATBUS_TEST_DB = ":memory:";
   });
@@ -19,13 +35,7 @@ describe("thread updated_at integration parity", () => {
 
   it("sets created_at and updated_at on thread create", async () => {
     const server = createHttpServer();
-    const res = await server.inject({
-      method: "POST",
-      url: "/api/threads",
-      payload: { topic: "updated-at-http" }
-    });
-    expect(res.statusCode).toBe(201);
-    const body = res.json();
+    const body = await createAuthedThread(server, "updated-at-http");
     expect(body.created_at).toBeDefined();
     expect(body.updated_at).toBeDefined();
     // On creation, updated_at should equal created_at
@@ -36,11 +46,7 @@ describe("thread updated_at integration parity", () => {
   it("returns updated_at in thread list", async () => {
     const server = createHttpServer();
     // Create a thread
-    await server.inject({
-      method: "POST",
-      url: "/api/threads",
-      payload: { topic: "list-thread" }
-    });
+    await createAuthedThread(server, "list-thread");
 
     const res = await server.inject({
       method: "GET",
