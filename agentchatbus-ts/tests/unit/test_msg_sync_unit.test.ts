@@ -203,17 +203,16 @@ describe('Message Synchronization Unit Tests', () => {
         const thread = store.createThread("sync-msg-wait-batch").thread;
         const agent = store.registerAgent({ ide: "VSCode", model: "GPT" });
         const previousRateLimitFlag = process.env.AGENTCHATBUS_RATE_LIMIT_ENABLED;
+        const originalPersistState = (store as any).persistState;
         process.env.AGENTCHATBUS_RATE_LIMIT_ENABLED = "false";
 
         try {
+            (store as any).persistState = () => {};
             for (let i = 0; i < 105; i++) {
-                store.postMessage({
-                    threadId: thread.id,
-                    author: "system",
-                    content: `system-${i}`,
-                    role: "system"
-                });
+                store.postSystemMessage(thread.id, `system-${i}`);
             }
+            (store as any).persistState = originalPersistState;
+            originalPersistState.call(store);
 
             const first = await store.waitForMessages({
                 threadId: thread.id,
@@ -237,6 +236,7 @@ describe('Message Synchronization Unit Tests', () => {
             expect(second.messages[0].content).toBe("system-100");
             expect(second.messages[4].content).toBe("system-104");
         } finally {
+            (store as any).persistState = originalPersistState;
             if (previousRateLimitFlag === undefined) {
                 delete process.env.AGENTCHATBUS_RATE_LIMIT_ENABLED;
             } else {
