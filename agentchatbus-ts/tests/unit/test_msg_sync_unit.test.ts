@@ -219,7 +219,8 @@ describe('Message Synchronization Unit Tests', () => {
                 threadId: thread.id,
                 afterSeq: 0,
                 timeoutMs: 1,
-                agentId: agent.id
+                agentId: agent.id,
+                agentToken: agent.token
             });
             expect(first.messages).toHaveLength(100);
             expect(first.messages[0].content).toBe("system-0");
@@ -229,7 +230,8 @@ describe('Message Synchronization Unit Tests', () => {
                 threadId: thread.id,
                 afterSeq: first.messages[99].seq,
                 timeoutMs: 1,
-                agentId: agent.id
+                agentId: agent.id,
+                agentToken: agent.token
             });
             expect(second.messages).toHaveLength(5);
             expect(second.messages[0].content).toBe("system-100");
@@ -241,6 +243,22 @@ describe('Message Synchronization Unit Tests', () => {
                 process.env.AGENTCHATBUS_RATE_LIMIT_ENABLED = previousRateLimitFlag;
             }
         }
+    });
+
+    it('msg_wait without token issues an unbound reply token', async () => {
+        const thread = store.createThread("sync-msg-wait-unbound").thread;
+        const agent = store.registerAgent({ ide: "VSCode", model: "GPT" });
+
+        const out = await store.waitForMessages({
+            threadId: thread.id,
+            afterSeq: 0,
+            timeoutMs: 1,
+            agentId: agent.id
+        });
+
+        const tokenRecord = (store as any).syncTokens.get(out.reply_token);
+        expect(tokenRecord).toBeDefined();
+        expect(tokenRecord.agentId).toBeUndefined();
     });
 
     it('seq tolerance within limit', () => {

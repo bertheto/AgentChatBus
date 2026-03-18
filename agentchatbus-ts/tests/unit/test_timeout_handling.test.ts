@@ -31,6 +31,7 @@ describe('Timeout Handling Tests (Ported from Python)', () => {
       store.waitForMessages({
         threadId: thread.id,
         agentId: agent.id,
+        agentToken: agent.token,
         afterSeq: sync.current_seq,
         timeoutMs: 50
       });
@@ -51,6 +52,7 @@ describe('Timeout Handling Tests (Ported from Python)', () => {
       const result = await store.waitForMessages({
         threadId: thread.id,
         agentId: agent.id,
+        agentToken: agent.token,
         afterSeq: sync.current_seq,
         timeoutMs: 100
       });
@@ -81,6 +83,7 @@ describe('Timeout Handling Tests (Ported from Python)', () => {
       const result = await store.waitForMessages({
         threadId: thread.id,
         agentId: agent.id,
+        agentToken: agent.token,
         afterSeq: 0,
         timeoutMs: 1000 // Long timeout, but should return early
       });

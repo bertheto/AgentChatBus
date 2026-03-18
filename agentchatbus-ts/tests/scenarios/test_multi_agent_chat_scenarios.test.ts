@@ -28,11 +28,13 @@ const FAST_RETURN_MAX_MS = 110;
 
 describe('Multi-Agent Chat Scenarios (Ported from Python)', () => {
   let store: MemoryStore;
+  let agentTokens: Map<string, string>;
 
   beforeEach(() => {
     process.env.AGENTCHATBUS_DB = ':memory:';
     store = new MemoryStore();
     store.reset();
+    agentTokens = new Map();
   });
 
   afterEach(() => {
@@ -49,6 +51,7 @@ describe('Multi-Agent Chat Scenarios (Ported from Python)', () => {
     messages: ReturnType<typeof store.getMessages>;
   }> {
     const agent = store.registerAgent({ ide, model });
+    agentTokens.set(agent.id, agent.token);
     const { thread } = store.createThread(threadName);
     const messages = store.getMessages(thread.id, 0);
     const sync = store.issueSyncContext(thread.id, agent.id, 'bus_connect');
@@ -124,6 +127,7 @@ describe('Multi-Agent Chat Scenarios (Ported from Python)', () => {
     const result = await store.waitForMessages({
       threadId,
       agentId,
+      agentToken: agentTokens.get(agentId),
       afterSeq,
       timeoutMs
     });

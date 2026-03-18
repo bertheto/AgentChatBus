@@ -1,5 +1,8 @@
 import { /* memoryStore replaced by getStore */ } from "../../core/services/memoryStore.js";
 import { AsyncLocalStorage } from "node:async_hooks";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { eventBus } from "../../shared/eventBus.js";
 import { getStore } from "../../core/services/storeSingleton.js";
 import {
@@ -272,6 +275,9 @@ type ToolCallContext = {
 
 const toolCallContext = new AsyncLocalStorage<ToolCallContext>();
 const connectionAgents = new Map<string, { agentId: string; token: string }>();
+const MSG_WAIT_UPLOADS_ROOT = path.resolve(
+  fileURLToPath(new URL("../../../../../src/static/uploads/", import.meta.url))
+);
 
 function filterMetadataFields(
   metadata: Record<string, unknown> | null | undefined
@@ -329,6 +335,49 @@ function toPythonUtcIsoString(value: string): string {
   }
 
   return value;
+}
+
+function guessImageMimeType(filePath: string): string | undefined {
+  const ext = path.extname(filePath).toLowerCase();
+  switch (ext) {
+    case ".png":
+      return "image/png";
+    case ".jpg":
+    case ".jpeg":
+      return "image/jpeg";
+    case ".gif":
+      return "image/gif";
+    case ".webp":
+      return "image/webp";
+    case ".bmp":
+      return "image/bmp";
+    case ".svg":
+      return "image/svg+xml";
+    default:
+      return undefined;
+  }
+}
+
+async function readStaticUploadAsBase64(url: string): Promise<{ data: string; mimeType?: string } | undefined> {
+  if (!url.startsWith("/static/uploads/")) {
+    return undefined;
+  }
+
+  const relativePath = url.slice("/static/uploads/".length);
+  const candidate = path.resolve(MSG_WAIT_UPLOADS_ROOT, relativePath);
+  if (!candidate.startsWith(MSG_WAIT_UPLOADS_ROOT)) {
+    return undefined;
+  }
+
+  try {
+    const raw = await readFile(candidate);
+    return {
+      data: raw.toString("base64"),
+      mimeType: guessImageMimeType(candidate)
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 export async function withToolCallContext<T>(
@@ -859,7 +908,7 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
             // Metadata header: [seq] author (role) timestamp
             blocks.push({
               type: "text",
-              text: `[${msg.seq}] ${msg.author_name || msg.author} (${msg.role}) ${msg.created_at}`
+              text: `[${msg.seq}] ${msg.author_name || msg.author} (${msg.role}) ${toPythonUtcIsoString(msg.created_at)}`
             });
             if (msg.content) {
               blocks.push({
@@ -873,23 +922,58 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
               const attachments = meta.attachments || meta.images || meta.image || [];
               const attArray = Array.isArray(attachments) ? attachments : [attachments];
               for (const att of attArray) {
-                if (att && typeof att === 'object' && 'data' in att) {
-                  let imageData = att.data || att.base64;
-                  let mimeType = att.mimeType || att.mime_type || "image/png";
-                  // Handle data URL prefix stripping (Python logic)
-                  if (imageData && imageData.startsWith('data:')) {
-                    const match = imageData.match(/^data:([^;]+);base64,(.*)$/);
-                    if (match) {
-                      mimeType = match[1];
-                      imageData = match[2];
+                if (!att || typeof att !== "object") {
+                  continue;
+                }
+
+                const kind = String(att.type || att.kind || "").toLowerCase();
+                let imageData = att.data || att.base64 || att.b64 || att.data_url;
+                let mimeType = att.mimeType || att.mime_type;
+                const url = att.url || att.src;
+
+                if (typeof imageData === "string" && imageData.startsWith("data:")) {
+                  const match = imageData.match(/^data:([^;]+);base64,(.*)$/);
+                  if (match) {
+                    mimeType = mimeType || match[1];
+                    imageData = match[2];
+                  }
+                }
+
+                if (!mimeType && kind === "image") {
+                  mimeType = "image/png";
+                }
+
+                if (!imageData) {
+                  if (typeof url === "string") {
+                    const localUpload = await readStaticUploadAsBase64(url);
+                    if (localUpload) {
+                      imageData = localUpload.data;
+                      mimeType = mimeType || localUpload.mimeType;
                     }
                   }
-                  blocks.push({
-                    type: "image",
-                    data: imageData,
-                    mimeType: mimeType
-                  });
+
+                  if (!imageData && typeof url === "string") {
+                    blocks.push({
+                      type: "text",
+                      text: `[image] ${url}`
+                    });
+                  }
+                  continue;
                 }
+
+                if (kind && kind !== "image" && !(typeof mimeType === "string" && mimeType.startsWith("image/"))) {
+                  continue;
+                }
+
+                if (mimeType && typeof mimeType === "string" && !mimeType.startsWith("image/")) {
+                  continue;
+                }
+
+                blocks.push({
+                  type: "image",
+                  data: imageData,
+                  mimeType: mimeType || "image/png"
+                });
               }
             }
           }
@@ -905,12 +989,9 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
               role: msg.role,
               content: msg.content,
               seq: msg.seq,
-              created_at: msg.created_at,
+              created_at: toPythonUtcIsoString(msg.created_at),
               metadata: serializeFilteredMetadata(msg.metadata as Record<string, unknown> | null | undefined),
             };
-            if (msg.reply_to_msg_id) {
-              out.reply_to_msg_id = msg.reply_to_msg_id;
-            }
             if (ENABLE_PRIORITY) {
               out.priority = msg.priority;
             }

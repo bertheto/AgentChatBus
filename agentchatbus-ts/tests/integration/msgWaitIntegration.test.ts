@@ -192,4 +192,68 @@ describe("msg_wait integration parity", () => {
 
     await server.close();
   });
+
+  it("json output matches Python field shape and UTC timestamp formatting", async () => {
+    const server = createHttpServer();
+    const store = getMemoryStore();
+
+    const waitAgent = store.registerAgent({ ide: "VSCode", model: "Waiter" });
+    const thread = await createAuthedThread(server, "msg-wait-json-shape");
+
+    const seedSync = store.issueSyncContext(thread.id, "human");
+    const seedRes = await server.inject({
+      method: "POST",
+      url: `/api/threads/${thread.id}/messages`,
+      payload: {
+        author: "human",
+        content: "seed message",
+        expected_last_seq: seedSync.current_seq,
+        reply_token: seedSync.reply_token
+      }
+    });
+    expect(seedRes.statusCode).toBe(201);
+    const seedMsg = seedRes.json();
+
+    const replySync = store.issueSyncContext(thread.id, "human");
+    const replyRes = await server.inject({
+      method: "POST",
+      url: `/api/threads/${thread.id}/messages`,
+      payload: {
+        author: "human",
+        content: "reply message",
+        expected_last_seq: replySync.current_seq,
+        reply_token: replySync.reply_token,
+        reply_to_msg_id: seedMsg.id
+      }
+    });
+    expect(replyRes.statusCode).toBe(201);
+
+    const waitRes = await server.inject({
+      method: "POST",
+      url: "/mcp/messages/",
+      payload: {
+        method: "tools/call",
+        params: {
+          name: "msg_wait",
+          arguments: {
+            thread_id: thread.id,
+            after_seq: 0,
+            agent_id: waitAgent.id,
+            token: waitAgent.token,
+            timeout_ms: 5000,
+            return_format: "json"
+          }
+        }
+      }
+    });
+
+    expect(waitRes.statusCode).toBe(200);
+    const payload = JSON.parse(waitRes.json().result[0].text);
+    expect(payload.messages).toHaveLength(2);
+    expect(payload.messages[1]).not.toHaveProperty("reply_to_msg_id");
+    expect(payload.messages[0].created_at).toMatch(/\+00:00$/);
+    expect(payload.messages[1].created_at).toMatch(/\+00:00$/);
+
+    await server.close();
+  });
 });

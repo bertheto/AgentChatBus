@@ -42,7 +42,8 @@ describe('Message Wait Coordination and Visibility', () => {
             threadId: thread.id,
             afterSeq: 0,
             timeoutMs: 50,
-            agentId: agent.id
+            agentId: agent.id,
+            agentToken: agent.token
         });
 
         expect(out).not.toHaveProperty('coordination_prompt');
@@ -71,7 +72,8 @@ describe('Message Wait Coordination and Visibility', () => {
             threadId: thread.id,
             afterSeq: 0,
             timeoutMs: 50,
-            agentId: agent.id
+            agentId: agent.id,
+            agentToken: agent.token
         });
 
         expect(out.messages).toHaveLength(1);
@@ -122,7 +124,8 @@ describe('Message Wait Coordination and Visibility', () => {
             threadId: thread.id,
             afterSeq: 0,
             timeoutMs: 50,
-            agentId: agent.id
+            agentId: agent.id,
+            agentToken: agent.token
         });
 
         expect(out.messages).toHaveLength(1);
@@ -155,7 +158,8 @@ describe('Message Wait Coordination and Visibility', () => {
             threadId: thread.id,
             afterSeq: 0,
             timeoutMs: 1,
-            agentId: agent.id
+            agentId: agent.id,
+            agentToken: agent.token
         });
 
         // Real poll with for_agent
@@ -164,6 +168,7 @@ describe('Message Wait Coordination and Visibility', () => {
             afterSeq: 0,
             timeoutMs: 20,
             agentId: agent.id,
+            agentToken: agent.token,
             forAgent: agent.id // Agent is waiting for its own messages
         });
 
@@ -183,7 +188,8 @@ describe('Message Wait Coordination and Visibility', () => {
             threadId: thread.id,
             afterSeq: 0,
             timeoutMs: 20,
-            agentId: agent.id
+            agentId: agent.id,
+            agentToken: agent.token
         });
 
         expect(out.messages).toEqual([]);
