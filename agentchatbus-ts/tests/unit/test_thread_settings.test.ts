@@ -8,9 +8,9 @@ import { getMemoryStore, memoryStoreInstance } from "../../src/transports/http/s
 describe("thread settings admin parity", () => {
   beforeEach(() => {
     process.env.AGENTCHATBUS_DB = ":memory:";
-    if (memoryStoreInstance) {
-      memoryStoreInstance.reset();
-    }
+    // Always reset the active store instance to avoid cross-test leakage
+    // from the global singleton when memoryStoreInstance is null.
+    getMemoryStore().reset();
   });
 
   it("creates default settings for a thread", () => {
