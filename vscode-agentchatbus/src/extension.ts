@@ -232,9 +232,51 @@ function initializeMainViews(context: vscode.ExtensionContext, serverManager: Bu
                 console.error('[AgentChatBus] openThread: missing thread or apiClient', { thread, apiClient: !!apiClient });
             }
         }),
-        vscode.commands.registerCommand('agentchatbus.showMcpStatus', () => {
+        vscode.commands.registerCommand('agentchatbus.showMcpStatus', async () => {
             const metadata = serverManager.getStatusMetadata();
-            StatusPanel.createOrShow(metadata);
+            let backendEngine = 'unknown';
+            let backendEngineSource = 'startup-heuristic';
+
+            try {
+                if (apiClient) {
+                    const metrics = await apiClient.getMetrics();
+                    const engine = String(metrics?.engine || '').trim().toLowerCase();
+                    if (engine === 'node' || engine === 'python') {
+                        backendEngine = engine;
+                        backendEngineSource = 'api/metrics';
+                    }
+                }
+            } catch {
+                // Ignore metrics probe failures and keep fallback heuristics.
+            }
+
+            if (backendEngine === 'unknown') {
+                const command = String(metadata.command || '').toLowerCase();
+                const args = Array.isArray(metadata.args)
+                    ? metadata.args.map((item: unknown) => String(item || '').toLowerCase()).join(' ')
+                    : '';
+                if (metadata.startupMode === 'bundled-ts-service') {
+                    backendEngine = 'node';
+                    backendEngineSource = 'startup-mode';
+                } else if (
+                    command.includes('python')
+                    || args.includes('python')
+                    || args.includes('uvicorn')
+                    || args.includes('src.main')
+                ) {
+                    backendEngine = 'python';
+                    backendEngineSource = 'command-heuristic';
+                } else if (command.includes('node') || args.includes('node')) {
+                    backendEngine = 'node';
+                    backendEngineSource = 'command-heuristic';
+                }
+            }
+
+            StatusPanel.createOrShow({
+                ...metadata,
+                backendEngine,
+                backendEngineSource,
+            });
         }),
         vscode.commands.registerCommand('agentchatbus.configureCursorMcp', async () => {
             const config = vscode.workspace.getConfiguration('agentchatbus');
