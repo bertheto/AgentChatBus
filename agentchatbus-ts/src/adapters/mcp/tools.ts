@@ -313,6 +313,10 @@ function setConnectionAgent(agentId: string, token: string): void {
   connectionAgents.set(sessionId, { agentId, token });
 }
 
+function toPythonUtcIsoString(value: string): string {
+  return value.endsWith("Z") ? `${value.slice(0, -1)}+00:00` : value;
+}
+
 export async function withToolCallContext<T>(
   context: ToolCallContext,
   fn: () => Promise<T>
@@ -358,9 +362,11 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
       const templateId = typeof args.template === "string" ? args.template : undefined;
       const systemPrompt = typeof args.system_prompt === "string" ? args.system_prompt : undefined;
       
-      const created = getStore().createThread(topic, systemPrompt, templateId);
-      // Fix #10: Set creator as admin (Python parity)
-      getStore().setCreatorAdmin(created.thread.id, agentId, agent.display_name || agent.name);
+      const created = getStore().createThread(topic, systemPrompt, templateId, {
+        creatorAdminId: agentId,
+        creatorAdminName: agent.display_name || agent.name,
+        applySystemPromptContentFilter: false
+      });
       return {
         thread_id: created.thread.id,
         topic: created.thread.topic,
@@ -1197,21 +1203,24 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
       }
 
       // Phase 2: Find or Create Thread
-      let thread = getStore().getThreads(false).find(t => t.topic === threadName);
+      let thread = getStore().getThreadByTopic(threadName);
       let threadCreated = false;
 
       if (!thread) {
         const templateId = typeof args.template === "string" ? args.template : undefined;
         const systemPrompt = typeof args.system_prompt === "string" ? args.system_prompt : undefined;
-        const created = getStore().createThread(threadName, systemPrompt, templateId);
+        const created = getStore().createThread(threadName, systemPrompt, templateId, {
+          creatorAdminId: agent.id,
+          creatorAdminName: agent.display_name || agent.name,
+          applySystemPromptContentFilter: false
+        });
         thread = created.thread;
-        getStore().setCreatorAdmin(thread.id, agent.id, agent.display_name || agent.name);
         threadCreated = true;
       }
 
       // Phase 3: Fetch Messages + Sync Context
       const afterSeq = typeof args.after_seq === "number" ? args.after_seq : 0;
-      const messages = getStore().getMessages(thread.id, afterSeq, true);
+      const messages = getStore().getMessages(thread.id, afterSeq, true, undefined, 100);
 
       // Invalidate old bus_connect tokens and issue new one
       getStore().invalidateReplyTokensForAgentSource(thread.id, agent.id, "bus_connect");
@@ -1252,7 +1261,7 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
           author: m.author_name || m.author,
           role: m.role,
           content: m.content,
-          created_at: m.created_at
+          created_at: toPythonUtcIsoString(m.created_at)
         })),
         current_seq: sync.current_seq,
         reply_token: sync.reply_token,

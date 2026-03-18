@@ -1,4 +1,4 @@
-import { randomUUID, timingSafeEqual } from "node:crypto";
+import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -29,6 +29,14 @@ function safeCompare(a: string, b: string): boolean {
     return false;
   }
   return timingSafeEqual(bufA, bufB);
+}
+
+function generateAgentToken(): string {
+  return randomBytes(32).toString("hex");
+}
+
+function generateReplyToken(): string {
+  return randomBytes(24).toString("base64url");
 }
 
 /**
@@ -148,6 +156,7 @@ type WaitStateRecord = {
 };
 
 const NON_EXPIRING_TOKEN_TS = Date.parse("9999-12-31T23:59:59Z");
+const NON_EXPIRING_TOKEN_EXPIRES_AT = "9999-12-31T23:59:59+00:00";
 
 const GLOBAL_SYSTEM_PROMPT = `**SYSTEM DIRECTIVE: ACTIVE AGENT COLLABORATION WORKSPACE**
 
@@ -266,7 +275,7 @@ export class MemoryStore {
   getThreads(includeArchived: boolean): ThreadRecord[] {
     const rows = this.persistenceDb.prepare(
       `
-        SELECT id, topic, status, created_at, updated_at, system_prompt, template_id
+        SELECT id, topic, status, created_at, updated_at, system_prompt, template_id, metadata
         FROM threads
         ${includeArchived ? "" : "WHERE status != 'archived'"}
         ORDER BY created_at DESC
@@ -430,27 +439,45 @@ export class MemoryStore {
     }
   }
 
-  createThread(topic: string, systemPrompt?: string, templateId?: string): { thread: ThreadRecord; sync: SyncContext } {
+  createThread(
+    topic: string,
+    systemPrompt?: string,
+    templateId?: string,
+    options?: {
+      metadata?: Record<string, unknown>;
+      creatorAdminId?: string;
+      creatorAdminName?: string;
+      applySystemPromptContentFilter?: boolean;
+    }
+  ): { thread: ThreadRecord; sync: SyncContext } {
     const existing = this.getThreadByTopic(topic);
     if (existing) {
       return { thread: existing, sync: this.issueSyncContext(existing.id) };
     }
 
-    // Apply template defaults if provided
     let finalSystemPrompt = systemPrompt;
-    if (templateId && !systemPrompt) {
+    let finalMetadata = options?.metadata;
+    if (templateId) {
       const template = this.getTemplate(templateId);
-      if (template?.system_prompt) {
+      if (!template) {
+        throw new Error(`Thread template '${templateId}' not found.`);
+      }
+      if (!systemPrompt && template.system_prompt) {
         finalSystemPrompt = template.system_prompt;
+      }
+      if (!finalMetadata && template.default_metadata) {
+        finalMetadata = template.default_metadata;
       }
     }
 
-    // QW-07: Content filter for system_prompt (Python parity)
-    if (finalSystemPrompt) {
+    if ((options?.applySystemPromptContentFilter ?? true) && finalSystemPrompt) {
       checkContentOrThrow(finalSystemPrompt);
     }
 
     const now = new Date().toISOString();
+    const persistedMetadata = finalMetadata && Object.keys(finalMetadata).length > 0
+      ? finalMetadata
+      : undefined;
     const thread: ThreadRecord = {
       id: randomUUID(),
       topic,
@@ -458,17 +485,23 @@ export class MemoryStore {
       created_at: now,
       updated_at: now,
       system_prompt: finalSystemPrompt,
-      template_id: templateId
+      template_id: templateId,
+      metadata: persistedMetadata
     };
     this.threads.set(thread.id, thread);
     this.threadMessages.set(thread.id, []);
     this.threadParticipants.set(thread.id, new Set());
     this.threadWaitStates.set(thread.id, new Map());
+    const creatorAdminId = options?.creatorAdminId;
+    const creatorAdminName = options?.creatorAdminName;
     this.threadSettings.set(thread.id, {
       auto_administrator_enabled: true,
       timeout_seconds: 60,
       switch_timeout_seconds: 60,
-      last_activity_time: now
+      last_activity_time: now,
+      creator_admin_id: creatorAdminId,
+      creator_admin_name: creatorAdminName,
+      creator_assignment_time: creatorAdminId ? now : undefined
     });
     this.appendLog(`thread created: ${thread.id} ${topic}`);
     eventBus.emit({ type: "thread.created", payload: thread });
@@ -480,7 +513,7 @@ export class MemoryStore {
 
   getThread(threadId: string): ThreadRecord | undefined {
     const row = this.persistenceDb.prepare(
-      "SELECT id, topic, status, created_at, updated_at, system_prompt, template_id FROM threads WHERE id = ?"
+      "SELECT id, topic, status, created_at, updated_at, system_prompt, template_id, metadata FROM threads WHERE id = ?"
     ).get(threadId) as Record<string, unknown> | undefined;
     return row ? this.rowToThreadRecord(row) : undefined;
   }
@@ -965,7 +998,7 @@ export class MemoryStore {
     // Hard cap at 200
     const effectiveLimit = limit > 0 ? Math.min(limit, 200) : 0;
 
-    let sql = `SELECT id, topic, status, created_at, updated_at, system_prompt, template_id FROM threads ${where} ORDER BY created_at DESC`;
+    let sql = `SELECT id, topic, status, created_at, updated_at, system_prompt, template_id, metadata FROM threads ${where} ORDER BY created_at DESC`;
     
     if (effectiveLimit > 0) {
       sql += ` LIMIT ?`;
@@ -1053,7 +1086,13 @@ export class MemoryStore {
     return deleted;
   }
 
-  getMessages(threadId: string, afterSeq: number, includeSystemPrompt = false, priority?: string): MessageRecord[] {
+  getMessages(
+    threadId: string,
+    afterSeq: number,
+    includeSystemPrompt = false,
+    priority?: string,
+    limit?: number
+  ): MessageRecord[] {
     let sql: string;
     let params: (string | number)[];
     
@@ -1079,6 +1118,7 @@ export class MemoryStore {
     
     const rows = this.persistenceDb.prepare(sql).all(...params) as Array<Record<string, unknown>>;
     const dbMessages = rows.map((row) => this.rowToMessageRecord(row));
+    const limitedMessages = limit !== undefined ? dbMessages.slice(0, limit) : dbMessages;
 
     if (includeSystemPrompt && afterSeq === 0) {
       const thread = this.getThread(threadId);
@@ -1108,10 +1148,10 @@ export class MemoryStore {
         reply_to_msg_id: undefined
       };
 
-      return [sysMsg, ...dbMessages];
+      return [sysMsg, ...limitedMessages];
     }
 
-    return dbMessages;
+    return limitedMessages;
   }
 
   /**
@@ -1202,7 +1242,7 @@ export class MemoryStore {
     messages: MessageRecord[];
     current_seq: number;
     reply_token: string;
-    reply_window: { expires_at: number; max_new_messages: number };
+    reply_window: { expires_at: string; max_new_messages: number };
     fast_return: boolean;
     fast_return_reason?: string;
   }> {
@@ -1347,7 +1387,7 @@ export class MemoryStore {
                 current_seq: currentSeqAfterWait,
                 reply_token: latestToken.token,
                 reply_window: {
-                  expires_at: latestToken.expiresAt,
+                  expires_at: NON_EXPIRING_TOKEN_EXPIRES_AT,
                   max_new_messages: 0
                 }
               };
@@ -1948,9 +1988,9 @@ export class MemoryStore {
 
   issueSyncContext(threadId: string, agentId?: string, source?: string): SyncContext {
     const currentSeq = this.getLatestSeq(threadId);
-    const token = randomUUID();
+    const token = generateReplyToken();
     const issuedAt = Date.now();
-    const expiresAt = NON_EXPIRING_TOKEN_TS; // Match Python: tokens never expire (9999-12-31)
+    const expiresAt = NON_EXPIRING_TOKEN_TS;
 
     const record: ReplyTokenRecord = {
       threadId,
@@ -1970,7 +2010,7 @@ export class MemoryStore {
       current_seq: currentSeq,
       reply_token: token,
       reply_window: {
-        expires_at: expiresAt,
+        expires_at: NON_EXPIRING_TOKEN_EXPIRES_AT,
         max_new_messages: MemoryStore.SEQ_TOLERANCE
       }
     };
@@ -1978,21 +2018,20 @@ export class MemoryStore {
 
   registerAgent(input: { ide: string; model: string; description?: string; capabilities?: string[]; display_name?: string; skills?: unknown[] }): AgentRecord {
     const agentId = randomUUID();
-    let name = `${input.ide} (${input.model})`;
+    const ide = input.ide.trim() || "Unknown IDE";
+    const model = input.model.trim() || "Unknown Model";
+    const baseName = `${ide} (${model})`;
+    let name = baseName;
 
-    // Fix #14: Agent name deduplication — append numeric suffix if name exists
     const existingNames = new Set(this.listAgents().map(a => a.name));
     if (existingNames.has(name)) {
       let suffix = 2;
-      while (existingNames.has(`${name} #${suffix}`)) {
+      while (existingNames.has(`${baseName} ${suffix}`)) {
         suffix++;
       }
-      name = `${name} #${suffix}`;
+      name = `${baseName} ${suffix}`;
     }
-    
-    // Match Python crud.py L1702-1703:
-    // clean_display_name = (display_name or "").strip() or name
-    // alias_source = "user" if (display_name or "").strip() else "auto"
+
     const cleanDisplayName = (input.display_name || "").trim() || name;
     const aliasSource = (input.display_name || "").trim() ? "user" : "auto";
     
@@ -2001,20 +2040,16 @@ export class MemoryStore {
       name: name,
       display_name: cleanDisplayName,
       alias_source: aliasSource,
-      ide: input.ide,
-      model: input.model,
-      description: input.description,
+      ide,
+      model,
+      description: input.description ?? "",
       is_online: true,
       last_heartbeat: new Date().toISOString(),
       last_activity: "registered",
       last_activity_time: new Date().toISOString(),
       capabilities: input.capabilities || [],
-      // 移植自：Python test_agent_capabilities.py L90
-      // 不带 skills 注册时应该是 undefined，不是空数组
       skills: input.skills ?? undefined,
-      token: randomUUID(),
-      // 移植自：Python src/main.py::_agent_emoji (L132-140)
-      // 基于 agent_id 生成确定性的 emoji
+      token: generateAgentToken(),
       emoji: generateAgentEmoji(agentId),
       registered_at: new Date().toISOString()
     };
@@ -3038,6 +3073,14 @@ export class MemoryStore {
 
   private rowToThreadRecord(row: Record<string, unknown>): ThreadRecord {
     const createdAt = String(row.created_at);
+    let metadata: Record<string, unknown> | undefined;
+    if (row.metadata) {
+      try {
+        metadata = JSON.parse(String(row.metadata)) as Record<string, unknown>;
+      } catch {
+        metadata = undefined;
+      }
+    }
     return {
       id: String(row.id),
       topic: String(row.topic),
@@ -3045,7 +3088,8 @@ export class MemoryStore {
       created_at: createdAt,
       updated_at: row.updated_at ? String(row.updated_at) : createdAt,
       system_prompt: row.system_prompt ? String(row.system_prompt) : undefined,
-      template_id: row.template_id ? String(row.template_id) : undefined
+      template_id: row.template_id ? String(row.template_id) : undefined,
+      metadata
     };
   }
 
@@ -3056,9 +3100,9 @@ export class MemoryStore {
     return Number(row?.current_seq || 0);
   }
 
-  private getThreadByTopic(topic: string): ThreadRecord | undefined {
+  getThreadByTopic(topic: string): ThreadRecord | undefined {
     const row = this.persistenceDb.prepare(
-      "SELECT id, topic, status, created_at, updated_at, system_prompt, template_id FROM threads WHERE topic = ?"
+      "SELECT id, topic, status, created_at, updated_at, system_prompt, template_id, metadata FROM threads WHERE topic = ?"
     ).get(topic) as Record<string, unknown> | undefined;
     return row ? this.rowToThreadRecord(row) : undefined;
   }
@@ -3227,7 +3271,7 @@ export class MemoryStore {
     this.messageEditHistory.clear();
 
     const threads = this.persistenceDb.prepare(
-      "SELECT id, topic, status, created_at, updated_at, system_prompt, template_id FROM threads"
+      "SELECT id, topic, status, created_at, updated_at, system_prompt, template_id, metadata FROM threads"
     ).all() as Array<Record<string, unknown>>;
     for (const row of threads) {
       const thread = this.rowToThreadRecord(row);
@@ -3338,7 +3382,8 @@ export class MemoryStore {
         closed_at TEXT,
         summary TEXT,
         system_prompt TEXT,
-        template_id TEXT
+        template_id TEXT,
+        metadata TEXT
       );
       CREATE TABLE IF NOT EXISTS messages (
         id TEXT PRIMARY KEY,
@@ -3477,6 +3522,7 @@ export class MemoryStore {
       // Migration: threads table
       addColumnIfMissing("threads", "system_prompt", "TEXT");
       addColumnIfMissing("threads", "template_id", "TEXT");
+      addColumnIfMissing("threads", "metadata", "TEXT");
       addColumnIfMissing("threads", "updated_at", "TEXT NOT NULL DEFAULT ''");
       this.persistenceDb.prepare(
         "UPDATE threads SET updated_at = created_at WHERE updated_at IS NULL OR updated_at = ''"
@@ -3519,17 +3565,27 @@ export class MemoryStore {
     const updatedAt = thread.updated_at || new Date().toISOString();
     this.persistenceDb.prepare(
       `
-        INSERT INTO threads (id, topic, status, created_at, updated_at, system_prompt, template_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO threads (id, topic, status, created_at, updated_at, system_prompt, template_id, metadata)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           topic = excluded.topic,
           status = excluded.status,
           created_at = excluded.created_at,
           updated_at = excluded.updated_at,
           system_prompt = excluded.system_prompt,
-          template_id = excluded.template_id
+          template_id = excluded.template_id,
+          metadata = excluded.metadata
       `
-    ).run(thread.id, thread.topic, thread.status as string, thread.created_at, updatedAt, thread.system_prompt || null, thread.template_id || null);
+    ).run(
+      thread.id,
+      thread.topic,
+      thread.status as string,
+      thread.created_at,
+      updatedAt,
+      thread.system_prompt || null,
+      thread.template_id || null,
+      thread.metadata ? JSON.stringify(thread.metadata) : null
+    );
   }
 
   private insertMessage(message: MessageRecord): void {

@@ -217,4 +217,64 @@ describe("bus_connect integration parity", () => {
 
     await server.close();
   });
+
+  it("returns at most 100 persisted messages plus the synthetic system prompt", async () => {
+    const server = createHttpServer();
+    const store = memoryStoreInstance!;
+    const author = store.registerAgent({ ide: "SeederIDE", model: "SeederModel" });
+    const created = store.createThread("Bus Connect History Limit", undefined, undefined, {
+      creatorAdminId: author.id,
+      creatorAdminName: author.display_name || author.name,
+      applySystemPromptContentFilter: false
+    });
+
+    const originalRateLimitEnabled = process.env.AGENTCHATBUS_RATE_LIMIT_ENABLED;
+    process.env.AGENTCHATBUS_RATE_LIMIT_ENABLED = "false";
+    try {
+      for (let i = 1; i <= 105; i++) {
+        const sync = store.issueSyncContext(created.thread.id, author.id, "msg_wait");
+        store.postMessage({
+          threadId: created.thread.id,
+          author: author.id,
+          content: `seed message ${i}`,
+          expectedLastSeq: sync.current_seq,
+          replyToken: sync.reply_token,
+          role: "assistant"
+        });
+      }
+    } finally {
+      if (originalRateLimitEnabled === undefined) {
+        delete process.env.AGENTCHATBUS_RATE_LIMIT_ENABLED;
+      } else {
+        process.env.AGENTCHATBUS_RATE_LIMIT_ENABLED = originalRateLimitEnabled;
+      }
+    }
+
+    const res = await server.inject({
+      method: "POST",
+      url: "/mcp/messages/",
+      payload: {
+        method: "tools/call",
+        params: {
+          name: "bus_connect",
+          arguments: {
+            thread_name: "Bus Connect History Limit",
+            ide: "JoinerIDE",
+            model: "JoinerModel"
+          }
+        }
+      }
+    });
+
+    expect(res.statusCode).toBe(200);
+    const payload = JSON.parse(res.json().result[0].text);
+    expect(payload.current_seq).toBe(105);
+    expect(payload.messages).toHaveLength(101);
+    expect(payload.messages[0].seq).toBe(0);
+    expect(payload.messages[1].seq).toBe(1);
+    expect(payload.messages[100].seq).toBe(100);
+    expect(payload.messages.some((msg: { seq: number }) => msg.seq === 101)).toBe(false);
+
+    await server.close();
+  });
 });

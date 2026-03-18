@@ -59,6 +59,17 @@ describe('Agent Registry (Ported from test_agent_registry.py)', () => {
     expect(() => store.resumeAgent(agent.id, 'bad-token')).toThrow('Invalid agent_id/token');
   });
 
+  it('agent register trims blank ide/model and uses Python name suffixes', () => {
+    const blank = store.registerAgent({ ide: '   ', model: '' });
+    const first = store.registerAgent({ ide: 'VSCode', model: 'GPT' });
+    const second = store.registerAgent({ ide: 'VSCode', model: 'GPT' });
+
+    expect(blank.name).toBe('Unknown IDE (Unknown Model)');
+    expect(blank.token).toMatch(/^[0-9a-f]{64}$/);
+    expect(first.name).toBe('VSCode (GPT)');
+    expect(second.name).toBe('VSCode (GPT) 2');
+  });
+
   it('agent thread create updates activity', async () => {
     const agent = store.registerAgent({ ide: 'VSCode', model: 'GPT' });
     const initialHeartbeat = agent.last_heartbeat;

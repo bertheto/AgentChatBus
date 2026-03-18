@@ -456,8 +456,16 @@ export function createHttpServer() {
       return { detail: "Invalid agent_id/token" };
     }
 
-    const created = store.createThread(topic, typeof body.system_prompt === "string" ? body.system_prompt : undefined);
-    store.setCreatorAdmin(created.thread.id, creatorAgentId, creator.display_name || creator.name || creatorAgentId);
+    const created = store.createThread(
+      topic,
+      typeof body.system_prompt === "string" ? body.system_prompt : undefined,
+      undefined,
+      {
+        creatorAdminId: creatorAgentId,
+        creatorAdminName: creator.display_name || creator.name || creatorAgentId,
+        applySystemPromptContentFilter: true
+      }
+    );
 
     reply.code(201);
     return {

@@ -59,7 +59,7 @@ export interface SyncContext {
   current_seq: number;
   reply_token: string;
   reply_window: {
-    expires_at: number;
+    expires_at: string;
     max_new_messages: number;
   };
 }

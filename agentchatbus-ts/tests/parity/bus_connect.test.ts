@@ -1087,4 +1087,60 @@ describe('Bus Connect Parity Tests', () => {
         expect(editResult.error).toBe("AUTHENTICATION_REQUIRED");
         expect(String(editResult.detail)).toContain("authenticated agent connection");
     }, 10000);
+
+    it('bus_connect matches Python token formats and blank ide/model fallback', async () => {
+        const payload = await callMcpTool('bus_connect', {
+            thread_name: "Blank Agent Fields-" + randomUUID().slice(0, 8),
+            ide: "",
+            model: ""
+        });
+
+        expect(payload.agent.name).toBe("Unknown IDE (Unknown Model)");
+        expect(payload.agent.token).toMatch(/^[0-9a-f]{64}$/);
+        expect(payload.reply_token).toMatch(/^[A-Za-z0-9_-]{32}$/);
+        expect(payload.reply_window.expires_at).toBe("9999-12-31T23:59:59+00:00");
+    });
+
+    it('bus_connect reuses archived thread instead of recreating it', async () => {
+        const threadName = "Archived Bus Connect-" + randomUUID().slice(0, 8);
+        const first = await callMcpTool('bus_connect', {
+            thread_name: threadName,
+            ide: "CreatorIDE",
+            model: "CreatorModel"
+        });
+
+        const archiveRes = await fetch(`${BASE_URL}/api/threads/${first.thread.thread_id}/archive`, {
+            method: 'POST'
+        });
+        expect(archiveRes.status).toBe(200);
+
+        const second = await callMcpTool('bus_connect', {
+            thread_name: threadName,
+            ide: "JoinerIDE",
+            model: "JoinerModel"
+        });
+
+        expect(second.thread.thread_id).toBe(first.thread.thread_id);
+        expect(second.thread.created).toBe(false);
+        expect(second.thread.status).toBe("archived");
+        expect(second.thread.administrator.agent_id).toBe(first.agent.agent_id);
+    });
+
+    it('bus_connect rejects missing templates like Python', async () => {
+        const res = await fetch(`${BASE_URL}/api/mcp/tool/bus_connect`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                thread_name: "Missing Template-" + randomUUID().slice(0, 8),
+                ide: "VS Code",
+                model: "GPT-5.3-Codex",
+                template: "missing-template"
+            })
+        });
+
+        expect(res.status).toBe(400);
+        expect(await res.json()).toEqual({
+            error: "Thread template 'missing-template' not found."
+        });
+    });
 });
