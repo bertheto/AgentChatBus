@@ -1,5 +1,5 @@
 import { createInterface } from "node:readline";
-import { callTool, listTools } from "../../adapters/mcp/tools.js";
+import { callTool, listTools, withToolCallContext } from "../../adapters/mcp/tools.js";
 import { handleMcpRequest } from "../mcp/handlers.js";
 
 export async function runStdioServer(): Promise<void> {
@@ -31,7 +31,9 @@ export async function runStdioServer(): Promise<void> {
     if (method === "tools/call") {
       try {
         const params = (payload.params || {}) as { name?: string; arguments?: Record<string, unknown> };
-        const result = await callTool(String(params.name || ""), params.arguments || {});
+        const result = await withToolCallContext({ sessionId: "stdio" }, () =>
+          callTool(String(params.name || ""), params.arguments || {})
+        );
         process.stdout.write(`${JSON.stringify({ result })}\n`);
       } catch (error) {
         process.stdout.write(`${JSON.stringify({ error: (error as Error).message })}\n`);

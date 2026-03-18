@@ -17,7 +17,12 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { MemoryStore } from '../../src/core/services/memoryStore.js';
-import { SeqMismatchError, ReplyTokenReplayError } from '../../src/core/types/errors.js';
+import {
+  MissingSyncFieldsError,
+  ReplyTokenInvalidError,
+  ReplyTokenReplayError,
+  SeqMismatchError
+} from '../../src/core/types/errors.js';
 
 describe('Multi-Agent Chat Scenarios (Ported from Python)', () => {
   let store: MemoryStore;
@@ -64,7 +69,7 @@ describe('Multi-Agent Chat Scenarios (Ported from Python)', () => {
     expectedLastSeq: number,
     replyToken: string,
     role: 'assistant' | 'user' = 'assistant'
-  ): Promise<{ seq: number; message: ReturnType<typeof store.getMessage> } | { error: string; action?: string; new_messages_1st_read?: ReturnType<typeof store.getMessages> }> {
+    ): Promise<{ seq: number; message: ReturnType<typeof store.getMessage> } | { error: string; action?: string; new_messages_1st_read?: ReturnType<typeof store.getMessages> }> {
     try {
       const message = store.postMessage({
         threadId,
@@ -76,6 +81,15 @@ describe('Multi-Agent Chat Scenarios (Ported from Python)', () => {
       });
       return { seq: message.seq, message };
     } catch (error) {
+      if (
+        error instanceof MissingSyncFieldsError ||
+        error instanceof SeqMismatchError ||
+        error instanceof ReplyTokenInvalidError ||
+        error instanceof ReplyTokenReplayError
+      ) {
+        store.invalidateReplyTokensForAgent(threadId, agentId);
+        store.setRefreshRequest(threadId, agentId, error.constructor.name);
+      }
       if (error instanceof SeqMismatchError) {
         return {
           error: 'SeqMismatchError',

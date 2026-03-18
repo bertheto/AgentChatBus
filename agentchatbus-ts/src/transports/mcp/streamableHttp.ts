@@ -14,7 +14,7 @@ import {
   ListPromptsRequestSchema,
   GetPromptRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import { callTool, listTools } from "../../adapters/mcp/tools.js";
+import { callTool, listTools, withToolCallContext } from "../../adapters/mcp/tools.js";
 import { BUS_VERSION } from "../../core/config/env.js";
 import { getPromptResult, getPromptsList, getResourcesList, readResourceText } from "./handlers.js";
 
@@ -26,7 +26,7 @@ const sseTransports = new Map<string, SSEServerTransport>();
 /**
  * Create a new MCP server instance with all handlers configured.
  */
-export function createMcpServer(): Server {
+export function createMcpServer(sessionId?: string): Server {
   const server = new Server(
     {
       name: "agentchatbus",
@@ -50,7 +50,9 @@ export function createMcpServer(): Server {
   // Call tool handler
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const args = request.params || {};
-    const result = await callTool(args.name || "", args.arguments || {});
+    const result = await withToolCallContext({ sessionId }, () =>
+      callTool(args.name || "", args.arguments || {})
+    );
 
     // Convert result to MCP content blocks format
     if (Array.isArray(result)) {
@@ -127,7 +129,7 @@ export async function getOrCreateTransport(sessionId?: string): Promise<{
   streamableTransports.set(newSessionId, transport);
 
   // Create and connect MCP server to transport
-  const mcpServer = createMcpServer();
+  const mcpServer = createMcpServer(newSessionId);
   const connectPromise = mcpServer.connect(transport).catch((err) => {
     console.error(`[MCP] Failed to connect server to transport: ${err.message}`);
     streamableTransports.delete(newSessionId);
@@ -164,7 +166,7 @@ export function registerLegacySseTransport(transport: SSEServerTransport): strin
  * Connect a legacy SSE transport to a fresh MCP server instance.
  */
 export async function connectLegacySseTransport(transport: SSEServerTransport): Promise<void> {
-  const mcpServer = createMcpServer();
+  const mcpServer = createMcpServer(transport.sessionId);
   await mcpServer.connect(transport);
 }
 

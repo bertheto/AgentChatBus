@@ -258,10 +258,8 @@ describe('Bus Connect Parity Tests', () => {
         });
         
         expect(payload2.messages.length).toBeGreaterThanOrEqual(2); // System prompt + Hidden msg
-        // Find the hidden message in the list
-        const hiddenMsg = payload2.messages.find((m: any) => m.metadata?.visibility === "human_only");
-        expect(hiddenMsg).toBeDefined();
-        expect(hiddenMsg.content).toBe("[human-only content hidden]");
+        expect(payload2.messages).toHaveLength(2);
+        expect(payload2.messages[1].content).toBe("[human-only content hidden]");
     });
 
     it('msg_post seq mismatch returns first read messages', async () => {

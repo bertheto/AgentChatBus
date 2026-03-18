@@ -83,7 +83,7 @@ describe("bus_connect integration parity", () => {
     // Post a message
     await server.inject({
       method: "POST",
-      url: `/api/threads/${payload1.thread.id}/messages`,
+      url: `/api/threads/${payload1.thread.thread_id}/messages`,
       payload: {
         author: payload1.agent.agent_id,
         content: "First message",
@@ -207,7 +207,7 @@ describe("bus_connect integration parity", () => {
 
     const adminRes = await server.inject({
       method: "GET",
-      url: `/api/threads/${payload.thread.id}/admin`
+      url: `/api/threads/${payload.thread.thread_id}/admin`
     });
 
     expect(adminRes.statusCode).toBe(200);

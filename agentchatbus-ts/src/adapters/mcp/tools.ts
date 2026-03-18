@@ -1,4 +1,5 @@
 import { /* memoryStore replaced by getStore */ } from "../../core/services/memoryStore.js";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { eventBus } from "../../shared/eventBus.js";
 import { getStore } from "../../core/services/storeSingleton.js";
 import {
@@ -265,6 +266,13 @@ export function listTools(): ToolDefinition[] {
   return toolDefinitions;
 }
 
+type ToolCallContext = {
+  sessionId?: string;
+};
+
+const toolCallContext = new AsyncLocalStorage<ToolCallContext>();
+const connectionAgents = new Map<string, { agentId: string; token: string }>();
+
 function filterMetadataFields(
   metadata: Record<string, unknown> | null | undefined
 ): Record<string, unknown> | null {
@@ -279,6 +287,37 @@ function filterMetadataFields(
     delete filtered.stop_reason;
   }
   return Object.keys(filtered).length > 0 ? filtered : null;
+}
+
+function serializeFilteredMetadata(
+  metadata: Record<string, unknown> | null | undefined
+): string | null {
+  const filtered = filterMetadataFields(metadata);
+  return filtered ? JSON.stringify(filtered) : null;
+}
+
+function getConnectionAgent(): { agentId?: string; token?: string } {
+  const sessionId = toolCallContext.getStore()?.sessionId;
+  if (!sessionId) {
+    return {};
+  }
+  const entry = connectionAgents.get(sessionId);
+  return entry ? { agentId: entry.agentId, token: entry.token } : {};
+}
+
+function setConnectionAgent(agentId: string, token: string): void {
+  const sessionId = toolCallContext.getStore()?.sessionId;
+  if (!sessionId) {
+    return;
+  }
+  connectionAgents.set(sessionId, { agentId, token });
+}
+
+export async function withToolCallContext<T>(
+  context: ToolCallContext,
+  fn: () => Promise<T>
+): Promise<T> {
+  return await toolCallContext.run(context, fn);
 }
 
 export async function callTool(name: string, args: Record<string, unknown>): Promise<unknown> {
@@ -448,8 +487,13 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
     case "msg_post": {
       const threadId = String(args.thread_id || "");
       const author = String(args.author || "human");
-      const authorAgent = getStore().getAgent(author);
-      const authorAgentId = authorAgent?.id;
+      let authorAgentId: string | undefined;
+      try {
+        const authorAgent = getStore().getAgent(author);
+        authorAgentId = authorAgent?.id;
+      } catch {
+        authorAgentId = undefined;
+      }
       const content = String(args.content || "");
       const expectedLastSeq = typeof args.expected_last_seq === "number" ? args.expected_last_seq : undefined;
       const replyToken = typeof args.reply_token === "string" ? args.reply_token : undefined;
@@ -476,19 +520,19 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
           getStore().exitWaitState(threadId, authorAgentId);
         }
 
-        // Chain token: issue a fresh reply_token so the agent can post again
-        if (authorAgentId) {
-          getStore().invalidateReplyTokensForAgent(threadId, authorAgentId);
-        }
-        const chainSync = getStore().issueSyncContext(threadId, authorAgentId, "msg_post_chain");
         const postPayload: Record<string, unknown> = {
           msg_id: message.id,
           seq: message.seq,
-          reply_to_msg_id: message.reply_to_msg_id,
-          reply_token: chainSync.reply_token,
-          current_seq: chainSync.current_seq,
-          reply_window: chainSync.reply_window
+          reply_to_msg_id: message.reply_to_msg_id
         };
+
+        if (authorAgentId) {
+          getStore().invalidateReplyTokensForAgent(threadId, authorAgentId);
+          const chainSync = getStore().issueSyncContext(threadId, authorAgentId, "msg_post_chain");
+          postPayload.reply_token = chainSync.reply_token;
+          postPayload.current_seq = chainSync.current_seq;
+          postPayload.reply_window = chainSync.reply_window;
+        }
         if (ENABLE_PRIORITY) {
           postPayload.priority = message.priority;
         }
@@ -512,12 +556,13 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
           )
         ) {
           getStore().invalidateReplyTokensForAgent(threadId, authorAgentId);
+          getStore().setRefreshRequest(threadId, authorAgentId, error.constructor.name);
         }
 
         if (error instanceof SeqMismatchError) {
           const detail = {
             error: "SeqMismatchError",
-            detail: `expected_last_seq=${error.expected_last_seq}, current_seq=${error.current_seq}`,
+            detail: error.message,
             expected_last_seq: error.expected_last_seq,
             current_seq: error.current_seq,
             CRITICAL_REMINDER: (
@@ -600,6 +645,12 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
           return [{ type: "text", text: JSON.stringify({
             error: "Content blocked by filter",
             pattern: error.patternName
+          }) }];
+        }
+        if (error instanceof Error) {
+          return [{ type: "text", text: JSON.stringify({
+            error: "INVALID_ARGUMENT",
+            detail: error.message
           }) }];
         }
         throw error;
@@ -717,16 +768,16 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
     case "msg_wait": {
       const threadId = String(args.thread_id || "");
       const afterSeq = Number(args.after_seq || 0);
-      const agentId = typeof args.agent_id === "string" ? args.agent_id : undefined;
-      const token = typeof args.token === "string" ? args.token : undefined;
+      const explicitAgentId = typeof args.agent_id === "string" ? args.agent_id : undefined;
+      const explicitToken = typeof args.token === "string" ? args.token : undefined;
       const timeoutMs = typeof args.timeout_ms === "number" ? args.timeout_ms : 300_000;
       const forAgent = typeof args.for_agent === "string" ? args.for_agent : undefined;
       const returnFormat = typeof args.return_format === "string" ? args.return_format : "blocks";
       const includeAttachments = typeof args.include_attachments === "boolean" ? args.include_attachments : true;
 
-      // Verify credentials if provided
-      const explicitCredsSupplied = agentId !== undefined || token !== undefined;
-      if (explicitCredsSupplied && (!agentId || !token)) {
+      const { agentId: connectionAgentId, token: connectionToken } = getConnectionAgent();
+      const explicitCredsSupplied = explicitAgentId !== undefined || explicitToken !== undefined;
+      if (explicitCredsSupplied && (!explicitAgentId || !explicitToken)) {
         return [{
           type: "text",
           text: JSON.stringify({
@@ -735,6 +786,11 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
           })
         }];
       }
+
+      const agentId = explicitCredsSupplied ? explicitAgentId : connectionAgentId;
+      const token = explicitCredsSupplied ? explicitToken : connectionToken;
+
+      let verifiedAgent = false;
       if (agentId && token) {
         const ok = getStore().verifyAgentToken(agentId, token);
         if (!ok) {
@@ -746,6 +802,11 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
             })
           }];
         }
+        verifiedAgent = true;
+      }
+
+      if (verifiedAgent) {
+        setConnectionAgent(agentId as string, token as string);
       }
 
       try {
@@ -824,7 +885,7 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
               content: msg.content,
               seq: msg.seq,
               created_at: msg.created_at,
-              metadata: filterMetadataFields(msg.metadata as Record<string, unknown> | null | undefined),
+              metadata: serializeFilteredMetadata(msg.metadata as Record<string, unknown> | null | undefined),
             };
             if (msg.reply_to_msg_id) {
               out.reply_to_msg_id = msg.reply_to_msg_id;
@@ -1087,10 +1148,6 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
     }
     case "bus_connect": {
       const threadName = String(args.thread_name || "");
-      if (!threadName) {
-        throw new Error("thread_name is required");
-      }
-
       // Phase 1: Agent Identity (Register or Resume)
       let agent;
       const agentIdArg = typeof args.agent_id === "string" ? args.agent_id : undefined;
@@ -1113,6 +1170,12 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
         const model = typeof args.model === "string" ? args.model : "Unknown Model";
         const description = typeof args.description === "string" ? args.description : undefined;
         const displayName = typeof args.display_name === "string" ? args.display_name : undefined;
+        if (args.capabilities !== undefined && !Array.isArray(args.capabilities)) {
+          return [{ type: "text", text: JSON.stringify({ error: "capabilities must be an array of strings" }) }];
+        }
+        if (args.skills !== undefined && !Array.isArray(args.skills)) {
+          return [{ type: "text", text: JSON.stringify({ error: "skills must be an array of objects" }) }];
+        }
         const capabilities = Array.isArray(args.capabilities) ? args.capabilities.map(String) : undefined;
         const skills = Array.isArray(args.skills) ? args.skills : undefined;
 
@@ -1124,6 +1187,13 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
           capabilities,
           skills
         });
+      }
+      if (agent.token) {
+        setConnectionAgent(agent.id, agent.token);
+      }
+
+      if (!threadName) {
+        return [{ type: "text", text: JSON.stringify({ error: "thread_name is required" }) }];
       }
 
       // Phase 2: Find or Create Thread
@@ -1163,8 +1233,6 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
       const payload = {
         agent: {
           agent_id: agent.id,
-          // Keep id for backward compatibility (tests use connected.agent.id)
-          id: agent.id,
           name: agent.name,
           registered: true,
           token: agent.token,
@@ -1173,8 +1241,6 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
         },
         thread: {
           thread_id: thread.id,
-          // Keep id for backward compatibility (tests use connected.thread.id)
-          id: thread.id,
           topic: thread.topic,
           status: thread.status,
           created: threadCreated,
@@ -1186,8 +1252,7 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
           author: m.author_name || m.author,
           role: m.role,
           content: m.content,
-          created_at: m.created_at,
-          metadata: m.metadata
+          created_at: m.created_at
         })),
         current_seq: sync.current_seq,
         reply_token: sync.reply_token,

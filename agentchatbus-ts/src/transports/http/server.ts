@@ -5,7 +5,7 @@ import { existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import type { FastifyReply, FastifyRequest } from "fastify";
-import { callTool, listTools } from "../../adapters/mcp/tools.js";
+import { callTool, listTools, withToolCallContext } from "../../adapters/mcp/tools.js";
 import { SeqMismatchError, MissingSyncFieldsError, ReplyTokenInvalidError, ReplyTokenExpiredError, ReplyTokenReplayError, BusError } from "../../core/types/errors.js";
 import { getConfig, getConfigDict, saveConfigDict, ADMIN_TOKEN } from "../../core/config/env.js";
 import { MemoryStore, memoryStore } from "../../core/services/memoryStore.js";
@@ -271,7 +271,13 @@ export function createHttpServer() {
     if (request.method === "tools/call") {
       try {
         const params = request.params as { name?: string; arguments?: Record<string, unknown> } | undefined;
-        const result = await callTool(String(params?.name || ""), params?.arguments || {});
+        const sessionId =
+          typeof _request.headers["mcp-session-id"] === "string"
+            ? _request.headers["mcp-session-id"]
+            : "legacy-mcp";
+        const result = await withToolCallContext({ sessionId }, () =>
+          callTool(String(params?.name || ""), params?.arguments || {})
+        );
         try { console.log(`[mcp-call] ${String(params?.name || "")} => ${JSON.stringify(result).slice(0, 200)}`); } catch (_) {}
         return { result };
       } catch (error) {
@@ -307,7 +313,13 @@ export function createHttpServer() {
     const params = request.params as { toolName: string };
     const body = request.body as Record<string, unknown> | undefined;
     try {
-      const result = await callTool(params.toolName, body || {});
+      const sessionId =
+        typeof request.headers["mcp-session-id"] === "string"
+          ? request.headers["mcp-session-id"]
+          : "api-mcp-tool";
+      const result = await withToolCallContext({ sessionId }, () =>
+        callTool(params.toolName, body || {})
+      );
       // All tools should return a blocks-style MCP payload for consistency
       try {
         // If the tool already returned a blocks-style array, forward it unchanged
@@ -464,6 +476,14 @@ export function createHttpServer() {
   fastify.post("/api/threads/:threadId/messages", async (request, reply) => {
     const params = request.params as { threadId: string };
     const body = request.body as JsonBody;
+    const author = String(body.author || "human");
+    const role = (typeof body.role === "string" ? body.role : "user") as any;
+
+    if (role === "system" && (author === "human" || author === "")) {
+      reply.code(400);
+      return { detail: "role 'system' is not allowed for human messages" };
+    }
+
     let expectedLastSeq = typeof body.expected_last_seq === "number" ? body.expected_last_seq : undefined;
     let replyToken = typeof body.reply_token === "string" ? body.reply_token : undefined;
 
@@ -486,11 +506,11 @@ export function createHttpServer() {
     try {
       const message = store.postMessage({
         threadId: params.threadId,
-        author: String(body.author || "human"),
+        author,
         content: String(body.content || ""),
         expectedLastSeq,
         replyToken,
-        role: (typeof body.role === "string" ? body.role : "user") as any,
+        role,
         metadata: Object.keys(msgMetadata).length > 0 ? msgMetadata : undefined,
         replyToMsgId: typeof body.reply_to_msg_id === "string" ? body.reply_to_msg_id : undefined,
         priority: (typeof body.priority === "string" ? body.priority : "normal") as any

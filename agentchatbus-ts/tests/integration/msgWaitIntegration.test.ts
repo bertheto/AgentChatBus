@@ -117,7 +117,7 @@ describe("msg_wait integration parity", () => {
         params: {
           name: "msg_wait",
           arguments: {
-            thread_id: connected.thread.id,
+            thread_id: connected.thread.thread_id,
             after_seq: connected.current_seq,
             agent_id: agentId,
             token: agentToken,
@@ -132,10 +132,10 @@ describe("msg_wait integration parity", () => {
     await new Promise(resolve => setTimeout(resolve, 100));
     
     // Need to get a valid sync context for posting
-    const syncContext = store.issueSyncContext(connected.thread.id, "human");
+    const syncContext = store.issueSyncContext(connected.thread.thread_id, "human");
     await server.inject({
       method: "POST",
-      url: `/api/threads/${connected.thread.id}/messages`,
+      url: `/api/threads/${connected.thread.thread_id}/messages`,
       payload: {
         author: "human",
         content: "trigger message",

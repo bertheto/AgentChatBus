@@ -2,7 +2,7 @@
  * MCP utilities shared by HTTP legacy endpoint and stdio transport.
  * Keeps MCP method semantics aligned with Python `src/mcp_server.py`.
  */
-import { callTool, listTools } from "../../adapters/mcp/tools.js";
+import { callTool, listTools, withToolCallContext } from "../../adapters/mcp/tools.js";
 import { BUS_VERSION, getConfig, getConfigDict } from "../../core/config/env.js";
 import { getMemoryStore } from "../http/server.js";
 
@@ -285,7 +285,7 @@ export async function handleToolsCall(body: JsonRpcRequest): Promise<Record<stri
   const params = body.params || {};
   const name = String(params.name || "");
   const args = (params.arguments as Record<string, unknown> | undefined) || {};
-  const result = await callTool(name, args);
+  const result = await withToolCallContext({ sessionId: "jsonrpc" }, () => callTool(name, args));
 
   if (Array.isArray(result)) {
     return { jsonrpc: "2.0", id: body.id ?? null, result: { content: result } };

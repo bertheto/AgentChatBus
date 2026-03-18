@@ -397,9 +397,9 @@ describe("HTTP compatibility shell", () => {
 
     await server.inject({
       method: "POST",
-      url: `/api/threads/${connected.thread.id}/messages`,
+      url: `/api/threads/${connected.thread.thread_id}/messages`,
       payload: {
-        author: connected.agent.id,
+        author: connected.agent.agent_id,
         content: "message before wait",
         expected_last_seq: connected.current_seq,
         reply_token: connected.reply_token
@@ -414,9 +414,9 @@ describe("HTTP compatibility shell", () => {
         params: {
           name: "msg_wait",
           arguments: {
-            thread_id: connected.thread.id,
+            thread_id: connected.thread.thread_id,
             after_seq: connected.current_seq,  // Use current_seq to check if agent is behind
-            agent_id: connected.agent.id,
+            agent_id: connected.agent.agent_id,
             token: connected.agent.token,
             timeout_ms: 1000,
             return_format: "json"  // Match Python: use json format for test assertions
@@ -461,9 +461,9 @@ describe("HTTP compatibility shell", () => {
         params: {
           name: "msg_wait",
           arguments: {
-            thread_id: connected.thread.id,
+            thread_id: connected.thread.thread_id,
             after_seq: connected.current_seq,
-            agent_id: connected.agent.id,
+            agent_id: connected.agent.agent_id,
             timeout_ms: 1000,
             return_format: "json"
           }
@@ -500,8 +500,8 @@ describe("HTTP compatibility shell", () => {
       method: "POST",
       url: "/api/mcp/tool/msg_post",
       payload: {
-        thread_id: connected.thread.id,
-        author: connected.agent.id,
+        thread_id: connected.thread.thread_id,
+        author: connected.agent.agent_id,
         content: "attention test",
         expected_last_seq: connected.current_seq,
         reply_token: connected.reply_token,
@@ -552,9 +552,9 @@ describe("HTTP compatibility shell", () => {
         params: {
           name: "msg_wait",
           arguments: {
-            thread_id: connected.thread.id,
+            thread_id: connected.thread.thread_id,
             after_seq: connected.current_seq,
-            agent_id: connected.agent.id,
+            agent_id: connected.agent.agent_id,
             token: connected.agent.token,
             timeout_ms: 2000  // Reasonable timeout
           }
@@ -575,7 +575,7 @@ describe("HTTP compatibility shell", () => {
     });
     expect(threadsResponse.statusCode).toBe(200);
     const list = threadsResponse.json().threads;
-    const thread = list.find((item: { id: string }) => item.id === connected.thread.id);
+    const thread = list.find((item: { id: string }) => item.id === connected.thread.thread_id);
     expect(Array.isArray(thread.waiting_agents)).toBe(true);
     expect(thread.waiting_agents.length).toBe(1);
 
@@ -612,9 +612,9 @@ describe("HTTP compatibility shell", () => {
         params: {
           name: "msg_wait",
           arguments: {
-            thread_id: connected.thread.id,
+            thread_id: connected.thread.thread_id,
             after_seq: connected.current_seq,
-            agent_id: connected.agent.id,
+            agent_id: connected.agent.agent_id,
             token: connected.agent.token,
             timeout_ms: 1
           }
@@ -629,7 +629,7 @@ describe("HTTP compatibility shell", () => {
       url: "/api/threads"
     });
     const list = threadsResponse.json().threads;
-    const thread = list.find((item: { id: string }) => item.id === connected.thread.id);
+    const thread = list.find((item: { id: string }) => item.id === connected.thread.thread_id);
     expect(thread.waiting_agents.length).toBe(0);
 
     await server.close();

@@ -1096,11 +1096,11 @@ export class MemoryStore {
         priority: "normal",
         author: "system",
         author_id: "system",
-        author_name: "system",
+        author_name: "System",
         author_emoji: "⚙️",
         role: "system",
         content: finalContent,
-        metadata: {},
+        metadata: null,
         reactions: [],
         created_at: thread?.created_at || new Date().toISOString(),
         edited_at: null,
@@ -1212,40 +1212,33 @@ export class MemoryStore {
     }
 
     const latestSeq = this.getLatestSeq(input.threadId);
-    
-    let fastReturn = false;
-    let fastReturnReason: string | undefined;
-    
-    // Match Python logic: fast return only when:
-    // 1. Has refresh request, OR
-    // 2. No issued tokens AND agent is behind (afterSeq < latestSeq)
+    const refreshRequest = input.agentId
+      ? this.getRefreshRequest(input.threadId, input.agentId)
+      : undefined;
+    let wantsSyncOnly = false;
+    let issuedTokenCount: number | undefined;
+
     if (input.agentId) {
-      const refresh = this.getRefreshRequest(input.threadId, input.agentId);
-      if (refresh) {
-        fastReturn = true;
-        fastReturnReason = refresh.reason;
-        this.clearRefreshRequest(input.threadId, input.agentId);
-      } else {
-        // Check issued token count
-        const tokens = Array.from(this.syncTokens.values()).filter((t: ReplyTokenRecord) => 
-          t.threadId === input.threadId && 
-          t.agentId === input.agentId && 
-          t.status === "issued"
-        );
-        const issuedTokenCount = tokens.length;
-        
-        // Only fast return if no tokens AND agent is behind
-        if (issuedTokenCount === 0 && input.afterSeq < latestSeq) {
-          fastReturn = true;
-          fastReturnReason = `no_issued_tokens_and_behind(total_issued=${issuedTokenCount}, after_seq=${input.afterSeq}, latest=${latestSeq})`;
-        }
+      issuedTokenCount = [...this.syncTokens.values()].filter(
+        (t) => t.threadId === input.threadId && t.agentId === input.agentId && t.status === "issued"
+      ).length;
+      if (refreshRequest) {
+        wantsSyncOnly = true;
+      } else if (issuedTokenCount === 0 && input.afterSeq < latestSeq) {
+        wantsSyncOnly = true;
       }
+    }
+
+    let fastReturnReason: string | undefined;
+    if (refreshRequest) {
+      fastReturnReason = `refresh_required_after_${refreshRequest.reason}(after_seq=${input.afterSeq}, latest=${latestSeq})`;
+    } else if (wantsSyncOnly) {
+      fastReturnReason = `no_issued_tokens_and_behind(total_issued=${issuedTokenCount ?? 0}, after_seq=${input.afterSeq}, latest=${latestSeq})`;
     }
 
     this.pruneExpiredWaitStates(input.threadId);
     if (input.agentId) {
       this.enterWaitState(input.threadId, input.agentId, input.timeoutMs || 300_000);
-      // Update agent activity to msg_wait
       const agent = this.getAgent(input.agentId);
       if (agent) {
         agent.last_activity = 'msg_wait';
@@ -1264,26 +1257,20 @@ export class MemoryStore {
 
     try {
       while (true) {
-        // Check for new messages FIRST (match Python L1205-1206)
-        // Python: "raw_msgs = await crud.msg_list(...); if msgs: ..."
         const allMessages = this.getMessages(input.threadId, localAfterSeq);
         let messages = allMessages;
 
-        // Apply for_agent filtering (match Python L1208-1223)
         if (input.forAgent && messages.length > 0) {
           messages = messages.filter(m => {
             const meta = m.metadata as any;
             return meta?.handoff_target === input.forAgent;
           });
-          // If filtering resulted in empty but there were messages,
-          // update cursor and continue waiting (match Python L1218-1220)
           if (messages.length === 0 && allMessages.length > 0) {
             localAfterSeq = Math.max(localAfterSeq, ...allMessages.map(m => m.seq));
           }
         }
 
         if (messages.length > 0) {
-          // Found messages! Exit wait state and return (match Python L1211-1233)
           if (input.agentId) {
             this.exitWaitState(input.threadId, input.agentId);
             const agent = this.getAgent(input.agentId);
@@ -1298,6 +1285,9 @@ export class MemoryStore {
             this.invalidateReplyTokensForAgent(input.threadId, input.agentId);
           }
           const sync = this.issueSyncContext(input.threadId, input.agentId, "msg_wait");
+          if (input.agentId && refreshRequest) {
+            this.clearRefreshRequest(input.threadId, input.agentId);
+          }
           return {
             messages: this.projectMessagesForAgent(messages),
             current_seq: sync.current_seq,
@@ -1308,14 +1298,15 @@ export class MemoryStore {
           };
         }
 
-        // Priority: messages first, then generic no-issued-token fast-return.
-        // Match Python L1236-1243: "if wants_sync_only: return []"
-        if (fastReturn) {
+        if (wantsSyncOnly) {
           if (input.agentId) {
             this.exitWaitState(input.threadId, input.agentId);
             this.invalidateReplyTokensForAgent(input.threadId, input.agentId);
           }
           const sync = this.issueSyncContext(input.threadId, input.agentId, "msg_wait");
+          if (input.agentId && refreshRequest) {
+            this.clearRefreshRequest(input.threadId, input.agentId);
+          }
           return {
             messages: [],
             current_seq: sync.current_seq,
@@ -1326,34 +1317,12 @@ export class MemoryStore {
           };
         }
 
-        // Check if we should exit due to sync-only mode (match Python L1236-1243)
-        // This happens when agent has refresh request during the wait loop
-        if (input.agentId) {
-          const refreshNow = this.getRefreshRequest(input.threadId, input.agentId);
-          if (refreshNow) {
-            this.exitWaitState(input.threadId, input.agentId);
-            this.clearRefreshRequest(input.threadId, input.agentId);
-            this.invalidateReplyTokensForAgent(input.threadId, input.agentId);
-            const sync = this.issueSyncContext(input.threadId, input.agentId, "msg_wait");
-            return {
-              messages: [],
-              current_seq: sync.current_seq,
-              reply_token: sync.reply_token,
-              reply_window: sync.reply_window,
-              fast_return: true,
-              fast_return_reason: refreshNow.reason
-            };
-          }
-        }
-
-        // Heartbeat refresh (match Python L1245-1248)
         const now = Date.now();
         if (now - lastHeartbeat >= HEARTBEAT_INTERVAL) {
-          // Refresh heartbeat (update agent activity)
           if (input.agentId) {
             const agent = this.getAgent(input.agentId);
             if (agent) {
-              agent.last_activity = 'msg_wait_heartbeat';
+              agent.last_activity = 'msg_wait';
               agent.last_activity_time = new Date().toISOString();
               this.upsertAgent(agent);
             }
@@ -1361,23 +1330,18 @@ export class MemoryStore {
           lastHeartbeat = now;
         }
 
-        // Check timeout (match Python L1261)
         const elapsed = now - startTime;
         if (elapsed >= timeout) {
-          // Timeout - exit wait state and return empty (match Python L1262-1269)
           if (input.agentId) {
             this.exitWaitState(input.threadId, input.agentId);
           }
-          
-          // Match Python L1274-1291: Try to reuse existing token if no messages and seq unchanged
+
           const currentSeqAfterWait = this.getLatestSeq(input.threadId);
           let sync: SyncContext;
-          
+
           if (input.agentId && currentSeqAfterWait === latestSeq) {
-            // Try to get latest issued token for reuse
             const latestToken = this.getLatestIssuedToken(input.threadId, input.agentId);
             if (latestToken) {
-              // Reuse existing token, invalidate others
               this.invalidateReplyTokensForAgentExcept(input.threadId, input.agentId, latestToken.token);
               sync = {
                 current_seq: currentSeqAfterWait,
@@ -1388,18 +1352,19 @@ export class MemoryStore {
                 }
               };
             } else {
-              // No existing token, issue new one
               this.invalidateReplyTokensForAgent(input.threadId, input.agentId);
-              sync = this.issueSyncContext(input.threadId, input.agentId, "timeout");
+              sync = this.issueSyncContext(input.threadId, input.agentId, "msg_wait");
             }
           } else {
-            // Seq changed or no agentId, issue new token
             if (input.agentId) {
               this.invalidateReplyTokensForAgent(input.threadId, input.agentId);
             }
-            sync = this.issueSyncContext(input.threadId, input.agentId, "timeout");
+            sync = this.issueSyncContext(input.threadId, input.agentId, "msg_wait");
           }
-          
+
+          if (input.agentId && refreshRequest) {
+            this.clearRefreshRequest(input.threadId, input.agentId);
+          }
           return {
             messages: [],
             current_seq: sync.current_seq,
@@ -1410,16 +1375,6 @@ export class MemoryStore {
           };
         }
 
-        // Event-driven wake-up: wait for msg_post to signal this thread's event.
-        // Matches Python dispatch.py L1249-1256:
-        //   event.clear()
-        //   try:
-        //       await asyncio.wait_for(event.wait(), timeout=1.0)
-        //   except asyncio.TimeoutError:
-        //       pass
-        //
-        // Use min(remaining_time, 1000) to respect the outer timeout
-        // while still allowing the 1s fallback for correctness.
         const remainingTimeout = Math.min(1000, timeout - elapsed);
         const event = this._getThreadEvent(input.threadId);
         event.clear();
@@ -1577,14 +1532,19 @@ export class MemoryStore {
       }
     }
 
+    // Validate reply_to_msg_id (UP-14): must exist and belong to the same thread.
+    if (input.replyToMsgId) {
+      const parentMsg = this.getMessage(input.replyToMsgId);
+      if (!parentMsg) {
+        throw new Error(`reply_to_msg_id '${input.replyToMsgId}' does not exist.`);
+      }
+      if (parentMsg.thread_id !== input.threadId) {
+        throw new Error(`reply_to_msg_id '${input.replyToMsgId}' belongs to a different thread.`);
+      }
+    }
+
     // Content filter check (UP-07)
     checkContentOrThrow(input.content);
-
-    // Vecteur B: role escalation prevention (Python parity: main.py L1867-1868)
-    // A message with role='system' from author='human' must be rejected
-    if (input.role === "system" && (input.author === "human" || input.author === "")) {
-      throw new Error("role 'system' is not allowed for human messages");
-    }
 
     const latestSeq = this.getLatestSeq(input.threadId);
     const agent = this.getAgentById(input.author);
@@ -1621,7 +1581,6 @@ export class MemoryStore {
 
     const isInternalSystemMessage = input.role === "system" && input.author === "system";
     if (!isInternalSystemMessage) {
-      // Strict Sync Logic (UP-14/15/16)
       const missingFields: string[] = [];
       if (input.expectedLastSeq === undefined) {
         missingFields.push("expected_last_seq");
@@ -1630,7 +1589,6 @@ export class MemoryStore {
         missingFields.push("reply_token");
       }
       if (missingFields.length > 0) {
-        if (agent) this.setRefreshRequest(thread.id, agent.id, "MISSING_SYNC_FIELDS");
         throw new MissingSyncFieldsError(missingFields);
       }
 
@@ -1638,19 +1596,16 @@ export class MemoryStore {
       const replyToken = input.replyToken as string;
       const token = this.syncTokens.get(replyToken);
       if (!token || token.threadId !== input.threadId) {
-        if (agent) this.setRefreshRequest(thread.id, agent.id, "TOKEN_INVALID");
         throw new ReplyTokenInvalidError();
       }
 
       // Enforce agent binding only when author resolves to a registered agent.
       // Python parity (crud.py): if token_agent_id and author_id and token_agent_id != author_id -> invalid.
       if (token.agentId && agent?.id && token.agentId !== agent.id) {
-        if (agent) this.setRefreshRequest(thread.id, agent.id, "TOKEN_INVALID");
         throw new ReplyTokenInvalidError();
       }
 
       if (token.status === "consumed") {
-        if (agent) this.setRefreshRequest(thread.id, agent.id, "TOKEN_REPLAY");
         throw new ReplyTokenReplayError(token.consumedAt ? new Date(token.consumedAt).toISOString() : undefined);
       }
 
@@ -1659,26 +1614,11 @@ export class MemoryStore {
       // Check seq tolerance (Python logic: new_messages_count > SEQ_TOLERANCE)
       const newMessagesCount = latestSeq - expectedLastSeq;
       if (newMessagesCount > MemoryStore.SEQ_TOLERANCE) {
-        if (agent) {
-          this.invalidateReplyTokensForAgent(thread.id, agent.id);
-          this.setRefreshRequest(thread.id, agent.id, "SEQ_MISMATCH");
-        }
         const newMsgs = this.getMessages(thread.id, expectedLastSeq);
         throw new SeqMismatchError(expectedLastSeq, latestSeq, this.projectMessagesForAgent(newMsgs));
       }
 
       this.consumeReplyToken(token.token);
-    }
-
-    // Reply-to validation (UP-14)
-    if (input.replyToMsgId) {
-      const parentMsg = this.getMessage(input.replyToMsgId);
-      if (!parentMsg) {
-        throw new Error(`Message ${input.replyToMsgId} does not exist`);
-      }
-      if (parentMsg.thread_id !== input.threadId) {
-        throw new Error("Cannot reply to a message in a different thread");
-      }
     }
 
     this.sequence += 1;
@@ -1705,7 +1645,6 @@ export class MemoryStore {
     messages.push(message);
     this.threadMessages.set(input.threadId, messages);
     this.threadParticipants.get(input.threadId)?.add(input.author);
-    this.clearWaitStates(input.threadId);
     
     // 移植自：Python test_agent_registry.py L69-70
     // 更新 agent activity 为 'msg_post'
@@ -1744,6 +1683,18 @@ export class MemoryStore {
           }
         });
       }
+    }
+    if (message.reply_to_msg_id) {
+      eventBus.emit({
+        type: "msg.reply",
+        payload: {
+          msg_id: message.id,
+          reply_to_msg_id: message.reply_to_msg_id,
+          thread_id: message.thread_id,
+          author: message.author_name || message.author,
+          seq: message.seq
+        }
+      });
     }
     
     // Notify any msg_wait callers on this thread that a new message is available.
@@ -1997,31 +1948,6 @@ export class MemoryStore {
 
   issueSyncContext(threadId: string, agentId?: string, source?: string): SyncContext {
     const currentSeq = this.getLatestSeq(threadId);
-    
-    // Match Python logic: reuse existing issued token if available
-    // Python version reuses tokens on repeated msg_wait timeouts
-    if (agentId) {
-      const existingTokens = Array.from(this.syncTokens.values()).filter((t: ReplyTokenRecord) => 
-        t.threadId === threadId && 
-        t.agentId === agentId && 
-        t.status === "issued"
-      );
-      
-      if (existingTokens.length > 0) {
-        // Reuse the first existing token
-        const existingToken = existingTokens[0];
-        return {
-          current_seq: currentSeq,
-          reply_token: existingToken.token,
-          reply_window: {
-            expires_at: existingToken.expiresAt,
-            max_new_messages: MemoryStore.SEQ_TOLERANCE
-          }
-        };
-      }
-    }
-    
-    // Issue new token only if no existing ones
     const token = randomUUID();
     const issuedAt = Date.now();
     const expiresAt = NON_EXPIRING_TOKEN_TS; // Match Python: tokens never expire (9999-12-31)
@@ -3801,13 +3727,13 @@ export class MemoryStore {
     };
   }
 
-  private setRefreshRequest(threadId: string, agentId: string, reason: string): void {
+  setRefreshRequest(threadId: string, agentId: string, reason: string): void {
     this.persistenceDb.prepare(
       "INSERT OR REPLACE INTO msg_wait_refresh_requests (thread_id, agent_id, reason, created_at) VALUES (?, ?, ?, ?)"
     ).run(threadId, agentId, reason, new Date().toISOString());
   }
 
-  private getRefreshRequest(threadId: string, agentId: string): RefreshRequestRecord | undefined {
+  getRefreshRequest(threadId: string, agentId: string): RefreshRequestRecord | undefined {
     const row = this.persistenceDb.prepare(
       "SELECT thread_id, agent_id, reason, created_at FROM msg_wait_refresh_requests WHERE thread_id = ? AND agent_id = ?"
     ).get(threadId, agentId) as Record<string, unknown> | undefined;
@@ -3820,7 +3746,7 @@ export class MemoryStore {
     };
   }
 
-  private clearRefreshRequest(threadId: string, agentId: string): void {
+  clearRefreshRequest(threadId: string, agentId: string): void {
     this.persistenceDb.prepare(
       "DELETE FROM msg_wait_refresh_requests WHERE thread_id = ? AND agent_id = ?"
     ).run(threadId, agentId);
