@@ -65,6 +65,49 @@ describe("HTTP compatibility shell", () => {
     await server.close();
   });
 
+  it("includes synthetic system prompt when requested via REST", async () => {
+    const server = createHttpServer();
+    const auth = (await server.inject({
+      method: "POST",
+      url: "/api/agents/register",
+      payload: { ide: "VSCode", model: "system-prompt-check" }
+    })).json();
+
+    const threadResponse = await server.inject({
+      method: "POST",
+      url: "/api/threads",
+      headers: { "x-agent-token": auth.token },
+      payload: {
+        topic: "rest-system-prompt-thread",
+        creator_agent_id: auth.agent_id,
+        system_prompt: "Custom prompt from REST test."
+      }
+    });
+    expect(threadResponse.statusCode).toBe(201);
+    const thread = threadResponse.json();
+
+    const messagesResponse = await server.inject({
+      method: "GET",
+      url: `/api/threads/${thread.id}/messages`,
+      query: {
+        after_seq: "0",
+        limit: "50",
+        include_system_prompt: "1"
+      }
+    });
+
+    expect(messagesResponse.statusCode).toBe(200);
+    const messages = messagesResponse.json();
+    expect(Array.isArray(messages)).toBe(true);
+    expect(messages.length).toBeGreaterThan(0);
+    expect(messages[0].seq).toBe(0);
+    expect(messages[0].role).toBe("system");
+    expect(messages[0].content).toContain("## Section: Thread Create (Provided By Creator)");
+    expect(messages[0].content).toContain("Custom prompt from REST test.");
+
+    await server.close();
+  });
+
   it("rejects replayed reply tokens", async () => {
     const server = createHttpServer();
     const thread = await createAuthedThread(server, "replay-thread");

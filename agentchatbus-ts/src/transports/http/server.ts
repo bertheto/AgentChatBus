@@ -377,13 +377,30 @@ export function createHttpServer() {
 
   fastify.get("/api/threads/:threadId/messages", async (request, reply) => {
     const params = request.params as { threadId: string };
-    const query = request.query as { after_seq?: number };
+    const query = request.query as {
+      after_seq?: number | string;
+      limit?: number | string;
+      include_system_prompt?: boolean | string | number;
+      priority?: string;
+    };
     const thread = store.getThread(params.threadId);
     if (!thread) {
       reply.code(404);
       return { detail: "Thread not found" };
     }
-    return store.getMessages(params.threadId, Number(query.after_seq || 0));
+    const afterSeq = Number(query.after_seq || 0);
+    const limit = Math.min(Math.max(1, Number(query.limit || 200) || 200), 1000);
+    const includeSystemPrompt =
+      query.include_system_prompt === true
+      || query.include_system_prompt === 1
+      || query.include_system_prompt === "1"
+      || query.include_system_prompt === "true";
+    const priority = typeof query.priority === "string" ? query.priority : undefined;
+    if (priority && !["normal", "urgent", "system"].includes(priority)) {
+      reply.code(400);
+      return { detail: `Invalid priority filter '${priority}'` };
+    }
+    return store.getMessages(params.threadId, afterSeq, includeSystemPrompt, priority).slice(0, limit);
   });
 
   fastify.post("/api/threads/:threadId/sync-context", async (request, reply) => {
