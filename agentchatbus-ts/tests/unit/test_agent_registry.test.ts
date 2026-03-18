@@ -30,15 +30,18 @@ describe('Agent Registry (Ported from test_agent_registry.py)', () => {
     expect(resumed?.last_activity_time).toBeDefined();
   });
 
-  it('agent wait and post activity tracking', () => {
+  it('agent wait and post activity tracking', async () => {
     const thread = store.createThread('activity-test').thread;
     const agent = store.registerAgent({ ide: 'VSCode', model: 'GPT' });
+    const initialHeartbeat = agent.last_heartbeat;
 
+    await new Promise((resolve) => setTimeout(resolve, 10));
     const okWait = store.agentMsgWait(agent.id, agent.token);
     expect(okWait).toBe(true);
 
     const refreshed = store.listAgents()[0];
     expect(refreshed.last_activity).toBe('msg_wait');
+    expect(refreshed.last_heartbeat).not.toBe(initialHeartbeat);
 
     const sync = store.issueSyncContext(thread.id, agent.id, 'msg_post');
     store.postMessage({
@@ -52,6 +55,25 @@ describe('Agent Registry (Ported from test_agent_registry.py)', () => {
 
     const refreshed2 = store.listAgents()[0];
     expect(refreshed2.last_activity).toBe('msg_post');
+  });
+
+  it('waitForMessages refreshes heartbeat while polling', async () => {
+    const thread = store.createThread('wait-heartbeat').thread;
+    const agent = store.registerAgent({ ide: 'VSCode', model: 'GPT' });
+    const initialHeartbeat = agent.last_heartbeat;
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    await store.waitForMessages({
+      threadId: thread.id,
+      afterSeq: 0,
+      timeoutMs: 10,
+      agentId: agent.id,
+      agentToken: agent.token
+    });
+
+    const refreshed = store.listAgents()[0];
+    expect(refreshed.last_activity).toBe('msg_wait');
+    expect(refreshed.last_heartbeat).not.toBe(initialHeartbeat);
   });
 
   it('agent resume rejects bad token', () => {

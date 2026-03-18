@@ -835,6 +835,7 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
           threadId, 
           afterSeq, 
           agentId, 
+          agentToken: verifiedAgent ? token : undefined,
           timeoutMs,
           forAgent
         });

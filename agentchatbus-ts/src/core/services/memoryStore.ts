@@ -1238,7 +1238,14 @@ export class MemoryStore {
     }
   }
 
-  async waitForMessages(input: { threadId: string; afterSeq: number; agentId?: string; timeoutMs?: number; forAgent?: string }): Promise<{
+  async waitForMessages(input: {
+    threadId: string;
+    afterSeq: number;
+    agentId?: string;
+    agentToken?: string;
+    timeoutMs?: number;
+    forAgent?: string;
+  }): Promise<{
     messages: MessageRecord[];
     current_seq: number;
     reply_token: string;
@@ -1246,11 +1253,6 @@ export class MemoryStore {
     fast_return: boolean;
     fast_return_reason?: string;
   }> {
-    const thread = this.getThread(input.threadId);
-    if (!thread) {
-      throw new Error("Thread not found");
-    }
-
     const latestSeq = this.getLatestSeq(input.threadId);
     const refreshRequest = input.agentId
       ? this.getRefreshRequest(input.threadId, input.agentId)
@@ -1279,12 +1281,7 @@ export class MemoryStore {
     this.pruneExpiredWaitStates(input.threadId);
     if (input.agentId) {
       this.enterWaitState(input.threadId, input.agentId, input.timeoutMs || 300_000);
-      const agent = this.getAgent(input.agentId);
-      if (agent) {
-        agent.last_activity = 'msg_wait';
-        agent.last_activity_time = new Date().toISOString();
-        this.upsertAgent(agent);
-      }
+      this.recordMsgWaitActivity(input.agentId, input.agentToken);
     }
 
     // Start polling loop (match Python _poll() function)
@@ -1294,135 +1291,134 @@ export class MemoryStore {
     const HEARTBEAT_INTERVAL = 40_000; // 40 seconds, match Python
     let lastHeartbeat = startTime;
     let localAfterSeq = input.afterSeq;
+    let messages: MessageRecord[] = [];
+    let fastReturn = false;
 
-    try {
-      while (true) {
-        const allMessages = this.getMessages(input.threadId, localAfterSeq);
-        let messages = allMessages;
+    while (true) {
+      const allMessages = this.getMessages(input.threadId, localAfterSeq, false, undefined, 100);
 
-        if (input.forAgent && messages.length > 0) {
-          messages = messages.filter(m => {
-            const meta = m.metadata as any;
-            return meta?.handoff_target === input.forAgent;
-          });
-          if (messages.length === 0 && allMessages.length > 0) {
-            localAfterSeq = Math.max(localAfterSeq, ...allMessages.map(m => m.seq));
-          }
-        }
-
-        if (messages.length > 0) {
+      if (input.forAgent && allMessages.length > 0) {
+        const filtered = allMessages.filter((message) => {
+          const meta = message.metadata as Record<string, unknown> | null | undefined;
+          return meta?.handoff_target === input.forAgent;
+        });
+        if (filtered.length > 0) {
           if (input.agentId) {
             this.exitWaitState(input.threadId, input.agentId);
-            const agent = this.getAgent(input.agentId);
-            if (agent) {
-              agent.last_activity = 'msg_received';
-              agent.last_activity_time = new Date().toISOString();
-              this.upsertAgent(agent);
-            }
+            this.markAgentMessageReceived(input.agentId);
           }
-
-          if (input.agentId) {
-            this.invalidateReplyTokensForAgent(input.threadId, input.agentId);
-          }
-          const sync = this.issueSyncContext(input.threadId, input.agentId, "msg_wait");
-          if (input.agentId && refreshRequest) {
-            this.clearRefreshRequest(input.threadId, input.agentId);
-          }
-          return {
-            messages: this.projectMessagesForAgent(messages),
-            current_seq: sync.current_seq,
-            reply_token: sync.reply_token,
-            reply_window: sync.reply_window,
-            fast_return: false,
-            fast_return_reason: undefined
-          };
+          messages = filtered;
+          break;
         }
-
-        if (wantsSyncOnly) {
-          if (input.agentId) {
-            this.exitWaitState(input.threadId, input.agentId);
-            this.invalidateReplyTokensForAgent(input.threadId, input.agentId);
-          }
-          const sync = this.issueSyncContext(input.threadId, input.agentId, "msg_wait");
-          if (input.agentId && refreshRequest) {
-            this.clearRefreshRequest(input.threadId, input.agentId);
-          }
-          return {
-            messages: [],
-            current_seq: sync.current_seq,
-            reply_token: sync.reply_token,
-            reply_window: sync.reply_window,
-            fast_return: true,
-            fast_return_reason: fastReturnReason
-          };
+        localAfterSeq = Math.max(localAfterSeq, ...allMessages.map((message) => message.seq));
+      } else if (allMessages.length > 0) {
+        if (input.agentId) {
+          this.exitWaitState(input.threadId, input.agentId);
+          this.markAgentMessageReceived(input.agentId);
         }
-
-        const now = Date.now();
-        if (now - lastHeartbeat >= HEARTBEAT_INTERVAL) {
-          if (input.agentId) {
-            const agent = this.getAgent(input.agentId);
-            if (agent) {
-              agent.last_activity = 'msg_wait';
-              agent.last_activity_time = new Date().toISOString();
-              this.upsertAgent(agent);
-            }
-          }
-          lastHeartbeat = now;
-        }
-
-        const elapsed = now - startTime;
-        if (elapsed >= timeout) {
-          if (input.agentId) {
-            this.exitWaitState(input.threadId, input.agentId);
-          }
-
-          const currentSeqAfterWait = this.getLatestSeq(input.threadId);
-          let sync: SyncContext;
-
-          if (input.agentId && currentSeqAfterWait === latestSeq) {
-            const latestToken = this.getLatestIssuedToken(input.threadId, input.agentId);
-            if (latestToken) {
-              this.invalidateReplyTokensForAgentExcept(input.threadId, input.agentId, latestToken.token);
-              sync = {
-                current_seq: currentSeqAfterWait,
-                reply_token: latestToken.token,
-                reply_window: {
-                  expires_at: NON_EXPIRING_TOKEN_EXPIRES_AT,
-                  max_new_messages: 0
-                }
-              };
-            } else {
-              this.invalidateReplyTokensForAgent(input.threadId, input.agentId);
-              sync = this.issueSyncContext(input.threadId, input.agentId, "msg_wait");
-            }
-          } else {
-            if (input.agentId) {
-              this.invalidateReplyTokensForAgent(input.threadId, input.agentId);
-            }
-            sync = this.issueSyncContext(input.threadId, input.agentId, "msg_wait");
-          }
-
-          if (input.agentId && refreshRequest) {
-            this.clearRefreshRequest(input.threadId, input.agentId);
-          }
-          return {
-            messages: [],
-            current_seq: sync.current_seq,
-            reply_token: sync.reply_token,
-            reply_window: sync.reply_window,
-            fast_return: false,
-            fast_return_reason: undefined
-          };
-        }
-
-        const remainingTimeout = Math.min(1000, timeout - elapsed);
-        const event = this._getThreadEvent(input.threadId);
-        event.clear();
-        await event.wait(remainingTimeout);
+        messages = allMessages;
+        break;
       }
-    } finally {
-      // No cleanup needed - AsyncEvent handles it automatically
+
+      if (wantsSyncOnly) {
+        if (input.agentId) {
+          this.exitWaitState(input.threadId, input.agentId);
+        }
+        fastReturn = true;
+        break;
+      }
+
+      const now = Date.now();
+      if (now - lastHeartbeat >= HEARTBEAT_INTERVAL) {
+        if (input.agentId) {
+          this.recordMsgWaitActivity(input.agentId, input.agentToken);
+        }
+        lastHeartbeat = now;
+      }
+
+      const elapsed = now - startTime;
+      if (elapsed >= timeout) {
+        if (input.agentId) {
+          this.exitWaitState(input.threadId, input.agentId);
+        }
+        break;
+      }
+
+      const remainingTimeout = Math.min(1000, timeout - elapsed);
+      const event = this._getThreadEvent(input.threadId);
+      event.clear();
+      await event.wait(remainingTimeout);
     }
+
+    if (input.agentId && refreshRequest) {
+      this.clearRefreshRequest(input.threadId, input.agentId);
+    }
+
+    const currentSeqAfterWait = this.getLatestSeq(input.threadId);
+    let sync: SyncContext;
+
+    if (input.agentId && messages.length === 0 && currentSeqAfterWait === latestSeq) {
+      const latestToken = this.getLatestIssuedToken(input.threadId, input.agentId);
+      if (latestToken) {
+        this.invalidateReplyTokensForAgentExcept(input.threadId, input.agentId, latestToken.token);
+        sync = {
+          current_seq: currentSeqAfterWait,
+          reply_token: latestToken.token,
+          reply_window: {
+            expires_at: NON_EXPIRING_TOKEN_EXPIRES_AT,
+            max_new_messages: 0
+          }
+        };
+      } else {
+        this.invalidateReplyTokensForAgent(input.threadId, input.agentId);
+        sync = this.issueSyncContext(input.threadId, input.agentId, "msg_wait");
+      }
+    } else {
+      if (input.agentId) {
+        this.invalidateReplyTokensForAgent(input.threadId, input.agentId);
+      }
+      sync = this.issueSyncContext(input.threadId, input.agentId, "msg_wait");
+    }
+
+    return {
+      messages: this.projectMessagesForAgent(messages),
+      current_seq: sync.current_seq,
+      reply_token: sync.reply_token,
+      reply_window: sync.reply_window,
+      fast_return: fastReturn,
+      fast_return_reason: fastReturn ? fastReturnReason : undefined
+    };
+  }
+
+  private recordMsgWaitActivity(agentId: string, agentToken?: string): void {
+    if (agentToken) {
+      this.agentMsgWait(agentId, agentToken);
+      return;
+    }
+
+    const agent = this.getAgent(agentId);
+    if (!agent) {
+      return;
+    }
+
+    const now = new Date().toISOString();
+    agent.last_activity = 'msg_wait';
+    agent.last_heartbeat = now;
+    agent.last_activity_time = now;
+    this.upsertAgent(agent);
+    this.persistState();
+  }
+
+  private markAgentMessageReceived(agentId: string): void {
+    const agent = this.getAgent(agentId);
+    if (!agent) {
+      return;
+    }
+
+    agent.last_activity = 'msg_received';
+    agent.last_activity_time = new Date().toISOString();
+    this.upsertAgent(agent);
+    this.persistState();
   }
 
   public projectMessagesForAgent(messages: MessageRecord[], audience: "agent" | "human" = "agent"): MessageRecord[] {
@@ -2157,9 +2153,10 @@ export class MemoryStore {
       throw new Error('Invalid agent_id or token');
     }
     
-    // 更新 agent activity 为 'msg_wait'
+    const now = new Date().toISOString();
     agent.last_activity = 'msg_wait';
-    agent.last_activity_time = new Date().toISOString();
+    agent.last_heartbeat = now;
+    agent.last_activity_time = now;
     this.upsertAgent(agent);
     this.persistState();
     

@@ -199,6 +199,50 @@ describe('Message Synchronization Unit Tests', () => {
         expect(waitResult.messages.length).toBeGreaterThan(0);
     });
 
+    it('msg_wait returns at most 100 messages per poll like Python msg_list', async () => {
+        const thread = store.createThread("sync-msg-wait-batch").thread;
+        const agent = store.registerAgent({ ide: "VSCode", model: "GPT" });
+        const previousRateLimitFlag = process.env.AGENTCHATBUS_RATE_LIMIT_ENABLED;
+        process.env.AGENTCHATBUS_RATE_LIMIT_ENABLED = "false";
+
+        try {
+            for (let i = 0; i < 105; i++) {
+                store.postMessage({
+                    threadId: thread.id,
+                    author: "system",
+                    content: `system-${i}`,
+                    role: "system"
+                });
+            }
+
+            const first = await store.waitForMessages({
+                threadId: thread.id,
+                afterSeq: 0,
+                timeoutMs: 1,
+                agentId: agent.id
+            });
+            expect(first.messages).toHaveLength(100);
+            expect(first.messages[0].content).toBe("system-0");
+            expect(first.messages[99].content).toBe("system-99");
+
+            const second = await store.waitForMessages({
+                threadId: thread.id,
+                afterSeq: first.messages[99].seq,
+                timeoutMs: 1,
+                agentId: agent.id
+            });
+            expect(second.messages).toHaveLength(5);
+            expect(second.messages[0].content).toBe("system-100");
+            expect(second.messages[4].content).toBe("system-104");
+        } finally {
+            if (previousRateLimitFlag === undefined) {
+                delete process.env.AGENTCHATBUS_RATE_LIMIT_ENABLED;
+            } else {
+                process.env.AGENTCHATBUS_RATE_LIMIT_ENABLED = previousRateLimitFlag;
+            }
+        }
+    });
+
     it('seq tolerance within limit', () => {
         // With SEQ_TOLERANCE = 0 (strict mode), ANY mismatch triggers SeqMismatchError
         // This test verifies that posting with the correct seq succeeds
