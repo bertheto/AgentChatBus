@@ -1,4 +1,6 @@
 import * as vscode from 'vscode';
+import * as os from 'os';
+import * as net from 'net';
 import { AgentChatBusApiClient } from './api/client';
 import { ThreadsTreeProvider, ThreadItem } from './providers/threadsProvider';
 import { AgentsTreeProvider } from './providers/agentsProvider';
@@ -28,6 +30,60 @@ function getBrowserOpenUrl(rawUrl: string): string {
         return normalized.toString();
     } catch {
         return rawUrl;
+    }
+}
+
+function isLocalServerUrl(rawUrl: string): boolean {
+    try {
+        const normalized = new URL(rawUrl);
+        const host = normalized.hostname.trim().toLowerCase();
+        const normalizedHost = host.split('%')[0];
+        const localHostName = os.hostname().trim().toLowerCase();
+        if (!host) {
+            return false;
+        }
+        if (
+            normalizedHost === 'localhost'
+            || normalizedHost === '127.0.0.1'
+            || normalizedHost === '::1'
+            || normalizedHost === '0.0.0.0'
+            || normalizedHost === '::'
+            || normalizedHost === '::ffff:127.0.0.1'
+            || normalizedHost.startsWith('127.')
+        ) {
+            return true;
+        }
+        if (normalizedHost === localHostName) {
+            return true;
+        }
+
+        if (net.isIP(normalizedHost)) {
+            const interfaces = os.networkInterfaces();
+            const localIps = new Set<string>();
+            for (const infos of Object.values(interfaces)) {
+                for (const info of infos || []) {
+                    const address = String(info.address || '').trim().toLowerCase();
+                    if (!address) {
+                        continue;
+                    }
+                    localIps.add(address);
+                    localIps.add(address.split('%')[0]);
+                    if (address.startsWith('::ffff:')) {
+                        localIps.add(address.slice('::ffff:'.length));
+                    }
+                }
+            }
+            if (localIps.has(normalizedHost)) {
+                return true;
+            }
+            if (normalizedHost.startsWith('::ffff:') && localIps.has(normalizedHost.slice('::ffff:'.length))) {
+                return true;
+            }
+        }
+
+        return false;
+    } catch {
+        return false;
     }
 }
 
@@ -238,11 +294,18 @@ function initializeMainViews(context: vscode.ExtensionContext, serverManager: Bu
             let backendEngineSource = metadata.backendEngine ? 'startup-probe' : 'startup-heuristic';
             let backendVersion = String(metadata.backendVersion || '').trim() || undefined;
             let backendRuntime = String(metadata.backendRuntime || '').trim() || undefined;
+            let backendStartedAt = undefined as string | undefined;
+            let backendUptimeSeconds = undefined as number | undefined;
+            let serverReachable = false;
+            const serverUrl = String(metadata?.mcp?.serverUrl || apiClient?.getBaseUrl() || '').trim();
+            const localServer = isLocalServerUrl(serverUrl);
+            const serverScope = localServer ? 'local' : 'remote';
 
             try {
                 if (apiClient) {
                     try {
                         const health = await apiClient.getHealth();
+                        serverReachable = true;
                         const healthEngine = String(health?.engine || '').trim().toLowerCase();
                         if (healthEngine === 'node' || healthEngine === 'python') {
                             backendEngine = healthEngine;
@@ -261,10 +324,19 @@ function initializeMainViews(context: vscode.ExtensionContext, serverManager: Bu
                     }
 
                     const metrics = await apiClient.getMetrics();
+                    serverReachable = true;
                     const engine = String(metrics?.engine || '').trim().toLowerCase();
                     if (engine === 'node' || engine === 'python') {
                         backendEngine = engine;
                         backendEngineSource = 'api/metrics';
+                    }
+                    const startedAt = String(metrics?.started_at || '').trim();
+                    if (startedAt) {
+                        backendStartedAt = startedAt;
+                    }
+                    const uptimeRaw = Number(metrics?.uptime_seconds);
+                    if (!Number.isNaN(uptimeRaw) && uptimeRaw >= 0) {
+                        backendUptimeSeconds = uptimeRaw;
                     }
                 }
             } catch {
@@ -299,6 +371,13 @@ function initializeMainViews(context: vscode.ExtensionContext, serverManager: Bu
                 backendEngineSource,
                 backendVersion,
                 backendRuntime,
+                backendStartedAt,
+                backendUptimeSeconds,
+                serverReachable,
+                serverScope,
+                privacyWarning: localServer
+                    ? ''
+                    : 'Remote server detected. Sensitive host/process fields are hidden for safety.',
             });
         }),
         vscode.commands.registerCommand('agentchatbus.configureCursorMcp', async () => {

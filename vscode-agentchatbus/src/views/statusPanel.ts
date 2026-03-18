@@ -47,8 +47,20 @@ export class StatusPanel {
         const ide = m.ide || {};
         const mcp = m.mcp || {};
         const attempts = Array.isArray(m.resolutionAttempts) ? m.resolutionAttempts : [];
-        const uptime = m.startTime ? this._getUptime(new Date(m.startTime)) : 'N/A';
-        const serverStatus = m.pid ? 'RUNNING' : 'STOPPED';
+        const isExternalMode = String(m.startupMode || '').startsWith('external-service');
+        const serverReachable = Boolean(m.serverReachable);
+        const serverStatus = m.pid || (isExternalMode && serverReachable) ? 'RUNNING' : 'STOPPED';
+        const isRemote = String(m.serverScope || '').toLowerCase() === 'remote';
+        const hidden = '[hidden for remote server]';
+        const pidDisplay = isRemote
+            ? hidden
+            : (m.pid || (isExternalMode && serverReachable ? 'External service' : 'N/A'));
+        const uptime = m.startTime
+            ? this._getUptime(new Date(m.startTime))
+            : (typeof m.backendUptimeSeconds === 'number'
+                ? this._formatUptimeSeconds(m.backendUptimeSeconds)
+                : 'N/A');
+        const startedAtDisplay = m.startTime || m.backendStartedAt || 'N/A';
         const mcpApiStatus = mcp.apiAvailable ? 'AVAILABLE' : 'UNAVAILABLE';
         const mcpProviderStatus = mcp.providerRegistered ? 'REGISTERED' : 'PENDING';
         const startupMode = this._getStartupModeSummary(m.startupMode);
@@ -56,8 +68,15 @@ export class StatusPanel {
         const backendSource = m.backendEngineSource || 'unknown';
         const backendVersion = m.backendVersion || 'N/A';
         const backendRuntime = m.backendRuntime || 'N/A';
-        const appDir = m.env?.AGENTCHATBUS_APP_DIR || 'N/A';
-        const dbPath = m.env?.AGENTCHATBUS_DB || 'N/A';
+        const appDir = isRemote ? hidden : (m.env?.AGENTCHATBUS_APP_DIR || 'N/A');
+        const dbPath = isRemote ? hidden : (m.env?.AGENTCHATBUS_DB || 'N/A');
+        const commandDisplay = isRemote ? hidden : (m.command || 'N/A');
+        const argsDisplay = isRemote ? hidden : (m.args ? m.args.join(' ') : 'N/A');
+        const workDirDisplay = isRemote ? hidden : (m.cwd || 'N/A');
+        const hostNodeDisplay = isRemote ? hidden : (m.hostNodeExecutable || 'N/A');
+        const envHtml = isRemote
+            ? '<div class="value">Hidden for remote server to avoid exposing local process details.</div>'
+            : this._renderEnv(m.env);
         
         return `<!DOCTYPE html>
 <html lang="en">
@@ -81,6 +100,7 @@ export class StatusPanel {
         .value { font-family: 'Courier New', Courier, monospace; color: var(--vscode-textPreformat-foreground); word-break: break-all; }
         .status-badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 0.8em; font-weight: bold; background: #28a745; color: white; }
         .hint { margin-top: 10px; font-size: 0.85em; color: var(--vscode-descriptionForeground); }
+        .warn { margin: 12px 0 18px; border: 1px solid #d29922; background: rgba(210, 153, 34, 0.12); color: var(--vscode-editor-foreground); padding: 10px 12px; border-radius: 6px; font-size: 0.9em; }
         .mode-help { margin-top: 10px; border-top: 1px solid var(--vscode-widget-border); padding-top: 8px; }
         .mode-help-item { margin-top: 4px; }
         .mode-help code { font-size: 0.95em; }
@@ -92,14 +112,15 @@ export class StatusPanel {
 </head>
 <body>
     <h1>📟 AgentChatBus System Diagnostics</h1>
+    ${isRemote ? `<div class="warn">⚠️ ${m.privacyWarning || 'Remote server detected. Sensitive fields are hidden.'}</div>` : ''}
     
     <div class="grid">
         <div class="card">
             <h2>🌍 Server Instance</h2>
             <div><span class="label">Status:</span> <span class="status-badge">${serverStatus}</span></div>
-            <div><span class="label">PID:</span> <span class="value">${m.pid || 'N/A'}</span></div>
+            <div><span class="label">PID:</span> <span class="value">${pidDisplay}</span></div>
             <div><span class="label">Uptime:</span> <span class="value">${uptime}</span></div>
-            <div><span class="label">Started At:</span> <span class="value">${m.startTime || 'N/A'}</span></div>
+            <div><span class="label">Started At:</span> <span class="value">${startedAtDisplay}</span></div>
             <div><span class="label">Backend:</span> <span class="value">${backend}</span></div>
             <div><span class="label">Backend Version:</span> <span class="value">${backendVersion}</span></div>
             <div><span class="label">Backend Runtime:</span> <span class="value">${backendRuntime}</span></div>
@@ -111,9 +132,9 @@ export class StatusPanel {
             <div><span class="label">Mode:</span> <span class="value">${startupMode.label}</span></div>
             <div class="hint">${startupMode.description}</div>
             <div><span class="label">Resolved By:</span> <span class="value">${m.resolvedBy || 'N/A'}</span></div>
-            <div><span class="label">Executable:</span> <span class="value">${m.command || 'N/A'}</span></div>
-            <div><span class="label">Arguments:</span> <span class="value">${m.args ? m.args.join(' ') : 'N/A'}</span></div>
-            <div><span class="label">WorkDir:</span> <span class="value">${m.cwd || 'N/A'}</span></div>
+            <div><span class="label">Executable:</span> <span class="value">${commandDisplay}</span></div>
+            <div><span class="label">Arguments:</span> <span class="value">${argsDisplay}</span></div>
+            <div><span class="label">WorkDir:</span> <span class="value">${workDirDisplay}</span></div>
             <div><span class="label">App Dir:</span> <span class="value">${appDir}</span></div>
             <div><span class="label">DB Path:</span> <span class="value">${dbPath}</span></div>
             <div class="mode-help">
@@ -129,7 +150,7 @@ export class StatusPanel {
             <h2>💻 Runtime Environment</h2>
             <div><span class="label">Platform:</span> <span class="value">${m.platform} (${m.arch})</span></div>
             <div><span class="label">Node.js:</span> <span class="value">${m.nodeVersion}</span></div>
-            <div><span class="label">Host Node:</span> <span class="value">${m.hostNodeExecutable || 'N/A'}</span></div>
+            <div><span class="label">Host Node:</span> <span class="value">${hostNodeDisplay}</span></div>
             <div><span class="label">Extension:</span> <span class="value">${m.extensionVersion || 'N/A'}</span></div>
             <div><span class="label">VS Code:</span> <span class="value">${m.vscodeVersion}</span></div>
         </div>
@@ -163,7 +184,7 @@ export class StatusPanel {
     <h2>🖇️ Process Environment Variables</h2>
     <div class="card" style="max-width: 100%;">
         <div class="env-list">
-            ${this._renderEnv(m.env)}
+            ${envHtml}
         </div>
     </div>
 
@@ -269,5 +290,16 @@ export class StatusPanel {
         if (hours > 0) return `${hours}h ${minutes % 60}m ${seconds % 60}s`;
         if (minutes > 0) return `${minutes}m ${seconds % 60}s`;
         return `${seconds}s`;
+    }
+
+    private _formatUptimeSeconds(totalSeconds: number): string {
+        const safeSeconds = Math.max(0, Math.floor(totalSeconds));
+        const minutes = Math.floor(safeSeconds / 60);
+        const hours = Math.floor(minutes / 60);
+        const days = Math.floor(hours / 24);
+        if (days > 0) return `${days}d ${hours % 24}h ${minutes % 60}m`;
+        if (hours > 0) return `${hours}h ${minutes % 60}m ${safeSeconds % 60}s`;
+        if (minutes > 0) return `${minutes}m ${safeSeconds % 60}s`;
+        return `${safeSeconds}s`;
     }
 }

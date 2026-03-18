@@ -25,7 +25,7 @@ export interface AppConfig {
  * Controls whether handoff_target, stop_reason, and priority fields
  * are returned to agents or stripped from responses.
  */
-export const BUS_VERSION = "0.1.96";
+export const BUS_VERSION = "0.1.97";
 
 function parseBoolLike(value: unknown, defaultValue: boolean): boolean {
   if (value === undefined || value === null) {
