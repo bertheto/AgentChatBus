@@ -2,7 +2,6 @@ import { /* memoryStore replaced by getStore */ } from "../../core/services/memo
 import { AsyncLocalStorage } from "node:async_hooks";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { eventBus } from "../../shared/eventBus.js";
 import { getStore } from "../../core/services/storeSingleton.js";
 import {
@@ -275,9 +274,31 @@ type ToolCallContext = {
 
 const toolCallContext = new AsyncLocalStorage<ToolCallContext>();
 const connectionAgents = new Map<string, { agentId: string; token: string }>();
-const MSG_WAIT_UPLOADS_ROOT = path.resolve(
-  fileURLToPath(new URL("../../../../../src/static/uploads/", import.meta.url))
-);
+
+function getMsgWaitUploadsRoots(): string[] {
+  const cwd = process.cwd();
+  const fromEnv = process.env.AGENTCHATBUS_UPLOADS_DIR;
+  const candidates = [
+    fromEnv,
+    path.join(cwd, "src", "static", "uploads"),
+    path.join(cwd, "static", "uploads"),
+    path.join(cwd, "..", "src", "static", "uploads"),
+    path.join(cwd, "..", "static", "uploads"),
+    path.join(cwd, "..", "..", "src", "static", "uploads"),
+  ].filter((value): value is string => Boolean(value && String(value).trim().length > 0));
+
+  const seen = new Set<string>();
+  const roots: string[] = [];
+  for (const candidate of candidates) {
+    const resolved = path.resolve(candidate);
+    if (seen.has(resolved)) {
+      continue;
+    }
+    seen.add(resolved);
+    roots.push(resolved);
+  }
+  return roots;
+}
 
 function filterMetadataFields(
   metadata: Record<string, unknown> | null | undefined
@@ -363,21 +384,34 @@ async function readStaticUploadAsBase64(url: string): Promise<{ data: string; mi
     return undefined;
   }
 
-  const relativePath = url.slice("/static/uploads/".length);
-  const candidate = path.resolve(MSG_WAIT_UPLOADS_ROOT, relativePath);
-  if (!candidate.startsWith(MSG_WAIT_UPLOADS_ROOT)) {
+  const relativePath = url
+    .slice("/static/uploads/".length)
+    .split("?")[0]
+    .split("#")[0];
+
+  if (!relativePath) {
     return undefined;
   }
 
-  try {
-    const raw = await readFile(candidate);
-    return {
-      data: raw.toString("base64"),
-      mimeType: guessImageMimeType(candidate)
-    };
-  } catch {
-    return undefined;
+  for (const uploadsRoot of getMsgWaitUploadsRoots()) {
+    const candidate = path.resolve(uploadsRoot, relativePath);
+    const rel = path.relative(uploadsRoot, candidate);
+    if (rel.startsWith("..") || path.isAbsolute(rel)) {
+      continue;
+    }
+
+    try {
+      const raw = await readFile(candidate);
+      return {
+        data: raw.toString("base64"),
+        mimeType: guessImageMimeType(candidate)
+      };
+    } catch {
+      // Ignore missing/unreadable paths and continue trying next root.
+    }
   }
+
+  return undefined;
 }
 
 export async function withToolCallContext<T>(
