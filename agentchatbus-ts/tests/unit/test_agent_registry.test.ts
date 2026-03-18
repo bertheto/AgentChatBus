@@ -56,7 +56,7 @@ describe('Agent Registry (Ported from test_agent_registry.py)', () => {
 
   it('agent resume rejects bad token', () => {
     const agent = store.registerAgent({ ide: 'CLI', model: 'X' });
-    expect(() => store.resumeAgent(agent.id, 'bad-token')).toThrow('Invalid agent_id or token');
+    expect(() => store.resumeAgent(agent.id, 'bad-token')).toThrow('Invalid agent_id/token');
   });
 
   it('agent thread create updates activity', async () => {

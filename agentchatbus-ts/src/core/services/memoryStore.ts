@@ -1632,7 +1632,9 @@ export class MemoryStore {
       throw new MissingSyncFieldsError(missingFields);
     }
 
-    const token = this.syncTokens.get(input.replyToken);
+    const expectedLastSeq = input.expectedLastSeq as number;
+    const replyToken = input.replyToken as string;
+    const token = this.syncTokens.get(replyToken);
     if (!token || token.threadId !== input.threadId) {
       if (agent) this.setRefreshRequest(thread.id, agent.id, "TOKEN_INVALID");
       throw new ReplyTokenInvalidError();
@@ -1653,14 +1655,14 @@ export class MemoryStore {
     // Token expiration is intentionally not enforced to match Python behavior.
 
     // Check seq tolerance (Python logic: new_messages_count > SEQ_TOLERANCE)
-    const newMessagesCount = latestSeq - input.expectedLastSeq;
+    const newMessagesCount = latestSeq - expectedLastSeq;
     if (newMessagesCount > MemoryStore.SEQ_TOLERANCE) {
       if (agent) {
         this.invalidateReplyTokensForAgent(thread.id, agent.id);
         this.setRefreshRequest(thread.id, agent.id, "SEQ_MISMATCH");
       }
-      const newMsgs = this.getMessages(thread.id, input.expectedLastSeq);
-      throw new SeqMismatchError(input.expectedLastSeq, latestSeq, this.projectMessagesForAgent(newMsgs));
+      const newMsgs = this.getMessages(thread.id, expectedLastSeq);
+      throw new SeqMismatchError(expectedLastSeq, latestSeq, this.projectMessagesForAgent(newMsgs));
     }
 
     this.consumeReplyToken(token.token);
@@ -1893,7 +1895,7 @@ export class MemoryStore {
         SELECT agent_id, reaction
         FROM reactions
         WHERE message_id = ?
-        ORDER BY reaction ASC, agent_id ASC
+        ORDER BY created_at ASC
       `
     ).all(messageId) as Array<Record<string, unknown>>;
     return rows.map((row) => ({
@@ -1906,8 +1908,8 @@ export class MemoryStore {
    * Batch-fetch reactions for multiple messages (match Python crud.msg_reactions_bulk)
    * Returns a map from message_id to array of reactions
    */
-  getReactionsBulk(messageIds: string[]): Map<string, Array<{ agent_id: string; reaction: string }>> {
-    const result = new Map<string, Array<{ agent_id: string; reaction: string }>>();
+  getReactionsBulk(messageIds: string[]): Map<string, Array<{ id?: string; agent_id: string; agent_name?: string; reaction: string; created_at?: string }>> {
+    const result = new Map<string, Array<{ id?: string; agent_id: string; agent_name?: string; reaction: string; created_at?: string }>>();
     
     if (messageIds.length === 0) {
       return result;
@@ -1922,10 +1924,10 @@ export class MemoryStore {
     const placeholders = messageIds.map(() => '?').join(',');
     const rows = this.persistenceDb.prepare(
       `
-        SELECT message_id, agent_id, reaction
+        SELECT id, message_id, agent_id, agent_name, reaction, created_at
         FROM reactions
         WHERE message_id IN (${placeholders})
-        ORDER BY message_id, reaction ASC, agent_id ASC
+        ORDER BY message_id, created_at ASC
       `
     ).all(...messageIds) as Array<Record<string, unknown>>;
     
@@ -1933,8 +1935,11 @@ export class MemoryStore {
       const msgId = String(row.message_id);
       const reactions = result.get(msgId) || [];
       reactions.push({
+        id: row.id ? String(row.id) : undefined,
         agent_id: String(row.agent_id),
-        reaction: String(row.reaction)
+        agent_name: row.agent_name ? String(row.agent_name) : undefined,
+        reaction: String(row.reaction),
+        created_at: row.created_at ? String(row.created_at) : undefined,
       });
       result.set(msgId, reactions);
     }
@@ -1942,33 +1947,46 @@ export class MemoryStore {
     return result;
   }
 
-  addReaction(messageId: string, agentId: string, reaction: string): MessageRecord | undefined {
+  addReaction(messageId: string, agentId: string | undefined, reaction: string): MessageRecord | undefined {
     const message = this.getMessage(messageId);
     if (!message) {
       return undefined;
     }
-    const reactions = message.reactions || [];
-    if (!reactions.find((item) => item.agent_id === agentId && item.reaction === reaction)) {
-      reactions.push({ agent_id: agentId, reaction });
+    if (!reaction || !reaction.trim()) {
+      throw new Error("Reaction must be a non-empty string");
     }
-    message.reactions = reactions;
-    eventBus.emit({ type: "msg.react", payload: message });
-    this.replaceMessageReactions(messageId, message.reactions || []);
+
+    const agentName = agentId ? this.getAgent(agentId)?.name : undefined;
+    const reactionId = randomUUID();
+    const createdAt = new Date().toISOString();
+    const inserted = this.persistenceDb.prepare(
+      "INSERT OR IGNORE INTO reactions (id, message_id, agent_id, agent_name, reaction, created_at) VALUES (?, ?, ?, ?, ?, ?)"
+    ).run(reactionId, messageId, agentId || null, agentName || null, reaction, createdAt);
+
+    const stored = this.persistenceDb.prepare(
+      "SELECT id, message_id, agent_id, agent_name, reaction, created_at FROM reactions WHERE message_id = ? AND agent_id IS ? AND reaction = ?"
+    ).get(messageId, agentId || null, reaction) as Record<string, unknown> | undefined;
+    if (!stored) return undefined;
+    message.reactions = this.getReactions(messageId);
+    if (inserted.changes > 0) {
+      eventBus.emit({ type: "msg.react", payload: message });
+    }
     this.persistState();
     return message;
   }
 
-  removeReaction(messageId: string, agentId: string, reaction: string): { removed: boolean; message?: MessageRecord } | undefined {
+  removeReaction(messageId: string, agentId: string | undefined, reaction: string): { removed: boolean; message?: MessageRecord } | undefined {
     const message = this.getMessage(messageId);
     if (!message) {
       return undefined;
     }
-    const before = (message.reactions || []).length;
-    message.reactions = (message.reactions || []).filter((item) => !(item.agent_id === agentId && item.reaction === reaction));
-    const removed = (message.reactions || []).length !== before;
+    const deleted = this.persistenceDb.prepare(
+      "DELETE FROM reactions WHERE message_id = ? AND agent_id IS ? AND reaction = ?"
+    ).run(messageId, agentId || null, reaction);
+    const removed = deleted.changes > 0;
     if (removed) {
+      message.reactions = this.getReactions(messageId);
       eventBus.emit({ type: "msg.unreact", payload: message });
-      this.replaceMessageReactions(messageId, message.reactions || []);
       this.persistState();
     }
     return { removed, message };
@@ -2136,9 +2154,8 @@ export class MemoryStore {
   resumeAgent(agentId: string, token: string): AgentRecord | undefined {
     const agent = this.getAgent(agentId);
     if (!agent || !agent.token || !safeCompare(agent.token, token)) {
-      // 移植自：Python test_agent_registry.py L83-84
-      // 应该抛出 ValueError 而不是返回 undefined
-      throw new Error('Invalid agent_id or token');
+      // Python parity: ValueError("Invalid agent_id/token")
+      throw new Error('Invalid agent_id/token');
     }
     agent.is_online = true;
     agent.last_heartbeat = new Date().toISOString();
@@ -3475,10 +3492,13 @@ export class MemoryStore {
         created_at TEXT NOT NULL
       );
       CREATE TABLE IF NOT EXISTS reactions (
+        id TEXT PRIMARY KEY,
         message_id TEXT NOT NULL,
-        agent_id TEXT NOT NULL,
+        agent_id TEXT,
+        agent_name TEXT,
         reaction TEXT NOT NULL,
-        PRIMARY KEY (message_id, agent_id, reaction)
+        created_at TEXT NOT NULL,
+        UNIQUE (message_id, agent_id, reaction)
       );
       CREATE TABLE IF NOT EXISTS templates (
         id TEXT PRIMARY KEY,
@@ -3550,6 +3570,17 @@ export class MemoryStore {
       addColumnIfMissing("thread_settings", "admin_assignment_time", "TEXT");
       addColumnIfMissing("thread_settings", "created_at", "TEXT NOT NULL DEFAULT ''");
       addColumnIfMissing("thread_settings", "updated_at", "TEXT NOT NULL DEFAULT ''");
+
+      // Migration: reactions table parity with Python
+      addColumnIfMissing("reactions", "id", "TEXT");
+      addColumnIfMissing("reactions", "agent_name", "TEXT");
+      addColumnIfMissing("reactions", "created_at", "TEXT");
+      this.persistenceDb.prepare(
+        "UPDATE reactions SET id = lower(hex(randomblob(16))) WHERE id IS NULL OR id = ''"
+      ).run();
+      this.persistenceDb.prepare(
+        "UPDATE reactions SET created_at = datetime('now') WHERE created_at IS NULL OR created_at = ''"
+      ).run();
     };
 
     runMigrations();
@@ -3734,10 +3765,11 @@ export class MemoryStore {
   private replaceMessageReactions(messageId: string, reactions: Array<{ agent_id: string; reaction: string }>): void {
     this.persistenceDb.prepare("DELETE FROM reactions WHERE message_id = ?").run(messageId);
     const insert = this.persistenceDb.prepare(
-      "INSERT INTO reactions (message_id, agent_id, reaction) VALUES (?, ?, ?)"
+      "INSERT INTO reactions (id, message_id, agent_id, agent_name, reaction, created_at) VALUES (?, ?, ?, ?, ?, ?)"
     );
     for (const reaction of reactions) {
-      insert.run(messageId, reaction.agent_id, reaction.reaction);
+      const agentName = this.getAgent(reaction.agent_id)?.name;
+      insert.run(randomUUID(), messageId, reaction.agent_id, agentName || null, reaction.reaction, new Date().toISOString());
     }
   }
 
@@ -3746,6 +3778,24 @@ export class MemoryStore {
       "SELECT 1 FROM reactions WHERE message_id = ? AND agent_id = ? AND reaction = ?"
     ).get(messageId, agentId, reaction) as Record<string, unknown> | undefined;
     return row !== undefined;
+  }
+
+  getReactionRecord(messageId: string, agentId: string | undefined, reaction: string):
+    { id: string; message_id: string; agent_id?: string; agent_name?: string; reaction: string; created_at: string } | undefined {
+    const row = this.persistenceDb.prepare(
+      "SELECT id, message_id, agent_id, agent_name, reaction, created_at FROM reactions WHERE message_id = ? AND agent_id IS ? AND reaction = ?"
+    ).get(messageId, agentId || null, reaction) as Record<string, unknown> | undefined;
+    if (!row) {
+      return undefined;
+    }
+    return {
+      id: String(row.id),
+      message_id: String(row.message_id),
+      agent_id: row.agent_id ? String(row.agent_id) : undefined,
+      agent_name: row.agent_name ? String(row.agent_name) : undefined,
+      reaction: String(row.reaction),
+      created_at: String(row.created_at),
+    };
   }
 
   private setRefreshRequest(threadId: string, agentId: string, reason: string): void {

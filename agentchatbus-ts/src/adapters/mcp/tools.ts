@@ -412,7 +412,15 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
       if (!thread) {
         return { error: "Thread not found" };
       }
-      return getStore().getThreadSettings(threadId);
+      const settings = getStore().getThreadSettings(threadId);
+      return {
+        thread_id: threadId,
+        auto_administrator_enabled: settings?.auto_administrator_enabled,
+        timeout_seconds: settings?.timeout_seconds,
+        switch_timeout_seconds: settings?.switch_timeout_seconds,
+        auto_assigned_admin_id: settings?.auto_assigned_admin_id,
+        auto_assigned_admin_name: settings?.auto_assigned_admin_name,
+      };
     }
     case "thread_settings_update": {
       const threadId = String(args.thread_id || "");
@@ -693,8 +701,6 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
           msg_id: message.id,
           thread_id: message.thread_id,
           author: message.author,
-          author_id: message.author_id,
-          author_name: message.author_name,
           content: message.content,
           seq: message.seq,
           role: message.role,
@@ -844,15 +850,13 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
     }
     case "template_list": {
       const templates = getStore().getTemplates();
-      return {
-        templates: templates.map(t => ({
-          id: t.id,
-          name: t.name,
-          description: t.description,
-          is_builtin: t.is_builtin,
-          created_at: t.created_at
-        }))
-      };
+      return templates.map(t => ({
+        id: t.id,
+        name: t.name,
+        description: t.description,
+        is_builtin: t.is_builtin,
+        created_at: t.created_at
+      }));
     }
     case "template_get": {
       const templateId = String(args.template_id || "");
@@ -881,13 +885,13 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
         return { error: "id and name are required" };
       }
 
-      const ok = getStore().createTemplate({ id, name, description, system_prompt: systemPrompt, default_metadata: defaultMetadata });
-      if (!ok) {
-        return { error: "Failed to create template (may already exist)" };
+      try {
+        getStore().createTemplate({ id, name, description, system_prompt: systemPrompt, default_metadata: defaultMetadata });
+      } catch (error) {
+        return { error: (error as Error).message };
       }
       const template = getStore().getTemplate(id);
       return {
-        ok: true,
         id: template?.id,
         name: template?.name,
         description: template?.description,
@@ -940,17 +944,21 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
     case "agent_resume": {
       const agentId = String(args.agent_id || "");
       const token = String(args.token || "");
-      const agent = getStore().resumeAgent(agentId, token);
+      let agent;
+      try {
+        agent = getStore().resumeAgent(agentId, token);
+      } catch (error) {
+        return { ok: false, error: (error as Error).message };
+      }
       if (!agent) {
-        return { ok: false, error: "Invalid agent_id or token" };
+        return { ok: false, error: "Invalid agent_id/token" };
       }
       return {
         ok: true,
         agent_id: agent.id,
         name: agent.name,
         display_name: agent.display_name,
-        // Match Python: use stored value, default to "auto" if not set
-        alias_source: (agent as any).alias_source || "auto",
+        alias_source: (agent as any).alias_source,
         is_online: agent.is_online,
         last_heartbeat: agent.last_heartbeat,
         last_activity: agent.last_activity,
@@ -980,7 +988,7 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
           ide: a.ide,
           model: a.model,
           display_name: a.display_name,
-          alias_source: (a as any).alias_source || "user",
+          alias_source: (a as any).alias_source,
           description: a.description,
           is_online: a.is_online,
           capabilities: a.capabilities || [],
@@ -1006,7 +1014,7 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
       });
 
       if (!agent) {
-        return { ok: false, error: "Invalid agent_id or token" };
+        return { ok: false, error: "Invalid agent_id/token" };
       }
 
       return {
@@ -1022,32 +1030,39 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
       };
     }
     case "agent_set_typing": {
-      const threadId = String(args.thread_id || "");
       const agentId = String(args.agent_id || "");
       const isTyping = Boolean(args.is_typing);
-      // Fix #18: Resolve agent display_name for typing event
       const typingAgent = getStore().getAgent(agentId);
-      const agentName = typingAgent?.display_name || typingAgent?.name || agentId;
-      eventBus.emit({ type: "agent.typing", payload: { thread_id: threadId, agent_id: agentId, agent_name: agentName, is_typing: isTyping } });
-      return { ok: true, thread_id: threadId, agent_id: agentId, is_typing: isTyping };
+      const actualAuthor = typingAgent?.name || agentId;
+      eventBus.emit({ type: "agent.typing", payload: { agent_id: actualAuthor, is_typing: isTyping } });
+      return { ok: true };
     }
     case "msg_react": {
       const messageId = String(args.message_id || "");
-      const agentId = String(args.agent_id || "");
+      const agentIdRaw = args.agent_id;
+      const agentId = typeof agentIdRaw === "string" && agentIdRaw.length > 0 ? agentIdRaw : undefined;
       const reaction = String(args.reaction || "");
-      
+
+      if (!reaction.trim()) {
+        return { error: "Reaction must be a non-empty string" };
+      }
+
       const message = getStore().addReaction(messageId, agentId, reaction);
       if (!message) {
         return { error: "MESSAGE_NOT_FOUND", message_id: messageId };
       }
-      
+      const reactionRecord = getStore().getReactionRecord(messageId, agentId, reaction);
+      if (!reactionRecord) {
+        return { error: "MESSAGE_NOT_FOUND", message_id: messageId };
+      }
+
       return {
-        reaction_id: `${messageId}-${agentId}-${reaction}`,
-        message_id: messageId,
-        agent_id: agentId,
-        agent_name: (getStore().getAgent(agentId))?.name || agentId,
-        reaction: reaction,
-        created_at: new Date().toISOString()
+        reaction_id: reactionRecord.id,
+        message_id: reactionRecord.message_id,
+        agent_id: reactionRecord.agent_id,
+        agent_name: reactionRecord.agent_name,
+        reaction: reactionRecord.reaction,
+        created_at: reactionRecord.created_at,
       };
     }
     case "msg_unreact": {
@@ -1217,7 +1232,7 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
         return { error: "query must not be empty" };
       }
       const threadId = typeof args.thread_id === "string" ? args.thread_id : undefined;
-      const limit = typeof args.limit === "number" ? args.limit : 50;
+      const limit = Math.min(typeof args.limit === "number" ? args.limit : 50, 200);
 
       // Helper to check if message is human_only
       const isHumanOnly = (meta: any): boolean => {
@@ -1227,34 +1242,27 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
         return visibility === "human_only" || audience === "human";
       };
 
-      let results = getStore().searchMessages(query);
-      
-      // Filter by thread if provided
-      if (threadId) {
-        results = results.filter(m => m.thread_id === threadId);
-      }
-
-      // Apply limit
-      if (limit > 0 && results.length > limit) {
-        results = results.slice(0, limit);
-      }
+      const results = getStore().searchMessages(query, threadId, limit);
 
       return {
         results: results.map(m => {
           const isHidden = isHumanOnly(m.metadata);
-          const projectedContent = isHidden ? "[human-only content hidden]" : m.content;
+          const snippetSource = isHidden ? "[human-only content hidden]" : m.content;
+          const thread = getStore().getThread(m.thread_id);
           return {
-            msg_id: m.id,
+            message_id: m.id,
             thread_id: m.thread_id,
-            seq: m.seq,
+            thread_topic: thread?.topic || "",
             author: m.author,
-            content: projectedContent,
+            seq: m.seq,
             created_at: m.created_at,
-            snippet: projectedContent.substring(0, 200) + (projectedContent.length > 200 ? "..." : "")
+            snippet: snippetSource.length > 200
+              ? `${snippetSource.substring(0, 200)}...`
+              : snippetSource,
           };
         }),
         total: results.length,
-        query: query
+        query: query,
       };
     }
     case "msg_edit": {
@@ -1331,7 +1339,7 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
       return {
         message_id: messageId,
         current_content: projectedContent,
-        edit_version: message.edit_version || 1,
+        edit_version: message.edit_version ?? 0,
         edits: edits.map(e => ({
           version: e.version,
           old_content: isHidden ? "[human-only content hidden]" : e.old_content,
