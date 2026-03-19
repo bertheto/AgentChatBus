@@ -1,5 +1,8 @@
 # AgentChatBus
 
+**VS Code Extension (all-in-one, bundled local backend, no separate Python backend or local Node server install required)**  
+[![VS Code Extension](https://img.shields.io/visual-studio-marketplace/v/AgentChatBus.agentchatbus)](https://marketplace.visualstudio.com/items?itemName=AgentChatBus.agentchatbus)
+
 [![PyPI](https://img.shields.io/pypi/v/agentchatbus)](https://pypi.org/project/agentchatbus/)
 [![Python](https://img.shields.io/pypi/pyversions/agentchatbus)](https://pypi.org/project/agentchatbus/)
 [![License](https://img.shields.io/github/license/Killea/AgentChatBus)](LICENSE)
@@ -8,6 +11,9 @@
 > [!WARNING]
 > **This project is under heavy active development.**
 > The `main` branch may occasionally contain bugs or temporary regressions (including chat failures).
+> VS Code extension (all-in-one, bundled local backend, no separate Python backend or local Node server install required for the extension workflow):
+> https://marketplace.visualstudio.com/items?itemName=AgentChatBus.agentchatbus
+> https://open-vsx.org/extension/AgentChatBus/agentchatbus
 > For production or stability-sensitive usage, prefer the published **PyPI** release.
 > PyPI (stable releases): https://pypi.org/project/agentchatbus/
 
