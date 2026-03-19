@@ -7,7 +7,7 @@ import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { callTool, listTools, withToolCallContext } from "../../adapters/mcp/tools.js";
 import { SeqMismatchError, MissingSyncFieldsError, ReplyTokenInvalidError, ReplyTokenExpiredError, ReplyTokenReplayError, BusError } from "../../core/types/errors.js";
-import { getConfig, getConfigDict, saveConfigDict, ADMIN_TOKEN, BUS_VERSION } from "../../core/config/env.js";
+import { getConfig, getConfigDict, saveConfigDict, ADMIN_TOKEN, BUS_VERSION, isNonLocalhostDeployment, isIpAllowed } from "../../core/config/env.js";
 import { MemoryStore, memoryStore } from "../../core/services/memoryStore.js";
 import { registerStore } from "../../core/services/storeSingleton.js";
 import { eventBus } from "../../shared/eventBus.js";
@@ -89,6 +89,66 @@ export function createHttpServer() {
     root: staticPath,
     prefix: "/static/",
   });
+
+  // ── SEC-05: Security middleware ──────────────────────────────────────────────
+  // Config is read per-request (not captured at server creation time) to avoid
+  // test isolation issues and support dynamic reconfiguration.
+
+  // Patterns of URL prefixes/exact routes that are agent-auth-gated (exempt from SHOW_AD guard)
+  const SHOW_AD_AGENT_AUTH_EXEMPT_PREFIXES = [
+    "/api/agents/register",
+    "/api/agents/heartbeat",
+    "/api/agents/resume",
+    "/api/agents/unregister",
+  ];
+  const SHOW_AD_AGENT_AUTH_EXEMPT_EXACT: Array<{ method: string; pattern: RegExp }> = [
+    { method: "POST", pattern: /^\/api\/threads$/ },
+    { method: "POST", pattern: /^\/api\/threads\/[^/]+\/messages$/ },
+  ];
+
+  fastify.addHook("onRequest", async (request, reply) => {
+    // Re-read config on each request for test isolation and dynamic support
+    const cfg = getConfig();
+
+    // Layer 1: IP allowlist — enforced when AGENTCHATBUS_ALLOWED_HOSTS is set.
+    // Loopback addresses always bypass the allowlist.
+    if (cfg.allowedHosts.length > 0 && !isLoopbackRequest(request)) {
+      const ip = request.ip || request.socket.remoteAddress || "";
+      if (!isIpAllowed(ip, cfg.allowedHosts)) {
+        reply.code(403);
+        await reply.send({ detail: "Forbidden: source IP not in AGENTCHATBUS_ALLOWED_HOSTS" });
+        return;
+      }
+    }
+
+    // Layer 2: SHOW_AD write guard — when SHOW_AD=true, protect all write endpoints
+    // that are not already gated by X-Agent-Token.
+    if (cfg.showAd) {
+      // Allow all GET requests (read-only)
+      if (request.method === "GET") return;
+      // Allow OPTIONS/HEAD
+      if (request.method === "OPTIONS" || request.method === "HEAD") return;
+      // Allow loopback — admin can always manage from localhost
+      if (isLoopbackRequest(request)) return;
+
+      const url = request.url.split("?")[0];
+
+      // Allow agent-auth-gated endpoints
+      if (SHOW_AD_AGENT_AUTH_EXEMPT_PREFIXES.some(p => url === p || url.startsWith(p + "/"))) return;
+      for (const { method, pattern } of SHOW_AD_AGENT_AUTH_EXEMPT_EXACT) {
+        if (request.method === method && pattern.test(url)) return;
+      }
+
+      // All other write/delete endpoints require X-Admin-Token
+      const adminToken = request.headers["x-admin-token"] as string | undefined;
+      if (!cfg.adminToken || adminToken !== cfg.adminToken) {
+        reply.code(401);
+        await reply.send({ detail: "Unauthorized: X-Admin-Token required in SHOW_AD mode" });
+      }
+    }
+  });
+
+  // ── End SEC-05 ───────────────────────────────────────────────────────────────
 
   fastify.get("/", async (request, reply) => {
     return reply.sendFile("index.html");
@@ -668,7 +728,9 @@ export function createHttpServer() {
         agent_id: agent.id,
         name: agent.name,
         display_name: agent.display_name,
-        token: agent.token,
+        // SEC-05: Suppress token in public demo mode (SHOW_AD=true) to prevent token leakage.
+        // Private deployments (localhost or non-SHOW_AD) still receive the token for agent auth.
+        ...(getConfig().showAd ? {} : { token: agent.token }),
         capabilities: agent.capabilities,
         skills: agent.skills,
         emoji: (agent as any).emoji || "🤖",
@@ -1470,6 +1532,17 @@ async function setThreadStatus(request: FastifyRequest, reply: FastifyReply, sta
 
 export async function startHttpServer() {
   const config = getConfig();
+
+  // SEC-05: Fail-fast — refuse to start if non-localhost deployment without ADMIN_TOKEN
+  if (isNonLocalhostDeployment(config) && !config.adminToken) {
+    console.error(
+      "[SEC-05] FATAL: Server is configured for non-localhost (HOST != 127.0.0.1 or SHOW_AD=true) " +
+      "but AGENTCHATBUS_ADMIN_TOKEN is not set. " +
+      "Set AGENTCHATBUS_ADMIN_TOKEN to a secure value before starting in network mode."
+    );
+    process.exit(1);
+  }
+
   const server = createHttpServer();
   await server.listen({ host: config.host, port: config.port });
   return server;
