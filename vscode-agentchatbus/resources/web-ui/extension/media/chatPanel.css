@@ -246,17 +246,19 @@ textarea {
   overflow-x: hidden;
   overflow-y: auto;
   flex: 0 0 56px;
+  box-sizing: border-box;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   gap: 4px;
   background: color-mix(in srgb, var(--vscode-sideBar-background) 72%, transparent);
+  scrollbar-gutter: stable;
 }
 
 #nav-sidebar.has-scrollbar {
-  width: 62px;
-  flex: 0 0 62px;
-  padding-right: 1px;
+  width: 64px;
+  flex: 0 0 64px;
+  padding-right: 4px;
 }
 
 #nav-sidebar::-webkit-scrollbar {
@@ -285,13 +287,15 @@ textarea {
   gap: 3px;
   cursor: pointer;
   min-width: 0;
-  width: auto;
+  width: 100%;
   max-width: 100%;
+  box-sizing: border-box;
   align-self: flex-start;
 }
 
 #nav-sidebar.has-scrollbar .nav-entry {
   gap: 2px;
+  padding-right: 4px;
 }
 
 .nav-entry:hover,
@@ -313,7 +317,7 @@ textarea {
   overflow: hidden;
   text-overflow: ellipsis;
   min-width: 0;
-  flex: 0 1 auto;
+  flex: 1 1 auto;
   font-variant-numeric: tabular-nums;
 }
 
