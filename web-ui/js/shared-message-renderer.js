@@ -250,6 +250,10 @@
     return getMermaidCodeForOrientation(code, state.isHorizontal ? "vertical" : "horizontal");
   }
 
+  function canToggleMermaidOrientation(code) {
+    return Boolean(getMermaidOrientationState(code));
+  }
+
   function getMermaidOrientationButtonLabel(code) {
     const state = getMermaidOrientationState(code);
     return state ? state.label : "Vertical";
@@ -421,6 +425,13 @@
       transform: none;
     }
 
+    .viewer-btn svg {
+      width: 15px;
+      height: 15px;
+      flex-shrink: 0;
+      pointer-events: none;
+    }
+
     .viewer-canvas {
       padding: 24px;
       overflow: auto;
@@ -496,7 +507,22 @@
     <div class="viewer-toolbar">
       <div class="viewer-title">Mermaid Diagram Viewer</div>
       <div class="viewer-actions">
-        <button type="button" id="viewer-theme-toggle" class="viewer-btn">Light</button>
+        <button type="button" id="viewer-theme-toggle" class="viewer-btn" aria-label="Switch theme">
+          <svg id="viewer-theme-icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="5"></circle>
+            <line x1="12" y1="1" x2="12" y2="3"></line>
+            <line x1="12" y1="21" x2="12" y2="23"></line>
+            <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+            <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+            <line x1="1" y1="12" x2="3" y2="12"></line>
+            <line x1="21" y1="12" x2="23" y2="12"></line>
+            <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+            <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+          </svg>
+          <svg id="viewer-theme-icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:none">
+            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+          </svg>
+        </button>
         <button type="button" id="viewer-orientation-toggle" class="viewer-btn">Vertical</button>
         <button type="button" id="viewer-copy" class="viewer-btn">Copy</button>
         <button type="button" id="viewer-source-toggle" class="viewer-btn">Source</button>
@@ -517,6 +543,8 @@
       }
 
       const themeToggleBtn = document.getElementById("viewer-theme-toggle");
+      const themeIconSun = document.getElementById("viewer-theme-icon-sun");
+      const themeIconMoon = document.getElementById("viewer-theme-icon-moon");
       const sourceToggleBtn = document.getElementById("viewer-source-toggle");
       const copyBtn = document.getElementById("viewer-copy");
       const orientationToggleBtn = document.getElementById("viewer-orientation-toggle");
@@ -582,15 +610,22 @@
       }
 
       function refreshButtons() {
+        const canToggle = Boolean(getOrientationState(currentCode));
         orientationToggleBtn.textContent = getOrientationButtonLabel(currentCode);
-        orientationToggleBtn.classList.toggle("is-active", Boolean(getOrientationState(currentCode)));
+        orientationToggleBtn.disabled = !canToggle;
+        orientationToggleBtn.setAttribute("aria-disabled", canToggle ? "false" : "true");
+        orientationToggleBtn.classList.toggle("is-active", canToggle);
         setTooltip(orientationToggleBtn, getOrientationTooltip(currentCode));
       }
 
       function refreshThemeButton() {
         const isLight = document.body.getAttribute("data-theme") === "light";
-        themeToggleBtn.textContent = isLight ? "Dark" : "Light";
-        setTooltip(themeToggleBtn, isLight ? "Switch viewer to dark theme" : "Switch viewer to light theme");
+        if (themeIconSun) themeIconSun.style.display = isLight ? "none" : "";
+        if (themeIconMoon) themeIconMoon.style.display = isLight ? "" : "none";
+        const tooltip = isLight ? "Switch viewer to dark theme" : "Switch viewer to light theme";
+        themeToggleBtn.title = tooltip;
+        themeToggleBtn.setAttribute("aria-label", tooltip);
+        setTooltip(themeToggleBtn, tooltip);
       }
 
       async function renderDiagram() {
@@ -645,6 +680,7 @@
       }
 
       orientationToggleBtn.addEventListener("click", async () => {
+        if (orientationToggleBtn.disabled) return;
         currentCode = toggleOrientation(currentCode);
         await renderDiagram();
       });
@@ -725,9 +761,11 @@
           orientationToggleBtn.className = "mermaid-btn";
 
           function syncOrientationButtons() {
-            const orientationState = getMermaidOrientationState(currentCode);
+            const canToggle = canToggleMermaidOrientation(currentCode);
             orientationToggleBtn.textContent = getMermaidOrientationButtonLabel(currentCode);
-            orientationToggleBtn.classList.toggle("is-active", Boolean(orientationState));
+            orientationToggleBtn.disabled = !canToggle;
+            orientationToggleBtn.setAttribute("aria-disabled", canToggle ? "false" : "true");
+            orientationToggleBtn.classList.toggle("is-active", canToggle);
             if (window.AcbTooltip && typeof window.AcbTooltip.setTooltip === "function") {
               window.AcbTooltip.setTooltip(orientationToggleBtn, getMermaidOrientationTooltip(currentCode));
             } else {
@@ -739,6 +777,7 @@
           orientationToggleBtn.addEventListener("click", async (e) => {
             e.preventDefault();
             e.stopPropagation();
+            if (orientationToggleBtn.disabled) return;
             currentCode = toggleMermaidOrientation(currentCode);
             sourceCode.textContent = currentCode;
             syncOrientationButtons();

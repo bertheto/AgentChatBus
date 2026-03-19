@@ -217,17 +217,19 @@
     containerEl.insertAdjacentHTML("beforeend", htmlStr);
   }
 
-  const MERMAID_ORIENTATION_RE = /^(\s*(?:graph|flowchart))\s+(TD|TB|LR|RL)\b/i;
+  const MERMAID_ORIENTATION_RE = /^(\s*(graph|flowchart))(\s+(TD|TB|LR|RL))?\b/i;
 
   function getMermaidOrientationState(code) {
     const match = String(code ?? "").match(MERMAID_ORIENTATION_RE);
     if (!match) return null;
-    const dir = match[2].toUpperCase();
+    const dir = (match[4] || "TD").toUpperCase();
     return {
       keyword: match[1],
       dir,
       isHorizontal: dir === "LR" || dir === "RL",
       isReverse: dir === "RL" || dir === "TB",
+      label: dir === "LR" || dir === "RL" ? "Horizontal" : "Vertical",
+      explicit: Boolean(match[4]),
     };
   }
 
@@ -240,6 +242,29 @@
       : (state.isReverse ? "TB" : "TD");
 
     return String(code ?? "").replace(MERMAID_ORIENTATION_RE, `$1 ${nextDir}`);
+  }
+
+  function toggleMermaidOrientation(code) {
+    const state = getMermaidOrientationState(code);
+    if (!state) return String(code ?? "");
+    return getMermaidCodeForOrientation(code, state.isHorizontal ? "vertical" : "horizontal");
+  }
+
+  function getMermaidOrientationButtonLabel(code) {
+    const state = getMermaidOrientationState(code);
+    return state ? state.label : "Vertical";
+  }
+
+  function getMermaidOrientationTooltip(code) {
+    const state = getMermaidOrientationState(code);
+    if (!state) {
+      return "Orientation toggle is available for graph/flowchart diagrams. This diagram type keeps its own layout.";
+    }
+    const nextLabel = state.isHorizontal ? "Vertical" : "Horizontal";
+    if (state.explicit) {
+      return `Current orientation: ${state.label}. Click to switch to ${nextLabel}.`;
+    }
+    return `No direction was declared in the diagram source. Using ${state.label} by default. Click to switch to ${nextLabel}.`;
   }
 
   async function renderSingleMermaidDiagram(diagramDiv, code) {
@@ -263,10 +288,16 @@
     return scriptEl?.src || "/static/js/vendor/mermaid.min.js";
   }
 
+  function getTooltipScriptUrl() {
+    const scriptEl = document.querySelector('script[src*="shared-tooltip.js"]');
+    return scriptEl?.src || "/static/js/shared-tooltip.js";
+  }
+
   function buildMermaidViewerHtml(initialCode, theme) {
     const safeTheme = theme === "light" ? "light" : "dark";
     const safeCode = JSON.stringify(String(initialCode ?? "")).replace(/</g, "\\u003c");
     const safeMermaidScriptUrl = JSON.stringify(getMermaidScriptUrl()).replace(/</g, "\\u003c");
+    const safeTooltipScriptUrl = JSON.stringify(getTooltipScriptUrl()).replace(/</g, "\\u003c");
 
     return `<!DOCTYPE html>
 <html lang="en">
@@ -466,8 +497,7 @@
       <div class="viewer-title">Mermaid Diagram Viewer</div>
       <div class="viewer-actions">
         <button type="button" id="viewer-theme-toggle" class="viewer-btn">Light</button>
-        <button type="button" id="viewer-vertical" class="viewer-btn">Vertical</button>
-        <button type="button" id="viewer-horizontal" class="viewer-btn">Horizontal</button>
+        <button type="button" id="viewer-orientation-toggle" class="viewer-btn">Vertical</button>
         <button type="button" id="viewer-copy" class="viewer-btn">Copy</button>
         <button type="button" id="viewer-source-toggle" class="viewer-btn">Source</button>
       </div>
@@ -479,28 +509,34 @@
     <div class="viewer-help">This viewer is front-end only. It does not change chat history or save anything to the database.</div>
   </div>
   <script src=${safeMermaidScriptUrl}></script>
+  <script src=${safeTooltipScriptUrl}></script>
   <script>
     (function () {
+      if (window.AcbTooltip && typeof window.AcbTooltip.init === "function") {
+        window.AcbTooltip.init();
+      }
+
       const themeToggleBtn = document.getElementById("viewer-theme-toggle");
       const sourceToggleBtn = document.getElementById("viewer-source-toggle");
       const copyBtn = document.getElementById("viewer-copy");
-      const verticalBtn = document.getElementById("viewer-vertical");
-      const horizontalBtn = document.getElementById("viewer-horizontal");
+      const orientationToggleBtn = document.getElementById("viewer-orientation-toggle");
       const sourceBox = document.getElementById("viewer-source");
       const sourceCodeEl = document.getElementById("viewer-source-code");
       const diagramEl = document.getElementById("viewer-diagram");
 
-      const ORIENTATION_RE = /^(\\s*(?:graph|flowchart))\\s+(TD|TB|LR|RL)\\b/i;
+      const ORIENTATION_RE = /^(\\s*(graph|flowchart))(\\s+(TD|TB|LR|RL))?\\b/i;
       let currentCode = ${safeCode};
 
       function getOrientationState(code) {
         const match = String(code || "").match(ORIENTATION_RE);
         if (!match) return null;
-        const dir = match[2].toUpperCase();
+        const dir = (match[4] || "TD").toUpperCase();
         return {
           dir,
           isHorizontal: dir === "LR" || dir === "RL",
           isReverse: dir === "RL" || dir === "TB",
+          label: dir === "LR" || dir === "RL" ? "Horizontal" : "Vertical",
+          explicit: Boolean(match[4]),
         };
       }
 
@@ -513,20 +549,48 @@
         return String(code || "").replace(ORIENTATION_RE, "$1 " + nextDir);
       }
 
+      function toggleOrientation(code) {
+        const state = getOrientationState(code);
+        if (!state) return String(code || "");
+        return getCodeForOrientation(code, state.isHorizontal ? "vertical" : "horizontal");
+      }
+
+      function getOrientationButtonLabel(code) {
+        const state = getOrientationState(code);
+        return state ? state.label : "Vertical";
+      }
+
+      function getOrientationTooltip(code) {
+        const state = getOrientationState(code);
+        if (!state) {
+          return "Orientation toggle is available for graph/flowchart diagrams. This diagram type keeps its own layout.";
+        }
+        const nextLabel = state.isHorizontal ? "Vertical" : "Horizontal";
+        if (state.explicit) {
+          return "Current orientation: " + state.label + ". Click to switch to " + nextLabel + ".";
+        }
+        return "No direction was declared in the diagram source. Using " + state.label + " by default. Click to switch to " + nextLabel + ".";
+      }
+
+      function setTooltip(el, text) {
+        if (!el) return;
+        if (window.AcbTooltip && typeof window.AcbTooltip.setTooltip === "function") {
+          window.AcbTooltip.setTooltip(el, text);
+        } else {
+          el.setAttribute("data-tooltip", text || "");
+        }
+      }
+
       function refreshButtons() {
-        const state = getOrientationState(currentCode);
-        verticalBtn.disabled = !state;
-        horizontalBtn.disabled = !state;
-        verticalBtn.title = state ? "Switch diagram to vertical layout" : "Only graph/flowchart diagrams support direction switching";
-        horizontalBtn.title = state ? "Switch diagram to horizontal layout" : "Only graph/flowchart diagrams support direction switching";
-        verticalBtn.classList.toggle("is-active", Boolean(state) && !state.isHorizontal);
-        horizontalBtn.classList.toggle("is-active", Boolean(state) && state.isHorizontal);
+        orientationToggleBtn.textContent = getOrientationButtonLabel(currentCode);
+        orientationToggleBtn.classList.toggle("is-active", Boolean(getOrientationState(currentCode)));
+        setTooltip(orientationToggleBtn, getOrientationTooltip(currentCode));
       }
 
       function refreshThemeButton() {
         const isLight = document.body.getAttribute("data-theme") === "light";
         themeToggleBtn.textContent = isLight ? "Dark" : "Light";
-        themeToggleBtn.title = isLight ? "Switch viewer to dark theme" : "Switch viewer to light theme";
+        setTooltip(themeToggleBtn, isLight ? "Switch viewer to dark theme" : "Switch viewer to light theme");
       }
 
       async function renderDiagram() {
@@ -580,15 +644,8 @@
         }, 1200);
       }
 
-      verticalBtn.addEventListener("click", async () => {
-        if (verticalBtn.disabled) return;
-        currentCode = getCodeForOrientation(currentCode, "vertical");
-        await renderDiagram();
-      });
-
-      horizontalBtn.addEventListener("click", async () => {
-        if (horizontalBtn.disabled) return;
-        currentCode = getCodeForOrientation(currentCode, "horizontal");
+      orientationToggleBtn.addEventListener("click", async () => {
+        currentCode = toggleOrientation(currentCode);
         await renderDiagram();
       });
 
@@ -602,6 +659,9 @@
         const ok = await copyCurrentCode();
         flashButton(copyBtn, ok ? "Copied" : "Failed");
       });
+
+      setTooltip(copyBtn, "Copy the current Mermaid source");
+      setTooltip(sourceToggleBtn, "Toggle between diagram and source view");
 
       sourceToggleBtn.addEventListener("click", () => {
         const hidden = sourceBox.style.display === "none" || !sourceBox.style.display;
@@ -660,64 +720,44 @@
 
           const sourceCode = document.createElement("code");
 
-          const verticalBtn = document.createElement("button");
-          verticalBtn.type = "button";
-          verticalBtn.className = "mermaid-btn";
-          verticalBtn.textContent = "Vertical";
-          verticalBtn.title = "Only graph/flowchart diagrams support direction switching";
-
-          const horizontalBtn = document.createElement("button");
-          horizontalBtn.type = "button";
-          horizontalBtn.className = "mermaid-btn";
-          horizontalBtn.textContent = "Horizontal";
-          horizontalBtn.title = "Only graph/flowchart diagrams support direction switching";
+          const orientationToggleBtn = document.createElement("button");
+          orientationToggleBtn.type = "button";
+          orientationToggleBtn.className = "mermaid-btn";
 
           function syncOrientationButtons() {
             const orientationState = getMermaidOrientationState(currentCode);
-            const supported = Boolean(orientationState);
-            verticalBtn.disabled = !supported;
-            horizontalBtn.disabled = !supported;
-            verticalBtn.classList.toggle("is-active", supported && !orientationState.isHorizontal);
-            horizontalBtn.classList.toggle("is-active", supported && orientationState.isHorizontal);
-            if (supported) {
-              verticalBtn.title = "Switch diagram to vertical layout";
-              horizontalBtn.title = "Switch diagram to horizontal layout";
+            orientationToggleBtn.textContent = getMermaidOrientationButtonLabel(currentCode);
+            orientationToggleBtn.classList.toggle("is-active", Boolean(orientationState));
+            if (window.AcbTooltip && typeof window.AcbTooltip.setTooltip === "function") {
+              window.AcbTooltip.setTooltip(orientationToggleBtn, getMermaidOrientationTooltip(currentCode));
             } else {
-              verticalBtn.title = "Only graph/flowchart diagrams support direction switching";
-              horizontalBtn.title = "Only graph/flowchart diagrams support direction switching";
+              orientationToggleBtn.setAttribute("data-tooltip", getMermaidOrientationTooltip(currentCode));
             }
           }
 
-          // Orientation toggle (always visible; enabled only for graph/flowchart with direction)
-          verticalBtn.addEventListener("click", async (e) => {
+          // Orientation toggle (single-button; flowchart/graph defaults to Vertical if direction omitted)
+          orientationToggleBtn.addEventListener("click", async (e) => {
             e.preventDefault();
             e.stopPropagation();
-            if (verticalBtn.disabled) return;
-            currentCode = getMermaidCodeForOrientation(currentCode, "vertical");
-            sourceCode.textContent = currentCode;
-            syncOrientationButtons();
-            await renderSingleMermaidDiagram(diagramDiv, currentCode);
-          });
-
-          horizontalBtn.addEventListener("click", async (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            if (horizontalBtn.disabled) return;
-            currentCode = getMermaidCodeForOrientation(currentCode, "horizontal");
+            currentCode = toggleMermaidOrientation(currentCode);
             sourceCode.textContent = currentCode;
             syncOrientationButtons();
             await renderSingleMermaidDiagram(diagramDiv, currentCode);
           });
 
           syncOrientationButtons();
-          toolbarDiv.appendChild(verticalBtn);
-          toolbarDiv.appendChild(horizontalBtn);
+          toolbarDiv.appendChild(orientationToggleBtn);
 
           // Copy button
           const copyBtn = document.createElement("button");
           copyBtn.type = "button";
           copyBtn.className = "mermaid-btn";
           copyBtn.textContent = "Copy";
+          if (window.AcbTooltip && typeof window.AcbTooltip.setTooltip === "function") {
+            window.AcbTooltip.setTooltip(copyBtn, "Copy the current Mermaid source");
+          } else {
+            copyBtn.setAttribute("data-tooltip", "Copy the current Mermaid source");
+          }
           copyBtn.addEventListener("click", async (e) => {
             e.preventDefault();
             e.stopPropagation();
@@ -736,6 +776,11 @@
           openBtn.type = "button";
           openBtn.className = "mermaid-btn";
           openBtn.textContent = "New Tab";
+          if (window.AcbTooltip && typeof window.AcbTooltip.setTooltip === "function") {
+            window.AcbTooltip.setTooltip(openBtn, "Open this diagram in a larger viewer tab");
+          } else {
+            openBtn.setAttribute("data-tooltip", "Open this diagram in a larger viewer tab");
+          }
           openBtn.addEventListener("click", (e) => {
             e.preventDefault();
             e.stopPropagation();
@@ -755,6 +800,11 @@
           sourceToggleBtn.type = "button";
           sourceToggleBtn.className = "mermaid-btn";
           sourceToggleBtn.textContent = "Source";
+          if (window.AcbTooltip && typeof window.AcbTooltip.setTooltip === "function") {
+            window.AcbTooltip.setTooltip(sourceToggleBtn, "Toggle between diagram and source view");
+          } else {
+            sourceToggleBtn.setAttribute("data-tooltip", "Toggle between diagram and source view");
+          }
           
           const sourceDiv = document.createElement("div");
           sourceDiv.className = "mermaid-source";
