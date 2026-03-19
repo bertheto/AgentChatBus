@@ -1,11 +1,14 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { isIPv4 } from "node:net";
 
 export interface AppConfig {
   host: string;
   port: number;
   dbPath: string;
   adminToken: string | null;
+  showAd: boolean;
+  allowedHosts: string[];
   agentHeartbeatTimeout: number;
   msgWaitTimeout: number;
   // TS-only improvement: minimum wait timeout clamp (ms) for msg_wait blocking path.
@@ -65,6 +68,65 @@ function pickEnvOrPersisted(
 
 // Admin token for settings endpoint (optional — if unset, PUT /api/settings is unprotected)
 export const ADMIN_TOKEN: string | null = process.env.AGENTCHATBUS_ADMIN_TOKEN || null;
+
+/**
+ * Returns true when the server is operating in a non-localhost (public/network) mode.
+ * Triggered by HOST != 127.0.0.1 or SHOW_AD=true.
+ */
+export function isNonLocalhostDeployment(config: Pick<AppConfig, "host" | "showAd">): boolean {
+  return config.showAd || (config.host !== "127.0.0.1" && config.host !== "::1" && config.host !== "localhost");
+}
+
+/**
+ * Parse comma-separated list of allowed IPs/CIDRs from env var.
+ * Supports: exact IPv4 (e.g. "1.2.3.4"), IPv4 CIDR (e.g. "10.0.0.0/8"), exact IPv6.
+ * Loopback (127.0.0.1, ::1) is always implicitly allowed regardless of this list.
+ */
+export function parseAllowedHosts(raw: string | undefined): string[] {
+  if (!raw || !raw.trim()) return [];
+  return raw.split(",").map(s => s.trim()).filter(Boolean);
+}
+
+/**
+ * Check whether a source IP is permitted by the allowlist.
+ * Supports exact match and IPv4 CIDR notation.
+ * Returns true when allowedHosts is empty (feature disabled).
+ */
+export function isIpAllowed(ip: string, allowedHosts: string[]): boolean {
+  if (allowedHosts.length === 0) return true;
+
+  // Normalize IPv4-mapped IPv6 addresses (e.g. ::ffff:1.2.3.4 -> 1.2.3.4)
+  const normalized = ip.startsWith("::ffff:") ? ip.slice(7) : ip;
+
+  for (const entry of allowedHosts) {
+    if (entry.includes("/")) {
+      // IPv4 CIDR matching
+      const [networkAddr, prefixLenStr] = entry.split("/");
+      const prefixLen = Number(prefixLenStr);
+      if (!isIPv4(networkAddr) || !isIPv4(normalized) || isNaN(prefixLen) || prefixLen < 0 || prefixLen > 32) {
+        continue;
+      }
+      const mask = prefixLen === 0 ? 0 : (~0 << (32 - prefixLen)) >>> 0;
+      const ipInt = ipToInt(normalized);
+      const netInt = ipToInt(networkAddr);
+      if (ipInt !== null && netInt !== null && (ipInt & mask) === (netInt & mask)) {
+        return true;
+      }
+    } else {
+      // Exact match (IPv4 or IPv6)
+      if (normalized === entry || ip === entry) return true;
+    }
+  }
+  return false;
+}
+
+function ipToInt(ip: string): number | null {
+  const parts = ip.split(".");
+  if (parts.length !== 4) return null;
+  const nums = parts.map(Number);
+  if (nums.some(n => isNaN(n) || n < 0 || n > 255)) return null;
+  return ((nums[0] << 24) | (nums[1] << 16) | (nums[2] << 8) | nums[3]) >>> 0;
+}
 
 function getAppDir(): string {
   const configured = process.env.AGENTCHATBUS_APP_DIR;
@@ -220,11 +282,14 @@ export function getConfig(): AppConfig {
   const persisted = getPersistedConfig();
   const host = pickEnvOrPersisted(process.env.AGENTCHATBUS_HOST, persisted.HOST, "127.0.0.1");
   const appDir = getAppDir();
+  const showAd = parseBoolLike(process.env.AGENTCHATBUS_SHOW_AD, false);
   return {
     host,
     port: Number(pickEnvOrPersisted(process.env.AGENTCHATBUS_PORT, persisted.PORT, "39765")),
     dbPath: process.env.AGENTCHATBUS_DB || join(appDir, "bus-ts.db"),
     adminToken: ADMIN_TOKEN,
+    showAd,
+    allowedHosts: parseAllowedHosts(process.env.AGENTCHATBUS_ALLOWED_HOSTS),
     agentHeartbeatTimeout: Number(
       pickEnvOrPersisted(process.env.AGENTCHATBUS_HEARTBEAT_TIMEOUT, persisted.AGENT_HEARTBEAT_TIMEOUT, "60")
     ),
