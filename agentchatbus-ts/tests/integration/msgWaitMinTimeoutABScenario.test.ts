@@ -24,12 +24,32 @@ async function callMcpTool(server: ReturnType<typeof createHttpServer>, name: st
   return parseMcpTextPayload(response);
 }
 
+async function sleep(ms: number) {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForCondition(
+  predicate: () => boolean,
+  timeoutMs = 500,
+  pollIntervalMs = 5
+) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    if (predicate()) {
+      return;
+    }
+    await sleep(pollIntervalMs);
+  }
+  throw new Error(`Condition not met within ${timeoutMs}ms`);
+}
+
 describe("msg_wait minimum timeout (TS-only) with quick-return preserved", () => {
   beforeAll(() => {
     process.env.AGENTCHATBUS_TEST_DB = ":memory:";
     // TS-only improvement under test: clamp blocking msg_wait timeout.
-    // We use 60ms in tests to model the production 60s policy without slowing CI.
-    process.env.AGENTCHATBUS_WAIT_MIN_TIMEOUT_MS = "60";
+    // We use 120ms in tests to model the production 60s policy with enough
+    // slack for CI request/handler overhead.
+    process.env.AGENTCHATBUS_WAIT_MIN_TIMEOUT_MS = "120";
   });
 
   beforeEach(() => {
@@ -42,6 +62,7 @@ describe("msg_wait minimum timeout (TS-only) with quick-return preserved", () =>
   it("Agent A waits longer than requested short timeout and receives Agent B message posted later", async () => {
     process.env.AGENTCHATBUS_ENFORCE_MSG_WAIT_MIN_TIMEOUT = "0";
     const server = createHttpServer();
+    const store = getMemoryStore();
 
     const aConnected = await callMcpTool(server, "bus_connect", {
       thread_name: "ab-min-wait-scenario",
@@ -67,7 +88,15 @@ describe("msg_wait minimum timeout (TS-only) with quick-return preserved", () =>
       return_format: "json",
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 40));
+    const waitingAgentId = String(aConnected.agent.agent_id);
+    await waitForCondition(() =>
+      Boolean(store.getThreadWaitStatesGrouped()[threadId]?.[waitingAgentId]),
+    300);
+
+    const elapsedBeforePost = Date.now() - startedAt;
+    if (elapsedBeforePost < 25) {
+      await sleep(25 - elapsedBeforePost);
+    }
 
     const bPostPayload = await callMcpTool(server, "msg_post", {
       thread_id: threadId,
@@ -85,7 +114,7 @@ describe("msg_wait minimum timeout (TS-only) with quick-return preserved", () =>
     expect(Array.isArray(aWaitPayload.messages)).toBe(true);
     expect(aWaitPayload.messages.length).toBeGreaterThan(0);
     expect(String(aWaitPayload.messages[0].content)).toContain("agent b");
-    expect(elapsedMs).toBeGreaterThanOrEqual(30);
+    expect(elapsedMs).toBeGreaterThanOrEqual(25);
 
     await server.close();
   });
@@ -160,7 +189,7 @@ describe("msg_wait minimum timeout (TS-only) with quick-return preserved", () =>
     expect(waitPayload.error).toBe("MsgWaitTimeoutTooShort");
     expect(waitPayload.action).toBe("RETRY_MSG_WAIT_WITH_MIN_TIMEOUT");
     expect(waitPayload.quick_return_eligible).toBe(false);
-    expect(waitPayload.min_timeout_ms).toBe(60);
+    expect(waitPayload.min_timeout_ms).toBe(120);
     expect(waitPayload.requested_timeout_ms).toBe(10);
 
     await server.close();

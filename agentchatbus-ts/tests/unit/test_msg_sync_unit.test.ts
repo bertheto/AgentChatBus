@@ -15,15 +15,14 @@
  * - test_concurrent_posts (L206-235)
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
-import { getMemoryStore } from '../../src/transports/http/server.js';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { MemoryStore } from '../../src/core/services/memoryStore.js';
 import type { MessageRecord } from '../../src/core/types/models.js';
 
 // 辅助函数 - 对应 Python _make_db() L9-13
 function makeFreshStore() {
     process.env.AGENTCHATBUS_DB = ':memory:';
-    const store = getMemoryStore();
-    return store;
+    return new MemoryStore(':memory:');
 }
 
 // 辅助函数 - 对应 Python _post_with_fresh_token() L16-25
@@ -45,14 +44,15 @@ async function postWithFreshToken(
 }
 
 describe('Message Synchronization Unit Tests', () => {
-    let store: ReturnType<typeof getMemoryStore>;
+    let store: MemoryStore;
 
     beforeEach(() => {
         // 每测试使用独立内存数据库，模拟 Python :memory: 行为
-        process.env.AGENTCHATBUS_DB = ':memory:';
-        store = getMemoryStore();
-        // 重置 store 到初始状态
-        store.reset();
+        store = makeFreshStore();
+    });
+
+    afterEach(() => {
+        store.close();
     });
 
     it('msg_post requires sync fields', () => {

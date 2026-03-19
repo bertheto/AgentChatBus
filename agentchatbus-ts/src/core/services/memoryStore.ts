@@ -91,15 +91,33 @@ class AsyncEvent {
     }
 
     return new Promise<boolean>((resolve) => {
+      let settled = false;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+
       // 将 wrapped resolve 加入等待队列
       // 当 set() 被调用时，会执行 resolve(true)
       const wrappedResolve = () => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        if (timer) {
+          clearTimeout(timer);
+        }
+        const index = this._waiters.indexOf(wrappedResolve);
+        if (index !== -1) {
+          this._waiters.splice(index, 1);
+        }
         resolve(true);
       };
       this._waiters.push(wrappedResolve);
 
       // 设置超时定时器
-      const timer = setTimeout(() => {
+      timer = setTimeout(() => {
+        if (settled) {
+          return;
+        }
+        settled = true;
         // 超时时从等待队列中移除该等待者
         const index = this._waiters.indexOf(wrappedResolve);
         if (index !== -1) {
@@ -107,11 +125,6 @@ class AsyncEvent {
         }
         resolve(false);
       }, timeoutMs);
-
-      // 注意：timer 需要在 wrappedResolve 被调用时清除
-      // 但由于 wrappedResolve 不包含 timer 引用，
-      // 我们需要在 set() 方法中处理
-      // 为了简洁，我们接受 timer 可能会触发但 resolve 已经被调用的情况
     });
   }
 
@@ -1380,8 +1393,13 @@ export class MemoryStore {
 
       const remainingTimeout = Math.min(1000, timeout - elapsed);
       const event = this._getThreadEvent(input.threadId);
-      event.clear();
-      await event.wait(remainingTimeout);
+      try {
+        await event.wait(remainingTimeout);
+      } finally {
+        // Match Python: clear after waiting so we do not drop a wake-up
+        // that happens just before the waiter starts listening.
+        event.clear();
+      }
     }
 
     if (verifiedAgentId && refreshRequest) {
@@ -3124,17 +3142,6 @@ export class MemoryStore {
   }
 
   private rowToMessageRecord(row: Record<string, unknown>): MessageRecord {
-    // DEBUG: Log raw row data for troubleshooting
-    if (Math.random() < 0.01) {  // Log 1% of messages to avoid spam
-      console.log('[DEBUG] rowToMessageRecord raw row:', {
-        id: row.id,
-        author: row.author,
-        author_id: row.author_id,
-        author_name: row.author_name,
-        role: row.role,
-        content_preview: String(row.content)?.slice(0, 30)
-      });
-    }
     return {
       id: String(row.id),
       thread_id: String(row.thread_id),
