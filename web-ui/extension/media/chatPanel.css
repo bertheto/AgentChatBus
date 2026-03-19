@@ -250,15 +250,15 @@ textarea {
 }
 
 #nav-sidebar {
-  width: 56px;
+  width: 66px;
   padding: 10px 2px 10px 3px;
   border-left: 1px solid var(--vscode-panel-border);
   overflow-x: hidden;
   overflow-y: auto;
-  flex: 0 0 56px;
+  flex: 0 0 66px;
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
+  align-items: stretch;
   gap: 4px;
   background: color-mix(in srgb, var(--vscode-sideBar-background) 72%, transparent);
 }
@@ -266,7 +266,7 @@ textarea {
 #nav-sidebar.has-scrollbar {
   width: 72px;
   flex: 0 0 72px;
-  padding-right: 2px;
+  padding-right: 3px;
 }
 
 #nav-sidebar::-webkit-scrollbar {
@@ -287,22 +287,23 @@ textarea {
   background: transparent;
   color: inherit;
   border-radius: 999px;
-  padding: 4px 2px 4px 3px;
+  padding: 4px 6px;
   display: flex;
   flex-direction: row;
   align-items: center;
   justify-content: flex-start;
-  gap: 3px;
+  gap: 4px;
   cursor: pointer;
   min-width: 0;
-  width: auto;
+  width: 100%;
+  box-sizing: border-box;
   max-width: 100%;
-  align-self: flex-start;
+  align-self: stretch;
 }
 
 #nav-sidebar.has-scrollbar .nav-entry {
-  gap: 2px;
-  padding-right: 1px;
+  gap: 3px;
+  padding-right: 5px;
 }
 
 .nav-entry:hover,
@@ -324,7 +325,7 @@ textarea {
   overflow: hidden;
   text-overflow: ellipsis;
   min-width: 0;
-  flex: 0 1 auto;
+  flex: 1 1 auto;
   font-variant-numeric: tabular-nums;
 }
 
