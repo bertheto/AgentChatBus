@@ -217,6 +217,395 @@
     containerEl.insertAdjacentHTML("beforeend", htmlStr);
   }
 
+  const MERMAID_ORIENTATION_RE = /^(\s*(?:graph|flowchart))\s+(TD|TB|LR|RL)\b/i;
+
+  function getMermaidOrientationState(code) {
+    const match = String(code ?? "").match(MERMAID_ORIENTATION_RE);
+    if (!match) return null;
+    const dir = match[2].toUpperCase();
+    return {
+      keyword: match[1],
+      dir,
+      isHorizontal: dir === "LR" || dir === "RL",
+      isReverse: dir === "RL" || dir === "TB",
+    };
+  }
+
+  function getMermaidCodeForOrientation(code, targetOrientation) {
+    const state = getMermaidOrientationState(code);
+    if (!state) return String(code ?? "");
+
+    const nextDir = targetOrientation === "horizontal"
+      ? (state.isReverse ? "RL" : "LR")
+      : (state.isReverse ? "TB" : "TD");
+
+    return String(code ?? "").replace(MERMAID_ORIENTATION_RE, `$1 ${nextDir}`);
+  }
+
+  async function renderSingleMermaidDiagram(diagramDiv, code) {
+    diagramDiv.innerHTML = "";
+    diagramDiv.textContent = code;
+    diagramDiv.removeAttribute("data-processed");
+    diagramDiv.classList.remove("mermaid-error");
+
+    try {
+      await mermaid.run({ nodes: [diagramDiv] });
+    } catch {
+      if (!diagramDiv.querySelector("svg")) {
+        diagramDiv.classList.add("mermaid-error");
+        diagramDiv.setAttribute("data-processed", "true");
+      }
+    }
+  }
+
+  function getMermaidScriptUrl() {
+    const scriptEl = document.querySelector('script[src*="mermaid.min.js"]');
+    return scriptEl?.src || "/static/js/vendor/mermaid.min.js";
+  }
+
+  function buildMermaidViewerHtml(initialCode, theme) {
+    const safeTheme = theme === "light" ? "light" : "dark";
+    const safeCode = JSON.stringify(String(initialCode ?? "")).replace(/</g, "\\u003c");
+    const safeMermaidScriptUrl = JSON.stringify(getMermaidScriptUrl()).replace(/</g, "\\u003c");
+
+    return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Mermaid Diagram</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --viewer-bg: #0b1220;
+      --viewer-panel: #111a2c;
+      --viewer-panel-2: #172136;
+      --viewer-border: rgba(148, 163, 184, 0.24);
+      --viewer-text: #e2e8f0;
+      --viewer-text-muted: #94a3b8;
+      --viewer-btn-bg: rgba(30, 41, 59, 0.88);
+      --viewer-btn-hover: rgba(37, 99, 235, 0.18);
+      --viewer-btn-active: rgba(37, 99, 235, 0.3);
+      --viewer-btn-active-border: rgba(96, 165, 250, 0.85);
+      --viewer-canvas: #ffffff;
+      --viewer-source-bg: rgba(15, 23, 42, 0.78);
+      --viewer-shadow: 0 28px 80px rgba(2, 6, 23, 0.45);
+    }
+
+    body[data-theme="light"] {
+      color-scheme: light;
+      --viewer-bg: #edf3fb;
+      --viewer-panel: rgba(255, 255, 255, 0.92);
+      --viewer-panel-2: #f8fbff;
+      --viewer-border: rgba(148, 163, 184, 0.35);
+      --viewer-text: #0f172a;
+      --viewer-text-muted: #475569;
+      --viewer-btn-bg: rgba(226, 232, 240, 0.95);
+      --viewer-btn-hover: rgba(59, 130, 246, 0.14);
+      --viewer-btn-active: rgba(59, 130, 246, 0.18);
+      --viewer-btn-active-border: rgba(37, 99, 235, 0.75);
+      --viewer-canvas: #ffffff;
+      --viewer-source-bg: #f8fafc;
+      --viewer-shadow: 0 24px 70px rgba(15, 23, 42, 0.12);
+    }
+
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; }
+    body {
+      font-family: Inter, "Segoe UI", sans-serif;
+      background:
+        radial-gradient(circle at top, rgba(59, 130, 246, 0.12), transparent 28%),
+        linear-gradient(180deg, var(--viewer-bg), color-mix(in srgb, var(--viewer-bg) 85%, #000000 15%));
+      color: var(--viewer-text);
+      padding: 24px;
+    }
+
+    .viewer-shell {
+      width: min(1440px, 100%);
+      margin: 0 auto;
+      background: var(--viewer-panel);
+      border: 1px solid var(--viewer-border);
+      border-radius: 18px;
+      box-shadow: var(--viewer-shadow);
+      overflow: hidden;
+      backdrop-filter: blur(16px);
+    }
+
+    .viewer-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 14px 18px;
+      border-bottom: 1px solid var(--viewer-border);
+      background: var(--viewer-panel-2);
+    }
+
+    .viewer-title {
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      color: var(--viewer-text-muted);
+    }
+
+    .viewer-actions {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .viewer-btn {
+      appearance: none;
+      border: 1px solid var(--viewer-border);
+      background: var(--viewer-btn-bg);
+      color: var(--viewer-text);
+      border-radius: 10px;
+      padding: 7px 12px;
+      font: inherit;
+      font-size: 12px;
+      cursor: pointer;
+      transition: background .15s ease, border-color .15s ease, color .15s ease, transform .15s ease;
+    }
+
+    .viewer-btn:hover {
+      background: var(--viewer-btn-hover);
+      border-color: var(--viewer-btn-active-border);
+      color: var(--viewer-text);
+      transform: translateY(-1px);
+    }
+
+    .viewer-btn.is-active {
+      background: var(--viewer-btn-active);
+      border-color: var(--viewer-btn-active-border);
+      color: var(--viewer-text);
+    }
+
+    .viewer-canvas {
+      padding: 24px;
+      overflow: auto;
+      background: color-mix(in srgb, var(--viewer-panel) 88%, var(--viewer-canvas) 12%);
+    }
+
+    .viewer-diagram {
+      display: flex;
+      justify-content: center;
+      align-items: flex-start;
+      min-height: calc(100vh - 180px);
+      background: var(--viewer-canvas);
+      border: 1px solid var(--viewer-border);
+      border-radius: 16px;
+      padding: 28px;
+      overflow: auto;
+    }
+
+    .viewer-diagram svg {
+      max-width: none;
+      height: auto;
+    }
+
+    .viewer-source {
+      display: none;
+      margin: 0 24px 24px;
+      padding: 16px;
+      border: 1px solid var(--viewer-border);
+      border-radius: 14px;
+      background: var(--viewer-source-bg);
+      overflow: auto;
+    }
+
+    .viewer-source pre {
+      margin: 0;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-family: "JetBrains Mono", Consolas, monospace;
+      font-size: 12px;
+      line-height: 1.6;
+      color: var(--viewer-text);
+    }
+
+    .viewer-help {
+      padding: 0 24px 24px;
+      font-size: 12px;
+      color: var(--viewer-text-muted);
+    }
+
+    .viewer-error {
+      color: #ef4444;
+      font-family: "JetBrains Mono", Consolas, monospace;
+      white-space: pre-wrap;
+      padding: 12px;
+      border-radius: 10px;
+      background: rgba(239, 68, 68, 0.08);
+      border: 1px solid rgba(239, 68, 68, 0.28);
+    }
+
+    @media (max-width: 720px) {
+      body { padding: 12px; }
+      .viewer-toolbar { align-items: flex-start; flex-direction: column; }
+      .viewer-actions { width: 100%; justify-content: flex-start; }
+      .viewer-canvas { padding: 12px; }
+      .viewer-diagram { min-height: 60vh; padding: 16px; }
+      .viewer-source { margin: 0 12px 12px; }
+      .viewer-help { padding: 0 12px 12px; }
+    }
+  </style>
+</head>
+<body data-theme="${safeTheme}">
+  <div class="viewer-shell">
+    <div class="viewer-toolbar">
+      <div class="viewer-title">Mermaid Diagram Viewer</div>
+      <div class="viewer-actions">
+        <button type="button" id="viewer-vertical" class="viewer-btn" style="display:none;">Vertical</button>
+        <button type="button" id="viewer-horizontal" class="viewer-btn" style="display:none;">Horizontal</button>
+        <button type="button" id="viewer-copy" class="viewer-btn">Copy</button>
+        <button type="button" id="viewer-source-toggle" class="viewer-btn">Source</button>
+      </div>
+    </div>
+    <div class="viewer-canvas">
+      <div id="viewer-diagram" class="viewer-diagram"></div>
+    </div>
+    <div id="viewer-source" class="viewer-source"><pre id="viewer-source-code"></pre></div>
+    <div class="viewer-help">This viewer is front-end only. It does not change chat history or save anything to the database.</div>
+  </div>
+  <script src=${safeMermaidScriptUrl}></script>
+  <script>
+    (function () {
+      const sourceToggleBtn = document.getElementById("viewer-source-toggle");
+      const copyBtn = document.getElementById("viewer-copy");
+      const verticalBtn = document.getElementById("viewer-vertical");
+      const horizontalBtn = document.getElementById("viewer-horizontal");
+      const sourceBox = document.getElementById("viewer-source");
+      const sourceCodeEl = document.getElementById("viewer-source-code");
+      const diagramEl = document.getElementById("viewer-diagram");
+
+      const ORIENTATION_RE = /^(\\s*(?:graph|flowchart))\\s+(TD|TB|LR|RL)\\b/i;
+      let currentCode = ${safeCode};
+
+      function getOrientationState(code) {
+        const match = String(code || "").match(ORIENTATION_RE);
+        if (!match) return null;
+        const dir = match[2].toUpperCase();
+        return {
+          dir,
+          isHorizontal: dir === "LR" || dir === "RL",
+          isReverse: dir === "RL" || dir === "TB",
+        };
+      }
+
+      function getCodeForOrientation(code, targetOrientation) {
+        const state = getOrientationState(code);
+        if (!state) return String(code || "");
+        const nextDir = targetOrientation === "horizontal"
+          ? (state.isReverse ? "RL" : "LR")
+          : (state.isReverse ? "TB" : "TD");
+        return String(code || "").replace(ORIENTATION_RE, "$1 " + nextDir);
+      }
+
+      function refreshButtons() {
+        const state = getOrientationState(currentCode);
+        if (!state) {
+          verticalBtn.style.display = "none";
+          horizontalBtn.style.display = "none";
+          return;
+        }
+        verticalBtn.style.display = "";
+        horizontalBtn.style.display = "";
+        verticalBtn.classList.toggle("is-active", !state.isHorizontal);
+        horizontalBtn.classList.toggle("is-active", state.isHorizontal);
+      }
+
+      async function renderDiagram() {
+        sourceCodeEl.textContent = currentCode;
+        refreshButtons();
+        diagramEl.classList.remove("viewer-error");
+        diagramEl.innerHTML = "";
+        diagramEl.textContent = currentCode;
+        try {
+          const mermaidTheme = document.body.getAttribute("data-theme") === "light" ? "default" : "dark";
+          window.mermaid.initialize({ startOnLoad: false, theme: mermaidTheme, securityLevel: "strict" });
+          await window.mermaid.run({ nodes: [diagramEl] });
+        } catch {
+          if (!diagramEl.querySelector("svg")) {
+            diagramEl.classList.add("viewer-error");
+          }
+        }
+      }
+
+      async function copyCurrentCode() {
+        try {
+          await navigator.clipboard.writeText(currentCode);
+          return true;
+        } catch {
+          const textarea = document.createElement("textarea");
+          textarea.value = currentCode;
+          textarea.setAttribute("readonly", "readonly");
+          textarea.style.position = "fixed";
+          textarea.style.left = "-9999px";
+          document.body.appendChild(textarea);
+          textarea.select();
+          let ok = false;
+          try {
+            ok = document.execCommand("copy");
+          } catch {
+            ok = false;
+          }
+          textarea.remove();
+          return ok;
+        }
+      }
+
+      function flashButton(btn, okText) {
+        const original = btn.textContent;
+        btn.textContent = okText;
+        btn.disabled = true;
+        window.setTimeout(() => {
+          btn.textContent = original;
+          btn.disabled = false;
+        }, 1200);
+      }
+
+      verticalBtn.addEventListener("click", async () => {
+        currentCode = getCodeForOrientation(currentCode, "vertical");
+        await renderDiagram();
+      });
+
+      horizontalBtn.addEventListener("click", async () => {
+        currentCode = getCodeForOrientation(currentCode, "horizontal");
+        await renderDiagram();
+      });
+
+      copyBtn.addEventListener("click", async () => {
+        const ok = await copyCurrentCode();
+        flashButton(copyBtn, ok ? "Copied" : "Failed");
+      });
+
+      sourceToggleBtn.addEventListener("click", () => {
+        const hidden = sourceBox.style.display === "none" || !sourceBox.style.display;
+        sourceBox.style.display = hidden ? "block" : "none";
+        sourceToggleBtn.textContent = hidden ? "Diagram" : "Source";
+      });
+
+      window.opener = null;
+      void renderDiagram();
+    })();
+  </script>
+</body>
+</html>`;
+  }
+
+  function openMermaidViewer(code) {
+    const viewerWindow = window.open("", "_blank");
+    if (!viewerWindow) return false;
+
+    const theme = document.body.getAttribute("data-theme") === "light" ? "light" : "dark";
+    viewerWindow.document.open();
+    viewerWindow.document.write(buildMermaidViewerHtml(code, theme));
+    viewerWindow.document.close();
+    return true;
+  }
+
   function renderMessageContent(containerEl, rawText, metadata = null) {
     containerEl.textContent = "";
     const tokens = tokenizeMessage(rawText);
@@ -249,47 +638,48 @@
 
           const sourceCode = document.createElement("code");
 
+          function syncOrientationButtons() {
+            const orientationState = getMermaidOrientationState(currentCode);
+            verticalBtn.classList.toggle("is-active", Boolean(orientationState) && !orientationState.isHorizontal);
+            horizontalBtn.classList.toggle("is-active", Boolean(orientationState) && orientationState.isHorizontal);
+          }
+
           // Orientation toggle (if graph/flowchart with direction)
-          let currentOrientationMatch = currentCode.trim().match(/^(graph|flowchart)\s+(TD|TB|LR|RL)\b/i);
-          if (currentOrientationMatch) {
-            const orientationBtn = document.createElement("button");
-            orientationBtn.type = "button";
-            orientationBtn.className = "mermaid-btn";
-            let dir = currentOrientationMatch[2].toUpperCase();
-            orientationBtn.textContent = ["LR", "RL"].includes(dir) ? "Vertical" : "Horizontal";
-            
-            orientationBtn.addEventListener("click", async (e) => {
+          const orientationState = getMermaidOrientationState(currentCode);
+          let verticalBtn = null;
+          let horizontalBtn = null;
+          if (orientationState) {
+            verticalBtn = document.createElement("button");
+            verticalBtn.type = "button";
+            verticalBtn.className = "mermaid-btn";
+            verticalBtn.textContent = "Vertical";
+
+            horizontalBtn = document.createElement("button");
+            horizontalBtn.type = "button";
+            horizontalBtn.className = "mermaid-btn";
+            horizontalBtn.textContent = "Horizontal";
+
+            verticalBtn.addEventListener("click", async (e) => {
               e.preventDefault();
               e.stopPropagation();
-              const match = currentCode.trim().match(/^(graph|flowchart)\s+(TD|TB|LR|RL)\b/i);
-              if (!match) return;
-              const oldDir = match[2].toUpperCase();
-              const dirMap = { 'TD': 'LR', 'TB': 'LR', 'LR': 'TD', 'RL': 'TB' };
-              const newDir = dirMap[oldDir] || 'LR';
-              
-              const newText = ["LR", "RL"].includes(newDir) ? "Vertical" : "Horizontal";
-              orientationBtn.textContent = newText;
-              
-              currentCode = currentCode.replace(new RegExp(`^(\\s*${match[1]})\\s+${oldDir}\\b`, 'i'), `$1 ${newDir}`);
-              
-              // Update source code view if visible
+              currentCode = getMermaidCodeForOrientation(currentCode, "vertical");
               sourceCode.textContent = currentCode;
-              
-              diagramDiv.innerHTML = ""; // Clear old diagram
-              diagramDiv.textContent = currentCode;
-              diagramDiv.removeAttribute("data-processed");
-              diagramDiv.classList.remove("mermaid-error");
-              
-              try {
-                await mermaid.run({ nodes: [diagramDiv] });
-              } catch {
-                if (!diagramDiv.querySelector("svg")) {
-                  diagramDiv.classList.add("mermaid-error");
-                  diagramDiv.setAttribute("data-processed", "true");
-                }
-              }
+              syncOrientationButtons();
+              await renderSingleMermaidDiagram(diagramDiv, currentCode);
             });
-            toolbarDiv.appendChild(orientationBtn);
+
+            horizontalBtn.addEventListener("click", async (e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              currentCode = getMermaidCodeForOrientation(currentCode, "horizontal");
+              sourceCode.textContent = currentCode;
+              syncOrientationButtons();
+              await renderSingleMermaidDiagram(diagramDiv, currentCode);
+            });
+
+            syncOrientationButtons();
+            toolbarDiv.appendChild(verticalBtn);
+            toolbarDiv.appendChild(horizontalBtn);
           }
 
           // Copy button
@@ -310,6 +700,24 @@
             }, 1200);
           });
           toolbarDiv.appendChild(copyBtn);
+
+          const openBtn = document.createElement("button");
+          openBtn.type = "button";
+          openBtn.className = "mermaid-btn";
+          openBtn.textContent = "New Tab";
+          openBtn.addEventListener("click", (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const original = openBtn.textContent;
+            const ok = openMermaidViewer(currentCode);
+            openBtn.textContent = ok ? "Opened" : "Blocked";
+            if (ok) openBtn.disabled = true;
+            setTimeout(() => {
+              openBtn.textContent = original;
+              openBtn.disabled = false;
+            }, 1200);
+          });
+          toolbarDiv.appendChild(openBtn);
 
           // Source toggle button
           const sourceToggleBtn = document.createElement("button");

@@ -3799,6 +3799,7 @@ body[data-theme="light"] .settings-nav-item.active {
 .mermaid-toolbar {
   display: flex;
   justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 8px;
   margin-bottom: 20px;
 }
@@ -3816,6 +3817,12 @@ body[data-theme="light"] .settings-nav-item.active {
 }
 
 .mermaid-btn:hover {
+  background: var(--accent-glow);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.mermaid-btn.is-active {
   background: var(--accent-glow);
   border-color: var(--accent);
   color: var(--accent);
