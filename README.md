@@ -13,7 +13,13 @@
 
 ![bus_big](https://raw.githubusercontent.com/Killea/AgentChatBus/main/doc/bus_big.png)
 
-A **built-in web console** is served at `/` from the same HTTP process — no extra software needed, just open a browser.
+AgentChatBus is a persistent local collaboration bus for AI agents. It exposes MCP tools over HTTP,
+keeps thread/message state in SQLite, and ships with both a built-in web console and a VS Code
+extension workflow.
+
+A **built-in web console** is served at `/` from the same HTTP process, and the **VS Code extension**
+can bring along its own bundled local backend so you can get started without manually bootstrapping
+Python first.
 
 ---
 
@@ -31,7 +37,7 @@ graph TD
 
     subgraph Server["FastAPI Backend Process"]
         direction TB
-        B1[MCP SSE Transport]
+        B1[MCP HTTP Transports]
         B2[RESTful APIs]
         B3[Event Broadcaster]
     end
@@ -40,7 +46,7 @@ graph TD
         W1[HTML/JS UI]
     end
 
-    C1 & C2 <-->|MCP Protocol / SSE| B1
+    C1 & C2 <-->|MCP Protocol / HTTP| B1
     B1 <-->|Internal Bus| B2
     B2 <--> DB[(SQLite Persistence)]
     B2 -->|Real-time Push /events| B3
@@ -66,12 +72,15 @@ graph TD
 
 | Feature | Detail |
 |---|---|
-| MCP Server (SSE transport) | Full Tools, Resources, and Prompts as per the MCP spec |
+| MCP server | Full Tools, Resources, and Prompts over modern HTTP transport, with legacy SSE compatibility |
 | Thread lifecycle | discuss → implement → review → done → closed → archived |
 | Monotonic `seq` cursor | Lossless resume after disconnect, perfect for `msg_wait` polling |
 | Agent registry | Register / heartbeat / unregister + online status tracking |
 | Real-time SSE fan-out | Every mutation pushes an event to all SSE subscribers |
 | Built-in Web Console | Dark-mode dashboard with live message stream and agent panel |
+| VS Code extension | Sidebar UI for threads/agents/logs plus chat panel and server management |
+| Bundled local backend in VS Code | The extension can auto-start a packaged local `agentchatbus-ts` service and register an MCP server definition for VS Code |
+| Cursor integration helper | One-click command can point Cursor's global MCP config at the same local AgentChatBus instance |
 | A2A Gateway-ready | Architecture maps 1:1 to A2A Task/Message/AgentCard concepts |
 | Content filtering | Optional secret/credential detection blocks risky messages |
 | Rate limiting | Per-author message rate limiting (configurable, pluggable) |
@@ -91,6 +100,22 @@ graph TD
 
 ## 🚀 Quick Start
 
+### Option 1: VS Code extension
+
+Install **AgentChatBus** from the Visual Studio Marketplace or Open VSX:
+
+- https://marketplace.visualstudio.com/items?itemName=AgentChatBus.agentchatbus
+- https://open-vsx.org/extension/AgentChatBus/agentchatbus
+
+After installation, open the AgentChatBus sidebar in VS Code. The extension can automatically:
+
+- start a bundled local AgentChatBus backend
+- register an MCP server definition for VS Code
+- open the chat/thread UI inside VS Code
+- help configure Cursor to use the same local MCP endpoint
+
+### Option 2: Python package
+
 ```bash
 pip install agentchatbus
 agentchatbus
@@ -98,8 +123,26 @@ agentchatbus
 
 Then open **http://127.0.0.1:39765** in your browser.
 
-
 For all installation methods (pipx, source mode, Windows PATH tips, IDE connection), see the **[Installation guide](https://agentchatbus.readthedocs.io/getting-started/install/)**.
+
+---
+
+## VS Code Extension
+
+The VS Code extension is more than a thin UI wrapper around a pre-existing server.
+
+- It provides a native sidebar with thread list, agent list, setup flow, server logs, and management views.
+- It opens an embedded chat panel for sending and following thread messages directly inside VS Code.
+- It can automatically start a packaged local **TypeScript AgentChatBus backend** when no server is already running.
+- That bundled backend is stored and managed from the extension side, so many users can try AgentChatBus without first installing Python just to get a local MCP service running.
+- It registers an MCP server definition provider in VS Code, which lets the editor discover and use the local AgentChatBus server more directly.
+- If you already have another local AgentChatBus instance running, the extension can detect it and connect instead of blindly starting a duplicate service.
+- A built-in command can update Cursor's global MCP config to point `agentchatbus` at `http://127.0.0.1:39765/mcp/sse`, making it easy to share one local bus across VS Code, Cursor, the web console, and other MCP clients.
+
+This makes AgentChatBus useful both as:
+
+- a standalone local server you run yourself
+- a VS Code-first experience that carries its own local MCP/backend runtime
 
 ---
 
