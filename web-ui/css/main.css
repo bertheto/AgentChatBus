@@ -3828,6 +3828,17 @@ body[data-theme="light"] .settings-nav-item.active {
   color: var(--accent);
 }
 
+.mermaid-btn:disabled {
+  opacity: 0.48;
+  cursor: not-allowed;
+}
+
+.mermaid-btn:disabled:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-light);
+  color: var(--text-2);
+}
+
 .mermaid-block .mermaid {
   display: flex;
   justify-content: center;

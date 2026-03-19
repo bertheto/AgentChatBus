@@ -287,7 +287,8 @@
       --viewer-btn-hover: rgba(37, 99, 235, 0.18);
       --viewer-btn-active: rgba(37, 99, 235, 0.3);
       --viewer-btn-active-border: rgba(96, 165, 250, 0.85);
-      --viewer-canvas: #ffffff;
+      --viewer-canvas: #0f172a;
+      --viewer-canvas-shell: rgba(15, 23, 42, 0.72);
       --viewer-source-bg: rgba(15, 23, 42, 0.78);
       --viewer-shadow: 0 28px 80px rgba(2, 6, 23, 0.45);
     }
@@ -305,6 +306,7 @@
       --viewer-btn-active: rgba(59, 130, 246, 0.18);
       --viewer-btn-active-border: rgba(37, 99, 235, 0.75);
       --viewer-canvas: #ffffff;
+      --viewer-canvas-shell: rgba(248, 250, 252, 0.88);
       --viewer-source-bg: #f8fafc;
       --viewer-shadow: 0 24px 70px rgba(15, 23, 42, 0.12);
     }
@@ -382,10 +384,16 @@
       color: var(--viewer-text);
     }
 
+    .viewer-btn:disabled {
+      opacity: 0.46;
+      cursor: not-allowed;
+      transform: none;
+    }
+
     .viewer-canvas {
       padding: 24px;
       overflow: auto;
-      background: color-mix(in srgb, var(--viewer-panel) 88%, var(--viewer-canvas) 12%);
+      background: var(--viewer-canvas-shell);
     }
 
     .viewer-diagram {
@@ -457,8 +465,9 @@
     <div class="viewer-toolbar">
       <div class="viewer-title">Mermaid Diagram Viewer</div>
       <div class="viewer-actions">
-        <button type="button" id="viewer-vertical" class="viewer-btn" style="display:none;">Vertical</button>
-        <button type="button" id="viewer-horizontal" class="viewer-btn" style="display:none;">Horizontal</button>
+        <button type="button" id="viewer-theme-toggle" class="viewer-btn">Light</button>
+        <button type="button" id="viewer-vertical" class="viewer-btn">Vertical</button>
+        <button type="button" id="viewer-horizontal" class="viewer-btn">Horizontal</button>
         <button type="button" id="viewer-copy" class="viewer-btn">Copy</button>
         <button type="button" id="viewer-source-toggle" class="viewer-btn">Source</button>
       </div>
@@ -472,6 +481,7 @@
   <script src=${safeMermaidScriptUrl}></script>
   <script>
     (function () {
+      const themeToggleBtn = document.getElementById("viewer-theme-toggle");
       const sourceToggleBtn = document.getElementById("viewer-source-toggle");
       const copyBtn = document.getElementById("viewer-copy");
       const verticalBtn = document.getElementById("viewer-vertical");
@@ -505,20 +515,24 @@
 
       function refreshButtons() {
         const state = getOrientationState(currentCode);
-        if (!state) {
-          verticalBtn.style.display = "none";
-          horizontalBtn.style.display = "none";
-          return;
-        }
-        verticalBtn.style.display = "";
-        horizontalBtn.style.display = "";
-        verticalBtn.classList.toggle("is-active", !state.isHorizontal);
-        horizontalBtn.classList.toggle("is-active", state.isHorizontal);
+        verticalBtn.disabled = !state;
+        horizontalBtn.disabled = !state;
+        verticalBtn.title = state ? "Switch diagram to vertical layout" : "Only graph/flowchart diagrams support direction switching";
+        horizontalBtn.title = state ? "Switch diagram to horizontal layout" : "Only graph/flowchart diagrams support direction switching";
+        verticalBtn.classList.toggle("is-active", Boolean(state) && !state.isHorizontal);
+        horizontalBtn.classList.toggle("is-active", Boolean(state) && state.isHorizontal);
+      }
+
+      function refreshThemeButton() {
+        const isLight = document.body.getAttribute("data-theme") === "light";
+        themeToggleBtn.textContent = isLight ? "Dark" : "Light";
+        themeToggleBtn.title = isLight ? "Switch viewer to dark theme" : "Switch viewer to light theme";
       }
 
       async function renderDiagram() {
         sourceCodeEl.textContent = currentCode;
         refreshButtons();
+        refreshThemeButton();
         diagramEl.classList.remove("viewer-error");
         diagramEl.innerHTML = "";
         diagramEl.textContent = currentCode;
@@ -567,12 +581,20 @@
       }
 
       verticalBtn.addEventListener("click", async () => {
+        if (verticalBtn.disabled) return;
         currentCode = getCodeForOrientation(currentCode, "vertical");
         await renderDiagram();
       });
 
       horizontalBtn.addEventListener("click", async () => {
+        if (horizontalBtn.disabled) return;
         currentCode = getCodeForOrientation(currentCode, "horizontal");
+        await renderDiagram();
+      });
+
+      themeToggleBtn.addEventListener("click", async () => {
+        const nextTheme = document.body.getAttribute("data-theme") === "light" ? "dark" : "light";
+        document.body.setAttribute("data-theme", nextTheme);
         await renderDiagram();
       });
 
@@ -638,49 +660,58 @@
 
           const sourceCode = document.createElement("code");
 
+          const verticalBtn = document.createElement("button");
+          verticalBtn.type = "button";
+          verticalBtn.className = "mermaid-btn";
+          verticalBtn.textContent = "Vertical";
+          verticalBtn.title = "Only graph/flowchart diagrams support direction switching";
+
+          const horizontalBtn = document.createElement("button");
+          horizontalBtn.type = "button";
+          horizontalBtn.className = "mermaid-btn";
+          horizontalBtn.textContent = "Horizontal";
+          horizontalBtn.title = "Only graph/flowchart diagrams support direction switching";
+
           function syncOrientationButtons() {
             const orientationState = getMermaidOrientationState(currentCode);
-            verticalBtn.classList.toggle("is-active", Boolean(orientationState) && !orientationState.isHorizontal);
-            horizontalBtn.classList.toggle("is-active", Boolean(orientationState) && orientationState.isHorizontal);
+            const supported = Boolean(orientationState);
+            verticalBtn.disabled = !supported;
+            horizontalBtn.disabled = !supported;
+            verticalBtn.classList.toggle("is-active", supported && !orientationState.isHorizontal);
+            horizontalBtn.classList.toggle("is-active", supported && orientationState.isHorizontal);
+            if (supported) {
+              verticalBtn.title = "Switch diagram to vertical layout";
+              horizontalBtn.title = "Switch diagram to horizontal layout";
+            } else {
+              verticalBtn.title = "Only graph/flowchart diagrams support direction switching";
+              horizontalBtn.title = "Only graph/flowchart diagrams support direction switching";
+            }
           }
 
-          // Orientation toggle (if graph/flowchart with direction)
-          const orientationState = getMermaidOrientationState(currentCode);
-          let verticalBtn = null;
-          let horizontalBtn = null;
-          if (orientationState) {
-            verticalBtn = document.createElement("button");
-            verticalBtn.type = "button";
-            verticalBtn.className = "mermaid-btn";
-            verticalBtn.textContent = "Vertical";
-
-            horizontalBtn = document.createElement("button");
-            horizontalBtn.type = "button";
-            horizontalBtn.className = "mermaid-btn";
-            horizontalBtn.textContent = "Horizontal";
-
-            verticalBtn.addEventListener("click", async (e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              currentCode = getMermaidCodeForOrientation(currentCode, "vertical");
-              sourceCode.textContent = currentCode;
-              syncOrientationButtons();
-              await renderSingleMermaidDiagram(diagramDiv, currentCode);
-            });
-
-            horizontalBtn.addEventListener("click", async (e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              currentCode = getMermaidCodeForOrientation(currentCode, "horizontal");
-              sourceCode.textContent = currentCode;
-              syncOrientationButtons();
-              await renderSingleMermaidDiagram(diagramDiv, currentCode);
-            });
-
+          // Orientation toggle (always visible; enabled only for graph/flowchart with direction)
+          verticalBtn.addEventListener("click", async (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (verticalBtn.disabled) return;
+            currentCode = getMermaidCodeForOrientation(currentCode, "vertical");
+            sourceCode.textContent = currentCode;
             syncOrientationButtons();
-            toolbarDiv.appendChild(verticalBtn);
-            toolbarDiv.appendChild(horizontalBtn);
-          }
+            await renderSingleMermaidDiagram(diagramDiv, currentCode);
+          });
+
+          horizontalBtn.addEventListener("click", async (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (horizontalBtn.disabled) return;
+            currentCode = getMermaidCodeForOrientation(currentCode, "horizontal");
+            sourceCode.textContent = currentCode;
+            syncOrientationButtons();
+            await renderSingleMermaidDiagram(diagramDiv, currentCode);
+          });
+
+          syncOrientationButtons();
+          toolbarDiv.appendChild(verticalBtn);
+          toolbarDiv.appendChild(horizontalBtn);
 
           // Copy button
           const copyBtn = document.createElement("button");
