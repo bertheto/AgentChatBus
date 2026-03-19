@@ -635,6 +635,7 @@
         diagramEl.classList.remove("viewer-error");
         diagramEl.innerHTML = "";
         diagramEl.textContent = currentCode;
+        diagramEl.removeAttribute("data-processed");
         try {
           const mermaidTheme = document.body.getAttribute("data-theme") === "light" ? "default" : "dark";
           window.mermaid.initialize({ startOnLoad: false, theme: mermaidTheme, securityLevel: "strict" });
@@ -642,6 +643,7 @@
         } catch {
           if (!diagramEl.querySelector("svg")) {
             diagramEl.classList.add("viewer-error");
+            diagramEl.setAttribute("data-processed", "true");
           }
         }
       }

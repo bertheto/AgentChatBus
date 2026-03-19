@@ -1194,6 +1194,19 @@ Note: Thread name is the topic label. Thread ID is the unique identifier.`;
 
                   function renderMessageContent(containerEl, rawText, metadata = null) {
                     return window.AcbMessageRenderer.renderMessageContent(containerEl, rawText, metadata);
+                  }
+
+    function cacheMessageRenderState(row, content, metadata) {
+      if (!row) return;
+      row._acbMessageContent = typeof content === 'string' ? content : String(content ?? '');
+      row._acbMessageMetadata = metadata ?? null;
+    }
+
+    function renderMessageBubble(row, bubbleEl, content, metadata = null) {
+      if (!bubbleEl) return;
+      cacheMessageRenderState(row, content, metadata);
+      bubbleEl.innerHTML = '';
+      window.AcbMessageRenderer.renderMessageContent(bubbleEl, row._acbMessageContent, row._acbMessageMetadata);
     }
 
     // ── Copy message content to clipboard ────────────────────────────────────
@@ -1496,7 +1509,7 @@ Note: Thread name is the topic label. Thread ID is the unique identifier.`;
 
       const bubbleEl = row.querySelector('.bubble-v2');
       if (bubbleEl) {
-        renderMessageContent(bubbleEl, m.content, m.metadata);
+        renderMessageBubble(row, bubbleEl, m.content, m.metadata);
 
         // Render images if any
         let images = null;
@@ -1837,7 +1850,9 @@ Note: Thread name is the topic label. Thread ID is the unique identifier.`;
       row.classList.add('msg-editing');
       btn.disabled = true;
 
-      const originalContent = bubbleEl.innerText || bubbleEl.textContent;
+      const originalContent = typeof row._acbMessageContent === 'string'
+        ? row._acbMessageContent
+        : (bubbleEl.innerText || bubbleEl.textContent || '');
       bubbleEl.dataset.originalContent = originalContent;
 
       const textarea = document.createElement('textarea');
@@ -1868,8 +1883,7 @@ Note: Thread name is the topic label. Thread ID is the unique identifier.`;
             return;
           }
           // Update bubble in-place
-          bubbleEl.innerHTML = '';
-          window.AcbMessageRenderer.renderMessageContent(bubbleEl, newContent, null);
+          renderMessageBubble(row, bubbleEl, newContent, row._acbMessageMetadata);
           // Refresh/add edited indicator
           let indicator = row.querySelector('.msg-edited-indicator');
           if (!indicator) {
@@ -1916,9 +1930,8 @@ Note: Thread name is the topic label. Thread ID is the unique identifier.`;
       if (editBtn) editBtn.disabled = false;
       const bubbleEl = row.querySelector('.bubble-v2');
       if (!bubbleEl) return;
-      const original = bubbleEl.dataset.originalContent || '';
-      bubbleEl.innerHTML = '';
-      window.AcbMessageRenderer.renderMessageContent(bubbleEl, original, null);
+      const original = bubbleEl.dataset.originalContent || row._acbMessageContent || '';
+      renderMessageBubble(row, bubbleEl, original, row._acbMessageMetadata);
       delete bubbleEl.dataset.originalContent;
     };
 
