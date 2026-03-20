@@ -14,7 +14,6 @@ import {
   getConfigDict,
   getSettingsManifest,
   isIpAllowed,
-  isNonLocalhostDeployment,
   saveConfigDict,
 } from "../../core/config/env.js";
 import { MemoryStore, memoryStore } from "../../core/services/memoryStore.js";
@@ -1534,11 +1533,10 @@ async function setThreadStatus(request: FastifyRequest, reply: FastifyReply, sta
 export async function startHttpServer() {
   const config = getConfig();
 
-  if (isNonLocalhostDeployment(config) && !config.adminToken) {
+  if (config.showAd && !config.adminToken) {
     console.error(
-      "[SEC-05] FATAL: Server is configured for non-localhost (HOST != 127.0.0.1 or SHOW_AD=true) " +
-      "but AGENTCHATBUS_ADMIN_TOKEN is not set. " +
-      "Set AGENTCHATBUS_ADMIN_TOKEN to a secure value before starting in network mode."
+      "[SEC-05] FATAL: SHOW_AD=true but AGENTCHATBUS_ADMIN_TOKEN is not set. " +
+      "Set AGENTCHATBUS_ADMIN_TOKEN to a secure value before starting in public demo mode."
     );
     process.exit(1);
   }

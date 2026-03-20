@@ -995,14 +995,12 @@ export class BusServerManager {
     }
 
     private async spawnServer(spec: LaunchSpec): Promise<boolean> {
-        const shouldForceElectronRunAsNode = spec.command === this.hostNodeExecutable;
         this.ownerBootToken = randomUUID();
         const env = {
             ...process.env,
             ...(spec.env || {}),
             AGENTCHATBUS_OWNER_BOOT_TOKEN: this.ownerBootToken,
             AGENTCHATBUS_RELOAD: '0',
-            ...(shouldForceElectronRunAsNode ? { ELECTRON_RUN_AS_NODE: '1' } : {}),
         };
         this.serverMetadata = {
             command: spec.command,
@@ -1022,9 +1020,6 @@ export class BusServerManager {
 
         this.log(`Starting server process using ${spec.launchMode}.`, 'play');
         this.log(`Exec: ${spec.command} ${spec.args.join(' ')}`.trim(), 'terminal');
-        if (shouldForceElectronRunAsNode) {
-            this.log('Launching the IDE executable in Node compatibility mode via ELECTRON_RUN_AS_NODE=1.', 'info');
-        }
         this.log(`Resolution: ${spec.resolvedBy}`, 'info');
 
         try {

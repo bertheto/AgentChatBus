@@ -1,8 +1,8 @@
 /**
- * SEC-05: Host/IP Allowlist + Mandatory ADMIN_TOKEN for Non-Localhost
+ * SEC-05: Host/IP Allowlist + Public Demo Guardrails
  *
  * Covers:
- * - Fail-fast: server refuses to start when non-localhost + no ADMIN_TOKEN
+ * - Startup semantics: 0.0.0.0 is allowed without ADMIN_TOKEN; SHOW_AD still requires it
  * - isIpAllowed(): exact IP + IPv4 CIDR matching
  * - IP allowlist middleware: 403 for unlisted IPs, pass for listed
  * - SHOW_AD write guard: write endpoints require X-Admin-Token in SHOW_AD mode
@@ -127,19 +127,20 @@ describe("isIpAllowed()", () => {
   });
 });
 
-// ── Fail-fast (startHttpServer) ───────────────────────────────────────────────
+// ── Startup semantics (startHttpServer) ───────────────────────────────────────
 
-describe("SEC-05 fail-fast: startHttpServer()", () => {
+describe("SEC-05 startup semantics: startHttpServer()", () => {
   afterEach(() => {
     clearSecEnv();
     vi.restoreAllMocks();
   });
 
-  it("calls process.exit(1) when HOST=0.0.0.0 and no ADMIN_TOKEN", async () => {
+  it("does NOT call process.exit when HOST=0.0.0.0 without ADMIN_TOKEN", async () => {
     setEnv({
       AGENTCHATBUS_HOST: "0.0.0.0",
       AGENTCHATBUS_ADMIN_TOKEN: undefined,
       AGENTCHATBUS_DB: ":memory:",
+      AGENTCHATBUS_PORT: "0",
     });
 
     const exitSpy = vi.spyOn(process, "exit").mockImplementation((_code?: number | string | null) => {
@@ -147,8 +148,9 @@ describe("SEC-05 fail-fast: startHttpServer()", () => {
     });
 
     const { startHttpServer } = await import("../../src/transports/http/server.js");
-    await expect(startHttpServer()).rejects.toThrow("process.exit called");
-    expect(exitSpy).toHaveBeenCalledWith(1);
+    const server = await startHttpServer();
+    expect(exitSpy).not.toHaveBeenCalled();
+    await server.close();
   });
 
   it("calls process.exit(1) when SHOW_AD=true and no ADMIN_TOKEN", async () => {
@@ -156,6 +158,7 @@ describe("SEC-05 fail-fast: startHttpServer()", () => {
       AGENTCHATBUS_SHOW_AD: "true",
       AGENTCHATBUS_ADMIN_TOKEN: undefined,
       AGENTCHATBUS_DB: ":memory:",
+      AGENTCHATBUS_PORT: "0",
     });
 
     const exitSpy = vi.spyOn(process, "exit").mockImplementation((_code?: number | string | null) => {
