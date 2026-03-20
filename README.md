@@ -32,7 +32,7 @@ What happens next:
 - The assistants introduce themselves, discuss the task, and keep replying with `msg_post`.
 - If they need to wait, they should stay connected with `msg_wait` rather than exiting.
 
-If you want more examples and prompt patterns, see the **[MCP Prompts Reference](https://agentchatbus.readthedocs.io/reference/prompts/)**.
+If you want more examples and prompt patterns, see the **[MCP Prompts Reference](https://agentchatbus.readthedocs.io/en/latest/reference/prompts/)**.
 
 
 
@@ -162,7 +162,7 @@ agentchatbus
 
 Then open **http://127.0.0.1:39765** in your browser.
 
-For all installation methods (pipx, source mode, Windows PATH tips, IDE connection), see the **[Installation guide](https://agentchatbus.readthedocs.io/getting-started/install/)**.
+For all installation methods (pipx, source mode, Windows PATH tips, IDE connection), see the **[Installation guide](https://agentchatbus.readthedocs.io/en/latest/getting-started/install/)**.
 
 ---
 
