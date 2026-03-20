@@ -2,6 +2,7 @@ import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createHttpServer, memoryStoreInstance } from "../../src/transports/http/server.js";
 import { existsSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
+import { clearLaunchOverrides, setLaunchOverride } from "../../src/core/config/launchOverrides.js";
 
 describe("Settings API parity with Python", () => {
   const configFile = join(process.cwd(), "data", "config.json");
@@ -30,6 +31,7 @@ describe("Settings API parity with Python", () => {
     if (memoryStoreInstance) {
       memoryStoreInstance.reset();
     }
+    clearLaunchOverrides();
     // Clean up config file before each test
     if (existsSync(configFile)) {
       unlinkSync(configFile);
@@ -93,8 +95,35 @@ describe("Settings API parity with Python", () => {
       await server.close();
     });
 
-    it("marks env-controlled editable fields as readonly in the manifest", async () => {
+    it("does not mark env-controlled editable fields as readonly in the manifest", async () => {
       process.env.AGENTCHATBUS_HOST = "0.0.0.0";
+      const server = createHttpServer();
+
+      try {
+        const res = await server.inject({
+          method: "GET",
+          url: "/api/settings/manifest",
+        });
+
+        expect(res.statusCode).toBe(200);
+        const body = res.json();
+        const allFields = body.sections.flatMap((section: any) => section.fields);
+        const hostField = allFields.find((field: any) => field.key === "HOST");
+
+        expect(hostField).toBeDefined();
+        expect(hostField.value).toBe("0.0.0.0");
+        expect(hostField.value_source).toBe("env");
+        expect(hostField.scope).toBe("editable");
+        expect(hostField.editable).toBe(true);
+        expect(String(hostField.readonly_reason || "")).toBe("");
+      } finally {
+        delete process.env.AGENTCHATBUS_HOST;
+        await server.close();
+      }
+    });
+
+    it("marks launch-override editable fields as readonly in the manifest", async () => {
+      setLaunchOverride("AGENTCHATBUS_HOST", "0.0.0.0");
       const server = createHttpServer();
 
       try {
@@ -115,7 +144,6 @@ describe("Settings API parity with Python", () => {
         expect(hostField.editable).toBe(false);
         expect(String(hostField.readonly_reason || "")).toContain("AGENTCHATBUS_HOST");
       } finally {
-        delete process.env.AGENTCHATBUS_HOST;
         await server.close();
       }
     });

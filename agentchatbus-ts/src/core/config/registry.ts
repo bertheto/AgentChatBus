@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { isIPv4 } from "node:net";
+import { getLaunchOverride, isLaunchLockedEnvVar } from "./launchOverrides.js";
 
 export type ConfigType = "boolean" | "integer" | "number" | "string" | "string[]" | "enum";
 export type ConfigKind =
@@ -162,6 +163,11 @@ function normalizeEnvValue(value: string | undefined): string | undefined {
 }
 
 function getEnvValue(envVar: string): string | undefined {
+  // Launch overrides are higher precedence than real environment variables.
+  const launchOverride = getLaunchOverride(envVar);
+  if (launchOverride !== undefined) {
+    return normalizeEnvValue(launchOverride);
+  }
   return normalizeEnvValue(process.env[envVar]);
 }
 
@@ -212,9 +218,13 @@ function getReadonlyReason(
   descriptor: ConfigDescriptor,
   valueSource: Exclude<ConfigValueSource, "derived">
 ): string | undefined {
-  if (descriptor.scope === "editable" && valueSource === "env") {
+  void valueSource; // kept for future: useful for UI copy, not needed for lock decision
+
+  // Only settings injected via CLI launch parameters become readonly.
+  // We intentionally do NOT treat all env-provided values as readonly anymore.
+  if (descriptor.scope === "editable" && isLaunchLockedEnvVar(descriptor.envVar)) {
     return (
-      `This setting is controlled by startup parameters/environment (${descriptor.envVar}) ` +
+      `This setting is controlled by launch parameters (${descriptor.envVar}) ` +
       "and is read-only in the Web UI. Change the launch parameters and restart the server to update it."
     );
   }
