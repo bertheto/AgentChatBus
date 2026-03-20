@@ -23,6 +23,7 @@ export type ConfigSensitivity =
   | "test"
   | "runtime";
 export type ConfigSectionId = "agent" | "attention" | "network" | "advanced" | "diagnostics" | "internal";
+export type ConfigValueSource = "env" | "persisted" | "default" | "derived";
 
 export interface AppConfig {
   host: string;
@@ -96,6 +97,7 @@ type SectionMeta = {
 export type SettingsManifestField = {
   key: string;
   source: "config" | "diagnostic";
+  value_source: ConfigValueSource;
   label: string;
   input_id: string;
   type: ConfigType;
@@ -112,6 +114,7 @@ export type SettingsManifestField = {
   step?: number;
   options?: Array<{ value: string; label: string }>;
   editable: boolean;
+  readonly_reason?: string;
 };
 
 export type SettingsManifestSection = {
@@ -140,7 +143,7 @@ type DiagnosticDescriptor = {
   value: (config: AppConfig) => unknown;
 };
 
-const SETTINGS_MANIFEST_SCHEMA_VERSION = "2026-03-19.v1";
+const SETTINGS_MANIFEST_SCHEMA_VERSION = "2026-03-19.v2";
 const DEFAULT_MSG_WAIT_MIN_TIMEOUT_MS = process.env.NODE_ENV === "test" ? 0 : 60000;
 
 const SECTION_META: Record<ConfigSectionId, SectionMeta> = {
@@ -181,6 +184,41 @@ function getRawValue(
     return persistedValue;
   }
   return fallback;
+}
+
+function hasPersistedValue(
+  persisted: Record<string, unknown>,
+  key?: string
+): boolean {
+  if (!key) return false;
+  const persistedValue = getPersistedValue(persisted, key);
+  return persistedValue !== undefined && persistedValue !== null && String(persistedValue) !== "";
+}
+
+function getConfigValueSource(
+  descriptor: Pick<ConfigDescriptor, "envVar" | "persistedKey">,
+  ctx: ResolveContext
+): Exclude<ConfigValueSource, "derived"> {
+  if (getEnvValue(descriptor.envVar) !== undefined) {
+    return "env";
+  }
+  if (hasPersistedValue(ctx.persisted, descriptor.persistedKey)) {
+    return "persisted";
+  }
+  return "default";
+}
+
+function getReadonlyReason(
+  descriptor: ConfigDescriptor,
+  valueSource: Exclude<ConfigValueSource, "derived">
+): string | undefined {
+  if (descriptor.scope === "editable" && valueSource === "env") {
+    return (
+      `This setting is controlled by startup parameters/environment (${descriptor.envVar}) ` +
+      "and is read-only in the Web UI. Change the launch parameters and restart the server to update it."
+    );
+  }
+  return undefined;
 }
 
 function parseBoolLike(value: unknown, defaultValue: boolean): boolean {
@@ -330,16 +368,22 @@ function buildVisibleField<T>(
   value: T,
   ctx: ResolveContext
 ): SettingsManifestField {
+  const valueSource = getConfigValueSource(descriptor, ctx);
+  const readonlyReason = getReadonlyReason(descriptor, valueSource);
+  const effectiveScope: Exclude<ConfigScope, "hidden"> =
+    readonlyReason ? "readonly" : (descriptor.scope as Exclude<ConfigScope, "hidden">);
+
   return {
     key: descriptor.key,
     source: "config",
+    value_source: valueSource,
     label: descriptor.label,
     input_id: descriptor.inputId ?? makeInputId(descriptor.key),
     type: descriptor.type,
     kind: descriptor.kind,
     description: descriptor.description,
     section: descriptor.section,
-    scope: descriptor.scope as Exclude<ConfigScope, "hidden">,
+    scope: effectiveScope,
     sensitivity: descriptor.sensitivity,
     restart_required: descriptor.restartRequired,
     value,
@@ -348,7 +392,8 @@ function buildVisibleField<T>(
     max: descriptor.max,
     step: descriptor.step,
     options: descriptor.options,
-    editable: descriptor.scope === "editable",
+    editable: descriptor.scope === "editable" && !readonlyReason,
+    readonly_reason: readonlyReason,
   };
 }
 
@@ -1195,6 +1240,7 @@ export function getSettingsManifest(): SettingsManifest {
     addFieldToSection(sections, "diagnostics", {
       key: diagnostic.key,
       source: "diagnostic",
+      value_source: "derived",
       label: diagnostic.label,
       input_id: makeInputId(diagnostic.key),
       type: diagnostic.type,

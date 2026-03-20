@@ -204,6 +204,12 @@
     const descHtml = field.description
       ? `<div class="settings-field-description">${_escapeHtml(field.description)}</div>`
       : "";
+    const envLockHtml = field.readonly_reason
+      ? `<div class="settings-field-note">${_escapeHtml(field.readonly_reason)}</div>`
+      : "";
+    const valueSourceHtml = field.value_source === "env"
+      ? `<div class="settings-field-note">Value source: startup parameter / environment</div>`
+      : "";
     const restartHtml = field.restart_required
       ? `<div class="settings-field-note">Requires restart</div>`
       : "";
@@ -222,6 +228,8 @@
             </label>
           </div>
           ${descHtml}
+          ${valueSourceHtml}
+          ${envLockHtml}
           ${restartHtml}
         </div>`;
     }
@@ -233,6 +241,8 @@
           <label for="${inputId}">${label}</label>
           <textarea id="${inputId}" rows="3"${disabledAttr}>${_escapeHtml(listValue)}</textarea>
           ${descHtml}
+          ${valueSourceHtml}
+          ${envLockHtml}
           ${restartHtml}
         </div>`;
     }
@@ -248,6 +258,8 @@
           <label for="${inputId}">${label}</label>
           <select id="${inputId}"${disabledAttr}>${optionHtml}</select>
           ${descHtml}
+          ${valueSourceHtml}
+          ${envLockHtml}
           ${restartHtml}
         </div>`;
     }
@@ -263,6 +275,8 @@
         <label for="${inputId}">${label}</label>
         <input id="${inputId}" type="${inputType}" value="${_escapeHtml(rawValue)}"${minAttr}${maxAttr}${stepAttr}${disabledAttr} />
         ${descHtml}
+        ${valueSourceHtml}
+        ${envLockHtml}
         ${restartHtml}
       </div>`;
   }

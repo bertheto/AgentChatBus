@@ -92,6 +92,33 @@ describe("Settings API parity with Python", () => {
 
       await server.close();
     });
+
+    it("marks env-controlled editable fields as readonly in the manifest", async () => {
+      process.env.AGENTCHATBUS_HOST = "0.0.0.0";
+      const server = createHttpServer();
+
+      try {
+        const res = await server.inject({
+          method: "GET",
+          url: "/api/settings/manifest",
+        });
+
+        expect(res.statusCode).toBe(200);
+        const body = res.json();
+        const allFields = body.sections.flatMap((section: any) => section.fields);
+        const hostField = allFields.find((field: any) => field.key === "HOST");
+
+        expect(hostField).toBeDefined();
+        expect(hostField.value).toBe("0.0.0.0");
+        expect(hostField.value_source).toBe("env");
+        expect(hostField.scope).toBe("readonly");
+        expect(hostField.editable).toBe(false);
+        expect(String(hostField.readonly_reason || "")).toContain("AGENTCHATBUS_HOST");
+      } finally {
+        delete process.env.AGENTCHATBUS_HOST;
+        await server.close();
+      }
+    });
   });
 
   describe("PUT /api/settings", () => {
