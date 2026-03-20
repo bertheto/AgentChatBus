@@ -7,7 +7,16 @@ import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { callTool, listTools, withToolCallContext } from "../../adapters/mcp/tools.js";
 import { SeqMismatchError, MissingSyncFieldsError, ReplyTokenInvalidError, ReplyTokenExpiredError, ReplyTokenReplayError, BusError } from "../../core/types/errors.js";
-import { getConfig, getConfigDict, saveConfigDict, ADMIN_TOKEN, BUS_VERSION, isNonLocalhostDeployment, isIpAllowed } from "../../core/config/env.js";
+import {
+  BUS_VERSION,
+  ConfigValidationError,
+  getConfig,
+  getConfigDict,
+  getSettingsManifest,
+  isIpAllowed,
+  isNonLocalhostDeployment,
+  saveConfigDict,
+} from "../../core/config/env.js";
 import { MemoryStore, memoryStore } from "../../core/services/memoryStore.js";
 import { registerStore } from "../../core/services/storeSingleton.js";
 import { eventBus } from "../../shared/eventBus.js";
@@ -30,7 +39,7 @@ export function getMemoryStore(): MemoryStore {
 type JsonBody = Record<string, unknown>;
 
 function resolveStaticPath(): string {
-  const envStaticPath = process.env.AGENTCHATBUS_WEB_UI_DIR;
+  const envStaticPath = getConfig().webUiDir;
   const candidates = [
     envStaticPath,
     join(process.cwd(), "resources", "web-ui"),
@@ -58,7 +67,8 @@ export function createHttpServer() {
   // instance so in-process tests can control the DB path and teardown.
   let store: ReturnType<typeof getMemoryStore>;
   // Allow tests to override the DB path using AGENTCHATBUS_TEST_DB
-  const envDb = process.env.AGENTCHATBUS_DB || process.env.AGENTCHATBUS_TEST_DB;
+  const cfg = getConfig();
+  const envDb = cfg.testDbPath || (cfg.dbPathConfigured ? cfg.dbPath : null);
   // Track ownership: only close the store on shutdown if this server created it.
   const ownsStore = Boolean(envDb);
   if (envDb) {
@@ -157,7 +167,7 @@ export function createHttpServer() {
   fastify.get("/health", async () => {
     const ideStatus = store.getIdeStatus();
     const cfg = getConfig();
-    const startupMode = process.env.AGENTCHATBUS_OWNER_BOOT_TOKEN
+    const startupMode = cfg.ownerBootToken
       ? "bundled-ts-service"
       : (ideStatus.ownership_assignable === true
         ? "external-service-extension-managed"
@@ -720,8 +730,8 @@ export function createHttpServer() {
         skills: Array.isArray(body.skills) ? body.skills : undefined
       });
       reply.code(200);
-      const showAd = process.env.AGENTCHATBUS_SHOW_AD;
-      const isShowAd = showAd ? ["1", "true", "yes"].includes(showAd.trim().toLowerCase()) : false;
+      const cfg = getConfig();
+      const isShowAd = cfg.showAd;
       return {
         ok: true,
         id: agent.id,
@@ -730,7 +740,7 @@ export function createHttpServer() {
         display_name: agent.display_name,
         // SEC-05: Suppress token in public demo mode (SHOW_AD=true) to prevent token leakage.
         // Private deployments (localhost or non-SHOW_AD) still receive the token for agent auth.
-        ...(getConfig().showAd ? {} : { token: agent.token }),
+        ...(cfg.showAd ? {} : { token: agent.token }),
         capabilities: agent.capabilities,
         skills: agent.skills,
         emoji: (agent as any).emoji || "🤖",
@@ -954,41 +964,32 @@ export function createHttpServer() {
 
   // Settings API - Python parity
   fastify.get("/api/settings", async () => getConfigDict());
+
+  fastify.get("/api/settings/manifest", async () => getSettingsManifest());
   
   fastify.put("/api/settings", async (request, reply) => {
     const body = request.body as Record<string, unknown>;
     const adminToken = request.headers["x-admin-token"] as string | undefined;
+    const cfg = getConfig();
     
-    // Validate admin token if ADMIN_TOKEN is configured
-    if (ADMIN_TOKEN && adminToken !== ADMIN_TOKEN) {
+    if (cfg.adminToken && adminToken !== cfg.adminToken) {
       reply.code(401);
       return { detail: "Invalid admin token" };
     }
-    
-    // Allowed settings to update (match Python SettingsUpdate model)
-    const allowedKeys = [
-      "HOST", "PORT", 
-      "AGENT_HEARTBEAT_TIMEOUT", 
-      "MSG_WAIT_TIMEOUT", 
-      "MSG_WAIT_MIN_TIMEOUT_MS",
-      "ENFORCE_MSG_WAIT_MIN_TIMEOUT",
-      "ENABLE_HANDOFF_TARGET",
-      "ENABLE_STOP_REASON", 
-      "ENABLE_PRIORITY",
-      "SHOW_AD"
-    ];
-    
-    // Filter to only allowed keys with non-null values
-    const updateData: Record<string, unknown> = {};
-    for (const key of allowedKeys) {
-      if (key in body && body[key] !== undefined && body[key] !== null) {
-        updateData[key] = body[key];
+
+    try {
+      if (Object.keys(body).length > 0) {
+        saveConfigDict(body);
       }
-    }
-    
-    // Save to config file (matches Python save_config_dict)
-    if (Object.keys(updateData).length > 0) {
-      saveConfigDict(updateData);
+    } catch (error) {
+      if (error instanceof ConfigValidationError) {
+        reply.code(400);
+        return {
+          detail: "Invalid settings payload",
+          errors: error.errors,
+        };
+      }
+      throw error;
     }
     
     return { 
@@ -1533,7 +1534,6 @@ async function setThreadStatus(request: FastifyRequest, reply: FastifyReply, sta
 export async function startHttpServer() {
   const config = getConfig();
 
-  // SEC-05: Fail-fast — refuse to start if non-localhost deployment without ADMIN_TOKEN
   if (isNonLocalhostDeployment(config) && !config.adminToken) {
     console.error(
       "[SEC-05] FATAL: Server is configured for non-localhost (HOST != 127.0.0.1 or SHOW_AD=true) " +

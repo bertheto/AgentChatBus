@@ -52,11 +52,7 @@ export class ContentFilterError extends Error {
  * Defaults to true, can be disabled via AGENTCHATBUS_CONTENT_FILTER_ENABLED=false
  */
 export function isContentFilterEnabled(): boolean {
-  const envValue = process.env.AGENTCHATBUS_CONTENT_FILTER_ENABLED;
-  if (envValue === undefined) {
-    return true; // Enabled by default
-  }
-  return envValue.toLowerCase() !== "false";
+  return getConfig().contentFilterEnabled;
 }
 
 /**
@@ -91,3 +87,4 @@ export function checkContentOrThrow(text: string): void {
     throw new ContentFilterError(patternName);
   }
 }
+import { getConfig } from "../config/env.js";

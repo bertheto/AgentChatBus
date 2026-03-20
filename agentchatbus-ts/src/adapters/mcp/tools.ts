@@ -282,7 +282,7 @@ const connectionAgents = new Map<string, { agentId: string; token: string }>();
 
 function getMsgWaitUploadsRoots(): string[] {
   const cwd = process.cwd();
-  const fromEnv = process.env.AGENTCHATBUS_UPLOADS_DIR;
+  const fromEnv = getConfig().uploadsDir;
   const candidates = [
     fromEnv,
     path.join(cwd, "src", "static", "uploads"),

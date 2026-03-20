@@ -176,28 +176,197 @@
     }
   }
 
+  let _settingsManifest = null;
+
+  function _escapeHtml(value) {
+    return String(value ?? "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#39;");
+  }
+
+  function _diagnosticsToolsCardHtml() {
+    return `
+      <div class="settings-card diag-card">
+        <div class="diag-subtitle" style="margin-bottom: 12px; font-size: 13px; color: var(--text-2);">
+          Run a self-test to verify Database, MCP Tools, and Agent connectivity.
+        </div>
+        <button class="btn-primary diag-run-btn" id="btn-run-diagnostics" onclick="window.runDiagnostics(this)" style="width: 100%; margin-bottom: 12px;">Run Diagnostics <span id="diag-btn-emoji"></span></button>
+        <div id="diagnostics-results" class="diag-terminal" style="display: none; background: #0c0c0c; color: #00ff00; font-family: monospace; padding: 12px; border-radius: 6px; font-size: 12px; white-space: pre-wrap; line-height: 1.5;"></div>
+        <button class="btn-secondary diag-copy-btn" id="btn-copy-diagnostics" onclick="window.copyDiagnosticsReport(this)" style="width: 100%; display: none; margin-top: 12px;">Copy Diagnostic Report</button>
+      </div>
+    `;
+  }
+
+  function _renderField(field) {
+    const descHtml = field.description
+      ? `<div class="settings-field-description">${_escapeHtml(field.description)}</div>`
+      : "";
+    const restartHtml = field.restart_required
+      ? `<div class="settings-field-note">Requires restart</div>`
+      : "";
+    const disabledAttr = field.editable ? "" : " disabled";
+    const inputId = _escapeHtml(field.input_id);
+    const label = _escapeHtml(field.label);
+
+    if (field.type === "boolean") {
+      return `
+        <div class="settings-field-container" style="display:flex;flex-direction:column;gap:4px;margin-bottom:8px;">
+          <div class="settings-field settings-field-row" style="margin-bottom:0;">
+            <span style="font-size:13px;color:var(--text-1);font-weight:500;">${label}</span>
+            <label class="toggle-switch" for="${inputId}">
+              <input id="${inputId}" type="checkbox"${field.value ? " checked" : ""}${disabledAttr} />
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          ${descHtml}
+          ${restartHtml}
+        </div>`;
+    }
+
+    if (field.type === "string[]") {
+      const listValue = Array.isArray(field.value) ? field.value.join(", ") : "";
+      return `
+        <div class="settings-field" style="margin-bottom:8px;">
+          <label for="${inputId}">${label}</label>
+          <textarea id="${inputId}" rows="3"${disabledAttr}>${_escapeHtml(listValue)}</textarea>
+          ${descHtml}
+          ${restartHtml}
+        </div>`;
+    }
+
+    if (field.type === "enum") {
+      const options = Array.isArray(field.options) ? field.options : [];
+      const currentValue = String(field.value ?? "");
+      const optionHtml = options.map((option) => `
+        <option value="${_escapeHtml(option.value)}"${option.value === currentValue ? " selected" : ""}>${_escapeHtml(option.label)}</option>
+      `).join("");
+      return `
+        <div class="settings-field" style="margin-bottom:8px;">
+          <label for="${inputId}">${label}</label>
+          <select id="${inputId}"${disabledAttr}>${optionHtml}</select>
+          ${descHtml}
+          ${restartHtml}
+        </div>`;
+    }
+
+    const inputType = field.type === "integer" || field.type === "number" ? "number" : "text";
+    const minAttr = field.min !== undefined ? ` min="${field.min}"` : "";
+    const maxAttr = field.max !== undefined ? ` max="${field.max}"` : "";
+    const stepAttr = field.step !== undefined ? ` step="${field.step}"` : "";
+    const rawValue = field.value === undefined || field.value === null ? "" : String(field.value);
+
+    return `
+      <div class="settings-field" style="margin-bottom:8px;">
+        <label for="${inputId}">${label}</label>
+        <input id="${inputId}" type="${inputType}" value="${_escapeHtml(rawValue)}"${minAttr}${maxAttr}${stepAttr}${disabledAttr} />
+        ${descHtml}
+        ${restartHtml}
+      </div>`;
+  }
+
+  function _renderSectionPane(section) {
+    if (section.id === "ui") {
+      const html = window.AcbModalShell?.renderUiPreferencesHtml
+        ? window.AcbModalShell.renderUiPreferencesHtml()
+        : "";
+      return `
+        <div id="pane-ui" class="settings-tab-pane">
+          <div class="settings-section-title">PREFERENCES</div>
+          <div class="settings-card">${html}</div>
+        </div>`;
+    }
+
+    const fieldsHtml = (section.fields || []).map(_renderField).join("");
+    const diagnosticsHtml = section.id === "diagnostics" ? _diagnosticsToolsCardHtml() : "";
+
+    return `
+      <div id="pane-${_escapeHtml(section.id)}" class="settings-tab-pane${section.active ? " active" : ""}">
+        <div class="settings-section-title">${_escapeHtml(String(section.title || "").toUpperCase())}</div>
+        ${fieldsHtml ? `<div class="settings-card">${fieldsHtml}</div>` : ""}
+        ${diagnosticsHtml}
+      </div>`;
+  }
+
+  function _buildSettingsSections(manifest) {
+    const serverSections = Array.isArray(manifest?.sections) ? manifest.sections : [];
+    const diagnosticsSection = serverSections.find((section) => section.id === "diagnostics") || {
+      id: "diagnostics",
+      nav_label: "Diagnostics",
+      title: "Runtime Configuration",
+      fields: [],
+      order: 999,
+    };
+    const visibleServerSections = serverSections
+      .filter((section) => section.id !== "diagnostics")
+      .sort((left, right) => (left.order || 0) - (right.order || 0));
+
+    return [
+      ...visibleServerSections,
+      { id: "ui", nav_label: "UI", title: "Preferences", fields: [], order: 95 },
+      diagnosticsSection,
+    ];
+  }
+
+  function _renderSettingsManifest(manifest) {
+    const sidebar = document.getElementById("settings-sidebar");
+    const content = document.getElementById("settings-content");
+    if (!sidebar || !content) return;
+
+    const sections = _buildSettingsSections(manifest);
+    const activeSectionId = sections[0]?.id || "agent";
+
+    sidebar.innerHTML = sections.map((section, index) => `
+      <div id="nav-${_escapeHtml(section.id)}" class="settings-nav-item${index === 0 ? " active" : ""}" onclick="switchSettingsTab('${_escapeHtml(section.id)}')">
+        ${_escapeHtml(section.nav_label || section.title || section.id)}
+      </div>
+    `).join("") + '<div style="flex-grow: 1;"></div>';
+
+    content.innerHTML = sections
+      .map((section, index) => _renderSectionPane({ ...section, active: index === 0 }))
+      .join("");
+
+    if (window.AcbModalShell?.bindMinimapCheckbox) {
+      window.AcbModalShell.bindMinimapCheckbox();
+    } else if (window.AcbModalShell?.syncMinimapCheckbox) {
+      window.AcbModalShell.syncMinimapCheckbox();
+    }
+
+    window.switchSettingsTab(activeSectionId);
+  }
+
+  function _parseFieldValue(field) {
+    const input = document.getElementById(field.input_id);
+    if (!input) return undefined;
+
+    if (field.type === "boolean") {
+      return !!input.checked;
+    }
+    if (field.type === "integer") {
+      return parseInt(input.value, 10);
+    }
+    if (field.type === "number") {
+      return Number(input.value);
+    }
+    if (field.type === "string[]") {
+      return String(input.value || "")
+        .split(/[\n,]/g)
+        .map((item) => item.trim())
+        .filter(Boolean);
+    }
+    return input.value;
+  }
+
   async function openSettingsModal(api) {
     document.getElementById("settings-message").style.display = "none";
     setModalVisible("settings", true);
-    // UI-07: sync minimap checkbox state from localStorage
-    if (window.AcbModalShell) window.AcbModalShell.syncMinimapCheckbox();
     try {
-      const res = await api("/api/settings");
-      if (res) {
-        document.getElementById("setting-host").value = res.HOST || "0.0.0.0";
-        document.getElementById("setting-port").value = res.PORT || 39765;
-        document.getElementById("setting-heartbeat").value = res.AGENT_HEARTBEAT_TIMEOUT || 30;
-        document.getElementById("setting-wait").value = res.MSG_WAIT_TIMEOUT || 300;
-
-        if (document.getElementById("setting-handoff-target")) {
-          document.getElementById("setting-handoff-target").checked = !!res.ENABLE_HANDOFF_TARGET;
-        }
-        if (document.getElementById("setting-stop-reason")) {
-          document.getElementById("setting-stop-reason").checked = !!res.ENABLE_STOP_REASON;
-        }
-        if (document.getElementById("setting-priority")) {
-          document.getElementById("setting-priority").checked = !!res.ENABLE_PRIORITY;
-        }
+      const manifest = await api("/api/settings/manifest");
+      if (manifest) {
+        _settingsManifest = manifest;
+        _renderSettingsManifest(manifest);
       }
     } catch (err) {
       console.error(err);
@@ -210,36 +379,42 @@
   }
 
   async function submitSettings(api) {
-    const pHost = document.getElementById("setting-host").value;
-    const pPort = parseInt(document.getElementById("setting-port").value, 10);
-    const pHb = parseInt(document.getElementById("setting-heartbeat").value, 10);
-    const pWait = parseInt(document.getElementById("setting-wait").value, 10);
+    const payload = {};
+    const sections = Array.isArray(_settingsManifest?.sections) ? _settingsManifest.sections : [];
+    for (const section of sections) {
+      for (const field of Array.isArray(section.fields) ? section.fields : []) {
+        if (!field.editable) continue;
+        payload[field.key] = _parseFieldValue(field);
+      }
+    }
 
-    const pHandoffTarget = document.getElementById("setting-handoff-target") ? document.getElementById("setting-handoff-target").checked : false;
-    const pStopReason = document.getElementById("setting-stop-reason") ? document.getElementById("setting-stop-reason").checked : false;
-    const pPriority = document.getElementById("setting-priority") ? document.getElementById("setting-priority").checked : false;
+    const msg = document.getElementById("settings-message");
 
     try {
       const res = await api("/api/settings", {
         method: "PUT",
-        body: JSON.stringify({
-          HOST: pHost,
-          PORT: pPort,
-          AGENT_HEARTBEAT_TIMEOUT: pHb,
-          MSG_WAIT_TIMEOUT: pWait,
-          ENABLE_HANDOFF_TARGET: pHandoffTarget,
-          ENABLE_STOP_REASON: pStopReason,
-          ENABLE_PRIORITY: pPriority,
-        }),
+        body: JSON.stringify(payload),
       });
       if (res && res.ok) {
-        const msg = document.getElementById("settings-message");
-        msg.textContent = res.message || "Saved! Restart server to apply.";
+        msg.textContent = res.message || _settingsManifest?.save_message || "Saved! Restart server to apply.";
         msg.style.display = "block";
+        msg.style.color = "var(--green)";
         setTimeout(() => closeSettingsModal(), 2500);
+      } else if (msg) {
+        const detail = Array.isArray(res?.errors)
+          ? res.errors.join("; ")
+          : (res?.detail || "Error saving settings");
+        msg.textContent = detail;
+        msg.style.display = "block";
+        msg.style.color = "var(--red, #f05555)";
       }
     } catch (err) {
       console.error(err);
+      if (msg) {
+        msg.textContent = "Error saving settings";
+        msg.style.display = "block";
+        msg.style.color = "var(--red, #f05555)";
+      }
     }
   }
 

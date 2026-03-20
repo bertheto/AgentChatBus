@@ -227,9 +227,9 @@ export class MemoryStore {
   private readonly syncTokens = new Map<string, ReplyTokenRecord>();
   private readonly logEntries: Array<{ id: number; line: string }> = [];
   private readonly ideSessions = new Map<string, IdeSession>();
-  private readonly ideOwnerBootToken = process.env.AGENTCHATBUS_OWNER_BOOT_TOKEN || "";
-  private readonly ideOwnershipAssignable = Boolean(process.env.AGENTCHATBUS_OWNER_BOOT_TOKEN);
-  private readonly ideHeartbeatTimeoutMs = Number(process.env.AGENTCHATBUS_IDE_HEARTBEAT_TIMEOUT || "45000");
+  private readonly ideOwnerBootToken = getConfig().ownerBootToken;
+  private readonly ideOwnershipAssignable = Boolean(getConfig().ownerBootToken);
+  private readonly ideHeartbeatTimeoutMs = getConfig().ideHeartbeatTimeoutMs;
   private readonly agentHeartbeatTimeoutMs = Math.max(1, getConfig().agentHeartbeatTimeout) * 1000;
   private ideHadOwnerOnce = false;
   private readonly threadSettings = new Map<string, {
@@ -264,7 +264,17 @@ export class MemoryStore {
   private readonly persistencePath: string;
   private readonly persistenceDb: DatabaseSync;
 
-  constructor(persistencePath = process.env.AGENTCHATBUS_DB || (process.env.VITEST_WORKER_ID ? `data/bus-ts-${process.env.VITEST_WORKER_ID}.db` : "data/bus-ts.db")) {
+  constructor(
+    persistencePath = (() => {
+      const config = getConfig();
+      if (config.dbPathConfigured) {
+        return config.dbPath;
+      }
+      return process.env.VITEST_WORKER_ID
+        ? `data/bus-ts-${process.env.VITEST_WORKER_ID}.db`
+        : config.dbPath;
+    })()
+  ) {
     this.persistencePath = persistencePath;
     
     // Support in-memory database for testing
@@ -386,7 +396,7 @@ export class MemoryStore {
 
     const ideStatus = this.getIdeStatus();
     const cfg = getConfig();
-    const startupMode = process.env.AGENTCHATBUS_OWNER_BOOT_TOKEN
+    const startupMode = cfg.ownerBootToken
       ? "bundled-ts-service"
       : (ideStatus.ownership_assignable === true
         ? "external-service-extension-managed"
@@ -446,39 +456,24 @@ export class MemoryStore {
     this.ideSessions.clear();
     this.threadSettings.clear();
     this.messageEditHistory.clear();
+    this._threadEvents.clear();
     this.ideOwnerInstanceId = null;
+    this.ideHadOwnerOnce = false;
     this.logCursor = 0;
-    try {
-      // Clear relational tables
-      this.persistenceDb.exec("DELETE FROM messages");
-      this.persistenceDb.exec("DELETE FROM threads");
-      this.persistenceDb.exec("DELETE FROM reply_tokens");
-      this.persistenceDb.exec("DELETE FROM thread_settings");
-      this.persistenceDb.exec("DELETE FROM message_edits");
-      this.persistenceDb.exec("DELETE FROM reactions");
-      this.persistenceDb.exec("DELETE FROM msg_wait_refresh_requests");
-      this.persistenceDb.exec("DELETE FROM thread_wait_states");
-      this.persistenceDb.exec("DELETE FROM state_snapshots");
-      
-      // Attempt graceful close of DB if available to release file handles used in tests
-      if (typeof (this.persistenceDb as any).close === 'function') {
-        try {
-          (this.persistenceDb as any).close();
-        } catch (e) {
-          // ignore close errors during reset
-        }
-      }
-    } finally {
-      // Reinitialize persistence DB using the configured persistencePath
-      try {
-        // @ts-ignore
-        this.persistenceDb = new DatabaseSync(this.persistencePath);
-        this.initializeRelationalTables();
-        this.persistState();
-      } catch (e) {
-        // If reinitialization fails, keep internal maps cleared
-      }
-    }
+    this.persistenceDb.exec(`
+      DELETE FROM messages;
+      DELETE FROM threads;
+      DELETE FROM agents;
+      DELETE FROM reply_tokens;
+      DELETE FROM thread_settings;
+      DELETE FROM message_edits;
+      DELETE FROM reactions;
+      DELETE FROM msg_wait_refresh_requests;
+      DELETE FROM thread_wait_states;
+      DELETE FROM templates;
+      DELETE FROM state_snapshots;
+    `);
+    this.persistState();
   }
 
   createThread(
@@ -1626,8 +1621,9 @@ export class MemoryStore {
     const agent = this.getAgentById(input.author);
 
     // Rate limiting check - match Python crud.py L1232-1253
-    const rateLimitEnabled = process.env.AGENTCHATBUS_RATE_LIMIT_ENABLED !== "false";
-    const rateLimitPerMinute = parseInt(process.env.AGENTCHATBUS_RATE_LIMIT || "30", 10);
+    const runtimeConfig = getConfig();
+    const rateLimitEnabled = runtimeConfig.rateLimitEnabled;
+    const rateLimitPerMinute = runtimeConfig.rateLimitMsgPerMinute;
     
     if (rateLimitEnabled && rateLimitPerMinute > 0) {
       const windowSeconds = 60;
@@ -2332,11 +2328,12 @@ export class MemoryStore {
   }
 
   getSettings() {
+    const cfg = getConfig();
     return {
       preferred_language: "English",
-      content_filter_enabled: true,
-      heartbeat_timeout_seconds: Math.max(1, getConfig().agentHeartbeatTimeout),
-      SHOW_AD: false
+      content_filter_enabled: cfg.contentFilterEnabled,
+      heartbeat_timeout_seconds: Math.max(1, cfg.agentHeartbeatTimeout),
+      SHOW_AD: cfg.showAd
     };
   }
 
@@ -2776,7 +2773,7 @@ export class MemoryStore {
       server_time_utc: new Date().toISOString(),
       pid: process.pid,
       total_latency_ms: 0,
-      app_dir: process.env.AGENTCHATBUS_APP_DIR || process.cwd(),
+      app_dir: getConfig().appDir,
       db_path: this.persistencePath,
       uptime_seconds: uptimeSeconds,
       total_threads: totalThreads,

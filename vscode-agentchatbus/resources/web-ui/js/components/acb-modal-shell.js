@@ -1,93 +1,5 @@
 (function registerAcbModalShell() {
-  const NETWORK_FIELDS = [
-    {
-      label: "Host",
-      id: "setting-host",
-      type: "text",
-      description: "The IP address or hostname the server binds to. Use '127.0.0.1' for local-only access (secure), or '0.0.0.0' to allow agents from other machines on the network."
-    },
-    {
-      label: "Port",
-      id: "setting-port",
-      type: "number",
-      description: "The TCP network port the server listens on (Default: 39765). Ensure this port is open in your firewall if you plan to connect external agents."
-    },
-  ];
-
-  const AGENT_FIELDS = [
-    {
-      label: "Agent Heartbeat Timeout (seconds)",
-      id: "setting-heartbeat",
-      type: "number",
-      description: "Interval for checking if stdio-based agents are still alive. SSE agents (Cursor, Claude Desktop) detect disconnection instantly via the live TCP connection.",
-    },
-    {
-      label: "Default 'msg_wait' Timeout (seconds)",
-      id: "setting-wait",
-      type: "number",
-      min: 30,
-      description: "Maximum blocking duration for agent message polling. Lower values prevent network disconnects but result in more frequent, chatty retries."
-    },
-  ];
-
-  const ATTENTION_FIELDS = [
-    {
-      label: "Handoff Target Mechanism",
-      id: "setting-handoff-target",
-      type: "toggle",
-      description: "Controls whether agents can explicitly route messages to one another. Disabling this saves token output and prevents agents from over-thinking coordination."
-    },
-    {
-      label: "Stop Reason Mechanism",
-      id: "setting-stop-reason",
-      type: "toggle",
-      description: "Controls whether agents must justify ending their turn. Disabling this avoids agents wasting attention on selecting the right exit status."
-    },
-    {
-      label: "Message Priority Mechanism",
-      id: "setting-priority",
-      type: "toggle",
-      description: "Controls whether agents can mark messages as 'urgent' or 'system'. Disabling this prevents agents from hyper-fixating on message priority."
-    },
-  ];
-
   const MINIMAP_KEY = "acb-minimap-enabled";
-
-  function renderFields(fields) {
-    return fields.map((field) => {
-      const noteHtml = field.note
-        ? `<div class="settings-field-note">${field.note}</div>`
-        : "";
-      const descHtml = field.description
-        ? `<div class="settings-field-description">${field.description}</div>`
-        : "";
-
-      if (field.type === "toggle") {
-        return `
-          <div class="settings-field-container" style="display:flex;flex-direction:column;gap:4px;margin-bottom:8px;">
-            <div class="settings-field settings-field-row" style="margin-bottom:0;">
-              <span style="font-size:13px;color:var(--text-1);font-weight:500;">${field.label}</span>
-              <label class="toggle-switch" for="${field.id}">
-                <input id="${field.id}" type="checkbox" />
-                <span class="toggle-slider"></span>
-              </label>
-            </div>
-            ${descHtml}
-            ${noteHtml}
-          </div>`;
-      }
-
-      const minAttr = field.min !== undefined ? ` min="${field.min}"` : "";
-
-      return `
-        <div class="settings-field" style="margin-bottom:8px;">
-          <label>${field.label}</label>
-          <input id="${field.id}" type="${field.type}"${minAttr} />
-          ${descHtml}
-          ${noteHtml}
-        </div>`;
-    }).join("\n");
-  }
 
   function renderUiPreferences() {
     return `
@@ -102,6 +14,30 @@
         <div class="settings-field-description">Enable a scrollable anchor list of messages on the right side of the chat. Helps navigate long conversations using emojis.</div>
       </div>
     `;
+  }
+
+  function syncMinimapCheckbox() {
+    const checkbox = document.getElementById("setting-minimap");
+    if (!checkbox) return;
+    const saved = localStorage.getItem(MINIMAP_KEY);
+    checkbox.checked = saved === null ? true : saved === "true";
+  }
+
+  function bindMinimapCheckbox() {
+    const checkbox = document.getElementById("setting-minimap");
+    if (!checkbox || checkbox.dataset.bound === "true") return;
+    checkbox.dataset.bound = "true";
+
+    syncMinimapCheckbox();
+    checkbox.addEventListener("change", () => {
+      const enabled = checkbox.checked;
+      localStorage.setItem(MINIMAP_KEY, String(enabled));
+      if (window.AcbNavSidebar) {
+        window.AcbNavSidebar.setEnabled(enabled);
+      } else {
+        document.body.classList.toggle("minimap-hidden", !enabled);
+      }
+    });
   }
 
   window.switchSettingsTab = function (tabId) {
@@ -183,51 +119,8 @@
               </button>
             </div>
             <div class="settings-modal-body">
-              <div class="settings-sidebar">
-                <div id="nav-agent" class="settings-nav-item active" onclick="switchSettingsTab('agent')">Agent</div>
-                <div id="nav-attention" class="settings-nav-item" onclick="switchSettingsTab('attention')">Attention</div>
-                <div id="nav-network" class="settings-nav-item" onclick="switchSettingsTab('network')">Network</div>
-                <div id="nav-ui" class="settings-nav-item" onclick="switchSettingsTab('ui')">UI</div>
-                <div style="flex-grow: 1;"></div>
-                <div id="nav-diagnostics" class="settings-nav-item" onclick="switchSettingsTab('diagnostics')">Diagnostics</div>
-              </div>
-              <div class="settings-content">
-                <div id="pane-agent" class="settings-tab-pane active">
-                  <div class="settings-section-title">TIMEOUTS</div>
-                  <div class="settings-card">
-                    ${renderFields(AGENT_FIELDS)}
-                  </div>
-                </div>
-                <div id="pane-attention" class="settings-tab-pane">
-                  <div class="settings-section-title">ATTENTION MECHANISMS</div>
-                  <div class="settings-card">
-                    ${renderFields(ATTENTION_FIELDS)}
-                  </div>
-                </div>
-                <div id="pane-network" class="settings-tab-pane">
-                  <div class="settings-section-title">LISTENING</div>
-                  <div class="settings-card">
-                    ${renderFields(NETWORK_FIELDS)}
-                  </div>
-                </div>
-                <div id="pane-ui" class="settings-tab-pane">
-                  <div class="settings-section-title">PREFERENCES</div>
-                  <div class="settings-card">
-                    ${renderUiPreferences()}
-                  </div>
-                </div>
-                <div id="pane-diagnostics" class="settings-tab-pane">
-                  <div class="settings-section-title">SYSTEM HEALTH</div>
-                  <div class="settings-card diag-card">
-                    <div class="diag-subtitle" style="margin-bottom: 12px; font-size: 13px; color: var(--text-2);">
-                      Run a self-test to verify Database, MCP Tools, and Agent connectivity.
-                    </div>
-                    <button class="btn-primary diag-run-btn" id="btn-run-diagnostics" onclick="window.runDiagnostics(this)" style="width: 100%; margin-bottom: 12px;">Run Diagnostics <span id="diag-btn-emoji"></span></button>
-                    <div id="diagnostics-results" class="diag-terminal" style="display: none; background: #0c0c0c; color: #00ff00; font-family: monospace; padding: 12px; border-radius: 6px; font-size: 12px; white-space: pre-wrap; line-height: 1.5;"></div>
-                    <button class="btn-secondary diag-copy-btn" id="btn-copy-diagnostics" onclick="window.copyDiagnosticsReport(this)" style="width: 100%; display: none; margin-top: 12px;">Copy Diagnostic Report</button>
-                  </div>
-                </div>
-              </div>
+              <div class="settings-sidebar" id="settings-sidebar"></div>
+              <div class="settings-content" id="settings-content"></div>
             </div>
             <div class="settings-modal-footer">
               <div id="settings-message" style="font-size:13px;color:var(--green);display:none;"></div>
@@ -284,8 +177,6 @@
           </div>
         </div>`;
 
-      // Attach minimap toggle listener after DOM is built
-      this._attachMinimapToggle();
       // UI-14: enable Create button only when topic is non-empty
       this._attachTopicGuard();
       // Add intervention example tooltip
@@ -307,23 +198,7 @@
     }
 
     _attachMinimapToggle() {
-      const checkbox = this.querySelector("#setting-minimap");
-      if (!checkbox) return;
-
-      // Read saved state (default: enabled)
-      const saved = localStorage.getItem(MINIMAP_KEY);
-      checkbox.checked = saved === null ? true : saved === "true";
-
-      // Apply immediately on change (no restart needed)
-      checkbox.addEventListener("change", () => {
-        const enabled = checkbox.checked;
-        localStorage.setItem(MINIMAP_KEY, String(enabled));
-        if (window.AcbNavSidebar) {
-          window.AcbNavSidebar.setEnabled(enabled);
-        } else {
-          document.body.classList.toggle("minimap-hidden", !enabled);
-        }
-      });
+      bindMinimapCheckbox();
     }
 
     _attachInterventionTooltips() {
@@ -416,14 +291,10 @@
 
   }
 
-  // Expose helper so shared-modals.js openSettingsModal can sync the checkbox state
   window.AcbModalShell = {
-    syncMinimapCheckbox() {
-      const checkbox = document.getElementById("setting-minimap");
-      if (!checkbox) return;
-      const saved = localStorage.getItem(MINIMAP_KEY);
-      checkbox.checked = saved === null ? true : saved === "true";
-    },
+    renderUiPreferencesHtml: renderUiPreferences,
+    bindMinimapCheckbox,
+    syncMinimapCheckbox,
   };
 
   if (!customElements.get("acb-modal-shell")) {

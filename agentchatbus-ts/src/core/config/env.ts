@@ -1,347 +1,40 @@
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
-import { isIPv4 } from "node:net";
+export type {
+  AppConfig,
+  ConfigDescriptor,
+  ConfigKind,
+  ConfigScope,
+  ConfigSectionId,
+  ConfigSensitivity,
+  ConfigType,
+  SettingsManifest,
+  SettingsManifestField,
+  SettingsManifestSection,
+} from "./registry.js";
+export {
+  CONFIG_REGISTRY,
+  ConfigValidationError,
+  getConfig,
+  getConfigDescriptorByEnvVar,
+  getConfigDescriptorByKey,
+  getConfigDict,
+  getPersistedConfig,
+  getSettingsManifest,
+  getVisibleConfigDescriptors,
+  isIpAllowed,
+  parseAllowedHosts,
+  preparePersistedConfigUpdate,
+  saveConfigDict,
+} from "./registry.js";
 
-export interface AppConfig {
-  host: string;
-  port: number;
-  dbPath: string;
-  adminToken: string | null;
-  showAd: boolean;
-  allowedHosts: string[];
-  agentHeartbeatTimeout: number;
-  msgWaitTimeout: number;
-  // TS-only improvement: minimum wait timeout clamp (ms) for msg_wait blocking path.
-  // This intentionally diverges from Python parity to reduce short polling churn.
-  msgWaitMinTimeoutMs: number;
-  // TS-only improvement: when enabled, reject non-quick-return msg_wait calls
-  // whose timeout_ms is lower than msgWaitMinTimeoutMs (instead of clamping).
-  // Python backend intentionally does not implement this strict gate yet.
-  enforceMsgWaitMinTimeout: boolean;
-  replyTokenLeaseSeconds: number;
-  seqTolerance: number;
-  seqMismatchMaxMessages: number;
-  rateLimitMsgPerMinute: number;
-  threadTimeoutMinutes: number;
-  threadTimeoutSweepInterval: number;
-  reloadEnabled: boolean;
-  exposeThreadResources: boolean;
-  contentFilterEnabled: boolean;
-}
+import { getConfig } from "./registry.js";
+import type { AppConfig } from "./registry.js";
 
-/**
- * Attention mechanism feature flags (UP-17).
- * Ported from Python src/config.py and src/tools/dispatch.py
- * Controls whether handoff_target, stop_reason, and priority fields
- * are returned to agents or stripped from responses.
- */
-export const BUS_VERSION = "0.1.116";
-const DEFAULT_MSG_WAIT_MIN_TIMEOUT_MS = process.env.NODE_ENV === "test" ? "0" : "60000";
+export const BUS_VERSION = "0.1.117";
+export const ADMIN_TOKEN: string | null = getConfig().adminToken;
+export const ENABLE_HANDOFF_TARGET = getConfig().enableHandoffTarget;
+export const ENABLE_STOP_REASON = getConfig().enableStopReason;
+export const ENABLE_PRIORITY = getConfig().enablePriority;
 
-function parseBoolLike(value: unknown, defaultValue: boolean): boolean {
-  if (value === undefined || value === null) {
-    return defaultValue;
-  }
-  const normalized = String(value).trim().toLowerCase();
-  if (["1", "true", "yes"].includes(normalized)) {
-    return true;
-  }
-  if (["0", "false", "no"].includes(normalized)) {
-    return false;
-  }
-  return defaultValue;
-}
-
-function pickEnvOrPersisted(
-  envValue: string | undefined,
-  persistedValue: unknown,
-  fallback: string
-): string {
-  if (envValue !== undefined && envValue !== null && envValue !== "") {
-    return envValue;
-  }
-  if (persistedValue !== undefined && persistedValue !== null && String(persistedValue) !== "") {
-    return String(persistedValue);
-  }
-  return fallback;
-}
-
-// Admin token for settings endpoint (optional — if unset, PUT /api/settings is unprotected)
-export const ADMIN_TOKEN: string | null = process.env.AGENTCHATBUS_ADMIN_TOKEN || null;
-
-/**
- * Returns true when the server is operating in a non-localhost (public/network) mode.
- * Triggered by HOST != 127.0.0.1 or SHOW_AD=true.
- */
 export function isNonLocalhostDeployment(config: Pick<AppConfig, "host" | "showAd">): boolean {
   return config.showAd || (config.host !== "127.0.0.1" && config.host !== "::1" && config.host !== "localhost");
-}
-
-/**
- * Parse comma-separated list of allowed IPs/CIDRs from env var.
- * Supports: exact IPv4 (e.g. "1.2.3.4"), IPv4 CIDR (e.g. "10.0.0.0/8"), exact IPv6.
- * Loopback (127.0.0.1, ::1) is always implicitly allowed regardless of this list.
- */
-export function parseAllowedHosts(raw: string | undefined): string[] {
-  if (!raw || !raw.trim()) return [];
-  return raw.split(",").map(s => s.trim()).filter(Boolean);
-}
-
-/**
- * Check whether a source IP is permitted by the allowlist.
- * Supports exact match and IPv4 CIDR notation.
- * Returns true when allowedHosts is empty (feature disabled).
- */
-export function isIpAllowed(ip: string, allowedHosts: string[]): boolean {
-  if (allowedHosts.length === 0) return true;
-
-  // Normalize IPv4-mapped IPv6 addresses (e.g. ::ffff:1.2.3.4 -> 1.2.3.4)
-  const normalized = ip.startsWith("::ffff:") ? ip.slice(7) : ip;
-
-  for (const entry of allowedHosts) {
-    if (entry.includes("/")) {
-      // IPv4 CIDR matching
-      const [networkAddr, prefixLenStr] = entry.split("/");
-      const prefixLen = Number(prefixLenStr);
-      if (!isIPv4(networkAddr) || !isIPv4(normalized) || isNaN(prefixLen) || prefixLen < 0 || prefixLen > 32) {
-        continue;
-      }
-      const mask = prefixLen === 0 ? 0 : (~0 << (32 - prefixLen)) >>> 0;
-      const ipInt = ipToInt(normalized);
-      const netInt = ipToInt(networkAddr);
-      if (ipInt !== null && netInt !== null && (ipInt & mask) === (netInt & mask)) {
-        return true;
-      }
-    } else {
-      // Exact match (IPv4 or IPv6)
-      if (normalized === entry || ip === entry) return true;
-    }
-  }
-  return false;
-}
-
-function ipToInt(ip: string): number | null {
-  const parts = ip.split(".");
-  if (parts.length !== 4) return null;
-  const nums = parts.map(Number);
-  if (nums.some(n => isNaN(n) || n < 0 || n > 255)) return null;
-  return ((nums[0] << 24) | (nums[1] << 16) | (nums[2] << 8) | nums[3]) >>> 0;
-}
-
-function getAppDir(): string {
-  const configured = process.env.AGENTCHATBUS_APP_DIR;
-  if (configured && configured.trim().length > 0) {
-    return resolve(configured);
-  }
-  return join(process.cwd(), "data");
-}
-
-// Config file path for packaged extension/runtime use.
-const CONFIG_FILE = process.env.AGENTCHATBUS_CONFIG_FILE
-  ? resolve(process.env.AGENTCHATBUS_CONFIG_FILE)
-  : join(getAppDir(), "config.json");
-
-const persistedConfigForFlags = (() => {
-  try {
-    if (existsSync(CONFIG_FILE)) {
-      const content = readFileSync(CONFIG_FILE, "utf-8");
-      return JSON.parse(content) as Record<string, unknown>;
-    }
-  } catch { }
-  return {} as Record<string, unknown>;
-})();
-
-export const ENABLE_HANDOFF_TARGET = parseBoolLike(
-  process.env.AGENTCHATBUS_ENABLE_HANDOFF_TARGET
-  ?? persistedConfigForFlags.ENABLE_HANDOFF_TARGET
-  ?? "false",
-  false
-);
-export const ENABLE_STOP_REASON = parseBoolLike(
-  process.env.AGENTCHATBUS_ENABLE_STOP_REASON
-  ?? persistedConfigForFlags.ENABLE_STOP_REASON
-  ?? "false",
-  false
-);
-export const ENABLE_PRIORITY = parseBoolLike(
-  process.env.AGENTCHATBUS_ENABLE_PRIORITY
-  ?? persistedConfigForFlags.ENABLE_PRIORITY
-  ?? "false",
-  false
-);
-
-/**
- * Get persisted config from data/config.json (matches Python get_config_dict)
- */
-function getPersistedConfig(): Record<string, unknown> {
-  try {
-    if (existsSync(CONFIG_FILE)) {
-      const content = readFileSync(CONFIG_FILE, "utf-8");
-      return JSON.parse(content);
-    }
-  } catch {
-    // Ignore read errors
-  }
-  return {};
-}
-
-/**
- * Save config to data/config.json (matches Python save_config_dict)
- * Only saves non-transient flags (SHOW_AD is intentionally excluded)
- */
-export function saveConfigDict(newData: Record<string, unknown>): void {
-  const current = getPersistedConfig();
-  const merged = { ...current, ...newData };
-
-  // Prevent saving transient/show-only flags by default
-  if ("SHOW_AD" in merged) {
-    delete merged.SHOW_AD;
-  }
-
-  try {
-    mkdirSync(dirname(CONFIG_FILE), { recursive: true });
-    writeFileSync(CONFIG_FILE, JSON.stringify(merged, null, 2), "utf-8");
-  } catch {
-    // Ignore write errors
-  }
-}
-
-/**
- * Get config dict for API response (matches Python get_config_dict)
- */
-export function getConfigDict(): Record<string, unknown> {
-  const persisted = getPersistedConfig();
-  return {
-    HOST: pickEnvOrPersisted(process.env.AGENTCHATBUS_HOST, persisted.HOST, "127.0.0.1"),
-    PORT: Number(pickEnvOrPersisted(process.env.AGENTCHATBUS_PORT, persisted.PORT, "39765")),
-    AGENT_HEARTBEAT_TIMEOUT: Number(
-      pickEnvOrPersisted(process.env.AGENTCHATBUS_HEARTBEAT_TIMEOUT, persisted.AGENT_HEARTBEAT_TIMEOUT, "60")
-    ),
-    MSG_WAIT_TIMEOUT: Number(
-      pickEnvOrPersisted(process.env.AGENTCHATBUS_WAIT_TIMEOUT, persisted.MSG_WAIT_TIMEOUT, "300")
-    ),
-    // TS-only: minimum timeout clamp for msg_wait blocking branch.
-    // Not present in Python backend config.
-    MSG_WAIT_MIN_TIMEOUT_MS: Number(
-      pickEnvOrPersisted(
-        process.env.AGENTCHATBUS_WAIT_MIN_TIMEOUT_MS,
-        persisted.MSG_WAIT_MIN_TIMEOUT_MS,
-        DEFAULT_MSG_WAIT_MIN_TIMEOUT_MS
-      )
-    ),
-    // TS-only strict mode:
-    // When true, non-quick-return waits below MSG_WAIT_MIN_TIMEOUT_MS are rejected.
-    // Python parity is intentionally not required for this enhancement.
-    ENFORCE_MSG_WAIT_MIN_TIMEOUT: parseBoolLike(
-      process.env.AGENTCHATBUS_ENFORCE_MSG_WAIT_MIN_TIMEOUT
-      ?? persisted.ENFORCE_MSG_WAIT_MIN_TIMEOUT
-      ?? "false",
-      false
-    ),
-    REPLY_TOKEN_LEASE_SECONDS: Number(
-      pickEnvOrPersisted(
-        process.env.AGENTCHATBUS_REPLY_TOKEN_LEASE_SECONDS,
-        persisted.REPLY_TOKEN_LEASE_SECONDS,
-        "3600"
-      )
-    ),
-    SEQ_TOLERANCE: Number(
-      pickEnvOrPersisted(process.env.AGENTCHATBUS_SEQ_TOLERANCE, persisted.SEQ_TOLERANCE, "0")
-    ),
-    SEQ_MISMATCH_MAX_MESSAGES: Number(
-      pickEnvOrPersisted(
-        process.env.AGENTCHATBUS_SEQ_MISMATCH_MAX_MESSAGES,
-        persisted.SEQ_MISMATCH_MAX_MESSAGES,
-        "100"
-      )
-    ),
-    RATE_LIMIT_MSG_PER_MINUTE: Number(
-      pickEnvOrPersisted(process.env.AGENTCHATBUS_RATE_LIMIT, persisted.RATE_LIMIT_MSG_PER_MINUTE, "30")
-    ),
-    EXPOSE_THREAD_RESOURCES: parseBoolLike(
-      process.env.AGENTCHATBUS_EXPOSE_THREAD_RESOURCES ?? persisted.EXPOSE_THREAD_RESOURCES ?? "false",
-      false
-    ),
-    ENABLE_HANDOFF_TARGET: parseBoolLike(
-      process.env.AGENTCHATBUS_ENABLE_HANDOFF_TARGET ?? persisted.ENABLE_HANDOFF_TARGET ?? "false",
-      false
-    ),
-    ENABLE_STOP_REASON: parseBoolLike(
-      process.env.AGENTCHATBUS_ENABLE_STOP_REASON ?? persisted.ENABLE_STOP_REASON ?? "false",
-      false
-    ),
-    ENABLE_PRIORITY: parseBoolLike(
-      process.env.AGENTCHATBUS_ENABLE_PRIORITY ?? persisted.ENABLE_PRIORITY ?? "false",
-      false
-    ),
-    SHOW_AD: parseBoolLike(process.env.AGENTCHATBUS_SHOW_AD, false),
-  };
-}
-
-export function getConfig(): AppConfig {
-  const persisted = getPersistedConfig();
-  const host = pickEnvOrPersisted(process.env.AGENTCHATBUS_HOST, persisted.HOST, "127.0.0.1");
-  const appDir = getAppDir();
-  const showAd = parseBoolLike(process.env.AGENTCHATBUS_SHOW_AD, false);
-  return {
-    host,
-    port: Number(pickEnvOrPersisted(process.env.AGENTCHATBUS_PORT, persisted.PORT, "39765")),
-    dbPath: process.env.AGENTCHATBUS_DB || join(appDir, "bus-ts.db"),
-    adminToken: ADMIN_TOKEN,
-    showAd,
-    allowedHosts: parseAllowedHosts(process.env.AGENTCHATBUS_ALLOWED_HOSTS),
-    agentHeartbeatTimeout: Number(
-      pickEnvOrPersisted(process.env.AGENTCHATBUS_HEARTBEAT_TIMEOUT, persisted.AGENT_HEARTBEAT_TIMEOUT, "60")
-    ),
-    msgWaitTimeout: Number(
-      pickEnvOrPersisted(process.env.AGENTCHATBUS_WAIT_TIMEOUT, persisted.MSG_WAIT_TIMEOUT, "300")
-    ),
-    // TS-only enhancement (non-Python parity):
-    // clamp short msg_wait timeout_ms values for blocking waits.
-    msgWaitMinTimeoutMs: Number(
-      pickEnvOrPersisted(
-        process.env.AGENTCHATBUS_WAIT_MIN_TIMEOUT_MS,
-        persisted.MSG_WAIT_MIN_TIMEOUT_MS,
-        DEFAULT_MSG_WAIT_MIN_TIMEOUT_MS
-      )
-    ),
-    // TS-only strict mode (non-Python parity by design).
-    // This remains operator-controlled. Do not hardcode it on, otherwise
-    // non-quick-return msg_wait calls will be rejected unexpectedly and tests,
-    // bundled runtime behavior, and UI toggles will drift apart.
-    enforceMsgWaitMinTimeout: parseBoolLike(
-      process.env.AGENTCHATBUS_ENFORCE_MSG_WAIT_MIN_TIMEOUT
-        ?? persisted.ENFORCE_MSG_WAIT_MIN_TIMEOUT
-        ?? "false",
-      false
-    ),
-    replyTokenLeaseSeconds: Number(
-      pickEnvOrPersisted(
-        process.env.AGENTCHATBUS_REPLY_TOKEN_LEASE_SECONDS,
-        persisted.REPLY_TOKEN_LEASE_SECONDS,
-        "3600"
-      )
-    ),
-    seqTolerance: Number(
-      pickEnvOrPersisted(process.env.AGENTCHATBUS_SEQ_TOLERANCE, persisted.SEQ_TOLERANCE, "0")
-    ),
-    seqMismatchMaxMessages: Number(
-      pickEnvOrPersisted(
-        process.env.AGENTCHATBUS_SEQ_MISMATCH_MAX_MESSAGES,
-        persisted.SEQ_MISMATCH_MAX_MESSAGES,
-        "100"
-      )
-    ),
-    rateLimitMsgPerMinute: Number(
-      pickEnvOrPersisted(process.env.AGENTCHATBUS_RATE_LIMIT, persisted.RATE_LIMIT_MSG_PER_MINUTE, "30")
-    ),
-    threadTimeoutMinutes: Number(process.env.AGENTCHATBUS_THREAD_TIMEOUT || "0"),
-    threadTimeoutSweepInterval: Number(process.env.AGENTCHATBUS_TIMEOUT_SWEEP_INTERVAL || "60"),
-    reloadEnabled: parseBoolLike(process.env.AGENTCHATBUS_RELOAD, false),
-    exposeThreadResources: parseBoolLike(
-      process.env.AGENTCHATBUS_EXPOSE_THREAD_RESOURCES ?? persisted.EXPOSE_THREAD_RESOURCES ?? "false",
-      false
-    ),
-    contentFilterEnabled: parseBoolLike(process.env.AGENTCHATBUS_CONTENT_FILTER_ENABLED ?? "true", true),
-  };
 }

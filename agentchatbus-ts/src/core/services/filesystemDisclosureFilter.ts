@@ -150,9 +150,7 @@ export function checkFilesystemDisclosure(text: string): FilesystemDisclosureRes
  * Active when AGENTCHATBUS_SHOW_AD=true (public demo mode).
  */
 export function isFilesystemDisclosureFilterActive(): boolean {
-  const showAd = process.env.AGENTCHATBUS_SHOW_AD;
-  if (!showAd) return false;
-  return ["1", "true", "yes"].includes(showAd.trim().toLowerCase());
+  return getConfig().showAd;
 }
 
 /**
@@ -185,3 +183,4 @@ export class FilesystemDisclosureError extends Error {
     this.disclosureReason = disclosureReason;
   }
 }
+import { getConfig } from "../config/env.js";

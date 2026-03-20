@@ -55,11 +55,40 @@ describe("Settings API parity with Python", () => {
       expect(body.REPLY_TOKEN_LEASE_SECONDS).toBeDefined();
       expect(body.SEQ_TOLERANCE).toBeDefined();
       expect(body.SEQ_MISMATCH_MAX_MESSAGES).toBeDefined();
+      expect(body.RATE_LIMIT_MSG_PER_MINUTE).toBeDefined();
       expect(body.EXPOSE_THREAD_RESOURCES).toBeDefined();
       expect(body.ENABLE_HANDOFF_TARGET).toBeDefined();
       expect(body.ENABLE_STOP_REASON).toBeDefined();
       expect(body.ENABLE_PRIORITY).toBeDefined();
-      expect(body.SHOW_AD).toBeDefined();
+      expect(body.CONTENT_FILTER_ENABLED).toBeDefined();
+      expect(body.RATE_LIMIT_ENABLED).toBeDefined();
+      expect(body.SHOW_AD).toBeUndefined();
+
+      await server.close();
+    });
+  });
+
+  describe("GET /api/settings/manifest", () => {
+    it("returns grouped manifest metadata without exposing hidden configs", async () => {
+      const server = createHttpServer();
+      const res = await server.inject({
+        method: "GET",
+        url: "/api/settings/manifest",
+      });
+
+      expect(res.statusCode).toBe(200);
+      const body = res.json();
+      expect(body.schema_version).toBeDefined();
+      expect(Array.isArray(body.sections)).toBe(true);
+
+      const diagnostics = body.sections.find((section: any) => section.id === "diagnostics");
+      expect(diagnostics).toBeDefined();
+      expect(diagnostics.fields.some((field: any) => field.key === "CONTENT_FILTER_ENABLED")).toBe(true);
+      expect(diagnostics.fields.some((field: any) => field.key === "PUBLIC_DEMO_MODE")).toBe(true);
+
+      const allKeys = body.sections.flatMap((section: any) => section.fields.map((field: any) => field.key));
+      expect(allKeys).not.toContain("SHOW_AD");
+      expect(allKeys).not.toContain("ADMIN_TOKEN");
 
       await server.close();
     });
@@ -73,7 +102,9 @@ describe("Settings API parity with Python", () => {
         url: "/api/settings",
         payload: {
           AGENT_HEARTBEAT_TIMEOUT: 120,
-          MSG_WAIT_TIMEOUT: 600
+          MSG_WAIT_TIMEOUT: 600,
+          REPLY_TOKEN_LEASE_SECONDS: 42,
+          EXPOSE_THREAD_RESOURCES: true,
         }
       });
 
@@ -90,6 +121,8 @@ describe("Settings API parity with Python", () => {
       const getBody = getRes.json();
       expect(getBody.AGENT_HEARTBEAT_TIMEOUT).toBe(120);
       expect(getBody.MSG_WAIT_TIMEOUT).toBe(600);
+      expect(getBody.REPLY_TOKEN_LEASE_SECONDS).toBe(42);
+      expect(getBody.EXPOSE_THREAD_RESOURCES).toBe(true);
 
       await server.close();
     });
@@ -132,6 +165,22 @@ describe("Settings API parity with Python", () => {
 
       expect(res.statusCode).toBe(200);
       expect(res.json().ok).toBe(true);
+
+      await server.close();
+    });
+
+    it("rejects invalid editable payloads with validation details", async () => {
+      const server = createHttpServer();
+      const res = await server.inject({
+        method: "PUT",
+        url: "/api/settings",
+        payload: {
+          PORT: 70000,
+        }
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json().detail).toContain("Invalid settings payload");
 
       await server.close();
     });

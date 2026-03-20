@@ -242,8 +242,14 @@
 
     async function syncShowAdPolicy() {
       try {
-        const settings = await api('/api/settings');
-        applyShowAdPolicy(!!settings?.SHOW_AD);
+        const manifest = await api('/api/settings/manifest');
+        const diagnostics = Array.isArray(manifest?.sections)
+          ? manifest.sections.find((section) => section.id === 'diagnostics')
+          : null;
+        const publicDemoField = Array.isArray(diagnostics?.fields)
+          ? diagnostics.fields.find((field) => field.key === 'PUBLIC_DEMO_MODE')
+          : null;
+        applyShowAdPolicy(!!publicDemoField?.value);
       } catch {
         applyShowAdPolicy(false);
       }
