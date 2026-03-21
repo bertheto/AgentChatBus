@@ -330,14 +330,25 @@ function looksLikeCodexPromptLine(screenText: string): boolean {
     .some((line) => /^\s*[>›]\s/.test(line));
 }
 
-function getCodexPromptLineText(screenText: string): string | undefined {
-  const line = String(screenText || "")
+type CodexPromptLine = {
+  index: number;
+  text: string;
+};
+
+function getCodexPromptLines(screenText: string): CodexPromptLine[] {
+  return String(screenText || "")
     .split("\n")
-    .find((value) => /^\s*[>›]\s/.test(value));
-  if (!line) {
-    return undefined;
-  }
-  return line.replace(/^\s*[>›]\s*/, "").trim();
+    .map((line, index) => ({ index, line }))
+    .filter(({ line }) => /^\s*[>›]\s/.test(line))
+    .map(({ index, line }) => ({
+      index,
+      text: line.replace(/^\s*[>›]\s*/, "").trim(),
+    }));
+}
+
+function getCodexPromptLineText(screenText: string): string | undefined {
+  const promptLines = getCodexPromptLines(screenText);
+  return promptLines[promptLines.length - 1]?.text;
 }
 
 function normalizePromptMatchText(input: string): string {
@@ -394,6 +405,11 @@ function looksLikeCodexWorkingScreen(screen: CliSessionScreenSnapshot): boolean 
   return normalizedText.includes("working") && normalizedText.includes("esc to interrupt");
 }
 
+function isCodexWorkingLine(line: string): boolean {
+  const normalizedText = normalizePromptMatchText(line);
+  return normalizedText.includes("working") && normalizedText.includes("esc to interrupt");
+}
+
 function isCodexFooterLine(line: string): boolean {
   const normalized = normalizePromptMatchText(line);
   return (
@@ -419,6 +435,10 @@ function shouldTreatInputAsManualOverride(text: string): boolean {
 
 function looksLikeCodexIdlePrompt(screen: CliSessionScreenSnapshot): boolean {
   return looksLikeCodexReadyScreen(screen) && looksLikeCodexPromptLine(screen.text);
+}
+
+function looksLikeCodexReplyIdleScreen(screen: CliSessionScreenSnapshot): boolean {
+  return !looksLikeCodexWorkingScreen(screen) && looksLikeCodexPromptLine(screen.text);
 }
 
 function isCodexPromptShowingText(screen: CliSessionScreenSnapshot, prompt: string): boolean {
@@ -482,6 +502,139 @@ function extractCodexReplyFromTranscript(rawOutput: string, prompt: string): str
     return undefined;
   }
   return clipText(reply, 2400);
+}
+
+function findLastCodexReplyBlockStart(lines: string[], endExclusive: number): number {
+  let index = Math.min(lines.length, endExclusive) - 1;
+
+  while (index >= 0) {
+    const trimmed = lines[index]?.trim() || "";
+    if (!trimmed || isCodexFooterLine(trimmed)) {
+      index -= 1;
+      continue;
+    }
+    break;
+  }
+
+  if (index < 0) {
+    return endExclusive;
+  }
+
+  let blankRun = 0;
+  for (; index >= 0; index -= 1) {
+    const line = lines[index] || "";
+    const trimmed = line.trim();
+    if (!trimmed) {
+      blankRun += 1;
+      if (blankRun >= 2) {
+        return index + 1;
+      }
+      continue;
+    }
+    blankRun = 0;
+    if (/^\s*[>›]\s/.test(line) || isCodexWorkingLine(trimmed)) {
+      return index + 1;
+    }
+    if (isCodexFooterLine(trimmed)) {
+      return index + 1;
+    }
+  }
+
+  return 0;
+}
+
+function extractCodexReplyFromScreen(screen: CliSessionScreenSnapshot, prompt: string): string | undefined {
+  const normalizedPrompt = normalizePromptMatchText(prompt);
+  if (!normalizedPrompt) {
+    return undefined;
+  }
+
+  const lines = String(screen.text || "")
+    .split("\n")
+    .map((line) => line.trimEnd());
+
+  const promptLines = getCodexPromptLines(screen.text);
+  const activePrompt = promptLines[promptLines.length - 1];
+  const endExclusive = activePrompt ? activePrompt.index : lines.length;
+  if (endExclusive <= 0) {
+    return undefined;
+  }
+
+  let startIndex = -1;
+  for (const promptLine of promptLines) {
+    if (promptLine.index >= endExclusive) {
+      break;
+    }
+    if (normalizePromptMatchText(promptLine.text).includes(normalizedPrompt)) {
+      startIndex = promptLine.index + 1;
+    }
+  }
+
+  if (startIndex < 0) {
+    for (let index = endExclusive - 1; index >= 0; index -= 1) {
+      if (isCodexWorkingLine(lines[index] || "")) {
+        startIndex = index + 1;
+        break;
+      }
+    }
+  }
+
+  if (startIndex < 0) {
+    startIndex = findLastCodexReplyBlockStart(lines, endExclusive);
+  }
+
+  if (startIndex >= endExclusive) {
+    return undefined;
+  }
+
+  const replyLines: string[] = [];
+  for (let index = startIndex; index < endExclusive; index += 1) {
+    const line = lines[index];
+    const trimmed = line.trim();
+    if (!trimmed) {
+      if (replyLines.length > 0) {
+        replyLines.push("");
+      }
+      continue;
+    }
+    if (isCodexFooterLine(trimmed)) {
+      continue;
+    }
+    if (/^\s*[>›]\s/.test(line)) {
+      break;
+    }
+    if (isCodexWorkingLine(trimmed)) {
+      continue;
+    }
+    replyLines.push(trimmed);
+  }
+
+  const reply = replyLines.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+  if (!reply) {
+    return undefined;
+  }
+  return clipText(reply, 2400);
+}
+
+function stripTrailingPlaceholderLine(reply: string | undefined, screen: CliSessionScreenSnapshot): string | undefined {
+  const value = String(reply || "").trim();
+  if (!value) {
+    return undefined;
+  }
+  const currentPromptText = getCodexPromptLineText(screen.text);
+  if (!currentPromptText) {
+    return value;
+  }
+  const lines = value.split("\n");
+  const lastLine = lines[lines.length - 1]?.trim();
+  if (normalizePromptMatchText(lastLine) === normalizePromptMatchText(currentPromptText)) {
+    const trimmed = lines.slice(0, -1).join("\n").trim();
+    return trimmed || undefined;
+  }
+  if (normalizePromptMatchText(value) === normalizePromptMatchText(currentPromptText)) {
+    return undefined;
+  }
+  return value;
 }
 
 function normalizeWorkspacePath(explicitPath?: string): string {
@@ -1222,6 +1375,20 @@ export class CliSessionManager {
         await runtime.screenState.writeQueue.catch(() => {
           // Preserve the session result even if the headless parser failed.
         });
+        this.finalizeReplyCaptureIfIdle(runtime, runtime.screenState.latest);
+      }
+      if (runtime.replyCapture) {
+        if (runtime.replyCapture.excerpt) {
+          this.updateReplyCaptureState(runtime, "completed", {
+            excerpt: runtime.replyCapture.excerpt,
+            clearTimer: true,
+          });
+        } else if (!runtime.replyCapture.error) {
+          this.updateReplyCaptureState(runtime, "error", {
+            error: `CLI session ended before a Codex reply was captured for '${runtime.replyCapture.prompt}'.`,
+            clearTimer: true,
+          });
+        }
       }
 
       runtime.snapshot.pid = undefined;
@@ -1496,18 +1663,21 @@ export class CliSessionManager {
 
   private finalizeReplyCaptureIfIdle(runtime: CliSessionRuntime, screen: CliSessionScreenSnapshot): void {
     const capture = runtime.replyCapture;
-    if (!capture || !capture.excerpt) {
+    if (!capture) {
       return;
     }
-    if (looksLikeCodexWorkingScreen(screen)) {
+    if (!looksLikeCodexReplyIdleScreen(screen)) {
       return;
     }
-    if (looksLikeCodexIdlePrompt(screen)) {
-      this.updateReplyCaptureState(runtime, "completed", {
-        excerpt: capture.excerpt,
-        clearTimer: true,
-      });
+    const screenExcerpt = extractCodexReplyFromScreen(screen, capture.prompt);
+    const finalExcerpt = stripTrailingPlaceholderLine(screenExcerpt || capture.excerpt, screen);
+    if (!finalExcerpt) {
+      return;
     }
+    this.updateReplyCaptureState(runtime, "completed", {
+      excerpt: finalExcerpt,
+      clearTimer: true,
+    });
   }
 
   private scheduleCodexPromptSubmit(runtime: CliSessionRuntime, delayMs: number): void {

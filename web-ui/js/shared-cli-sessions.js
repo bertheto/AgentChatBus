@@ -295,6 +295,13 @@
   }
 
   function renderSessionSummary(session) {
+    if (session?.reply_capture_error) {
+      return `<div class="cli-session-strip__body cli-session-strip__body--error">Reply capture error: ${escapeHtml(session.reply_capture_error)}</div>`;
+    }
+    if (session?.reply_capture_excerpt) {
+      const state = session?.reply_capture_state ? ` (${escapeHtml(session.reply_capture_state)})` : "";
+      return `<div class="cli-session-strip__body"><strong>Captured reply${state}:</strong><br>${escapeHtml(session.reply_capture_excerpt).replaceAll("\n", "<br>")}</div>`;
+    }
     if (session?.last_result) {
       return `<div class="cli-session-strip__body">${escapeHtml(session.last_result)}</div>`;
     }
@@ -319,6 +326,9 @@
     }
     if (session.automation_state) {
       metaBits.push(`auto ${escapeHtml(session.automation_state)}`);
+    }
+    if (session.reply_capture_state) {
+      metaBits.push(`reply ${escapeHtml(session.reply_capture_state)}`);
     }
     if (session.external_session_id) {
       metaBits.push(`external ${escapeHtml(session.external_session_id)}`);

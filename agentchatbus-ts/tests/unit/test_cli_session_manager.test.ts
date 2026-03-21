@@ -157,6 +157,8 @@ describe("CliSessionManager interactive sessions", () => {
     expect(finalSession?.automation_state).toBe("sent_initial_prompt_enter");
     expect(finalSession?.last_result).toBe("I am Codex");
     expect(finalSession?.screen_excerpt).toContain("I am Codex");
+    expect(finalSession?.reply_capture_state).toBe("completed");
+    expect(finalSession?.reply_capture_excerpt).toContain("I am Codex");
   });
 
   it("sends the initial prompt when Codex opens directly into its main CLI screen", async () => {
@@ -222,6 +224,8 @@ describe("CliSessionManager interactive sessions", () => {
     expect(finalSession?.automation_state).toBe("sent_initial_prompt_enter");
     expect(finalSession?.last_result).toBe("I am Codex");
     expect(finalSession?.screen_excerpt).toContain("Use /skills");
+    expect(finalSession?.reply_capture_state).toBe("completed");
+    expect(finalSession?.reply_capture_excerpt).toContain("I am Codex");
   });
 
   it("does not mark control-sequence input as a manual override", async () => {
@@ -342,6 +346,146 @@ describe("CliSessionManager interactive sessions", () => {
 
     expect(writes.filter((value) => value === "\r")).toHaveLength(1);
     expect(manager.getSession(session.id)?.last_result).toBe("I am Codex");
+    expect(manager.getSession(session.id)?.reply_capture_state).toBe("completed");
+  });
+
+  it("captures the visible Codex reply instead of the bottom placeholder prompt", async () => {
+    const writes: string[] = [];
+    let resolveRun: ((value: { exitCode: number; stdout: string; stderr: string; resultText: string }) => void) | null =
+      null;
+
+    const interactiveAdapter = {
+      adapterId: "codex",
+      mode: "interactive",
+      supportsInput: true,
+      supportsRestart: true,
+      supportsResize: true,
+      requiresPrompt: false,
+      shell: "powershell",
+      run: (_input: unknown, hooks: any) => {
+        hooks.onProcessStart(4746);
+        hooks.onControls({
+          write: (text: string) => {
+            writes.push(text);
+            if (text === "who are you") {
+              hooks.onOutput(
+                "stdout",
+                "\u001b[2J\u001b[HOpenAI Codex (v0.116.0)\r\nmodel: gpt-5.4 xhigh   /model to change\r\n\r\n› who are you\r\n100 left  gpt-5.4 xhigh\r\n"
+              );
+              return;
+            }
+            if (text === "\r" && writes.includes("who are you")) {
+              hooks.onOutput("stdout", "\u001b[2J\u001b[HWorking (3s • esc to interrupt)\r\n");
+              setTimeout(() => {
+                hooks.onOutput(
+                  "stdout",
+                  "\u001b[2J\u001b[H• I'm Codex.\r\n• I help with code and the terminal.\r\n\r\n› Summarize recent commits\r\n100 left  gpt-5.4 xhigh\r\n"
+                );
+              }, 20);
+            }
+          },
+          resize: () => {},
+          kill: () => {},
+        });
+        hooks.onOutput(
+          "stdout",
+          "OpenAI Codex (v0.116.0)\r\nmodel: gpt-5.4 xhigh   /model to change\r\ndirectory: ~\\Documents\\AgentChatBus\r\n\r\n› \r\n100 left  gpt-5.4 xhigh\r\n"
+        );
+        return new Promise((resolve) => {
+          resolveRun = resolve;
+        });
+      },
+    } as any;
+
+    const manager = new CliSessionManager([interactiveAdapter]);
+    const session = manager.createSession({
+      threadId: "thread-5b",
+      adapter: "codex",
+      mode: "interactive",
+      prompt: "who are you",
+      requestedByAgentId: "agent-5b",
+      cols: 120,
+      rows: 30,
+    });
+
+    await waitFor(() => manager.getSession(session.id)?.reply_capture_state === "completed", 4000);
+
+    const liveSession = manager.getSession(session.id);
+    expect(liveSession?.state).toBe("running");
+    expect(liveSession?.reply_capture_excerpt).toContain("I'm Codex");
+    expect(liveSession?.reply_capture_excerpt).toContain("I help with code");
+    expect(liveSession?.reply_capture_excerpt).not.toContain("Summarize recent commits");
+
+    resolveRun?.({
+      exitCode: 0,
+      stdout: "Working (3s • esc to interrupt)\r\n• I'm Codex.\r\n• I help with code and the terminal.\r\n",
+      stderr: "",
+      resultText: "I'm Codex.",
+    });
+
+    await waitFor(() => manager.getSession(session.id)?.state === "completed");
+    expect(manager.getSession(session.id)?.reply_capture_excerpt).not.toContain("Summarize recent commits");
+  });
+
+  it("records a reply capture error when the session ends before any reply is captured", async () => {
+    const writes: string[] = [];
+    let resolveRun: ((value: { exitCode: number; stdout: string; stderr: string; resultText: string }) => void) | null =
+      null;
+
+    const interactiveAdapter = {
+      adapterId: "codex",
+      mode: "interactive",
+      supportsInput: true,
+      supportsRestart: true,
+      supportsResize: true,
+      requiresPrompt: false,
+      shell: "powershell",
+      run: (_input: unknown, hooks: any) => {
+        hooks.onProcessStart(4747);
+        hooks.onControls({
+          write: (text: string) => {
+            writes.push(text);
+            if (text === "who are you") {
+              hooks.onOutput("stdout", "\r> who are you");
+              return;
+            }
+            if (text === "\r") {
+              resolveRun?.({
+                exitCode: 1,
+                stdout: "no reply captured\r\n",
+                stderr: "session failed",
+                resultText: "session failed",
+              });
+            }
+          },
+          resize: () => {},
+          kill: () => {},
+        });
+        hooks.onOutput(
+          "stdout",
+          "OpenAI Codex (v0.116.0)\r\nmodel: gpt-5.4 xhigh   /model to change\r\ndirectory: ~\\Documents\\AgentChatBus\r\n\r\n> \r\n"
+        );
+        return new Promise((resolve) => {
+          resolveRun = resolve;
+        });
+      },
+    } as any;
+
+    const manager = new CliSessionManager([interactiveAdapter]);
+    const session = manager.createSession({
+      threadId: "thread-6",
+      adapter: "codex",
+      mode: "interactive",
+      prompt: "who are you",
+      requestedByAgentId: "agent-6",
+      cols: 120,
+      rows: 30,
+    });
+
+    await waitFor(() => manager.getSession(session.id)?.state === "failed");
+    expect(manager.getSession(session.id)?.reply_capture_state).toBe("error");
+    expect(manager.getSession(session.id)?.reply_capture_error).toContain("ended before a Codex reply was captured");
+    expect(writes).toContain("who are you");
   });
 
   it("keeps prompt validation for adapters that require it", () => {
