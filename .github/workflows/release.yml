@@ -64,24 +64,19 @@ jobs:
         working-directory: vscode-agentchatbus
         run: npm ci
 
-      - name: Build distributions
-        run: |
-          python -m pip install --upgrade pip build wheel setuptools
-          python -m build --sdist --wheel --outdir dist
-          ls -la dist
-
       - name: Build VS Code extension VSIX
         working-directory: vscode-agentchatbus
         run: |
+          mkdir -p dist
           npm run compile
           npx vsce package --out "dist/agentchatbus-${EXTENSION_VERSION}.vsix"
           ls -la dist
 
-      - name: Assemble combined release bundle
+      - name: Assemble standalone Node server tar.gz
         run: |
           node ./scripts/create-release-bundle.mjs
           cd dist/release-bundle
-          zip -r "../AgentChatBus-${EXTENSION_VERSION}-bundle.zip" "AgentChatBus-${EXTENSION_VERSION}-bundle"
+          tar -czf "../AgentChatBus-standalone-node-server-${EXTENSION_VERSION}.tar.gz" "AgentChatBus-standalone-node-server-${EXTENSION_VERSION}"
           cd ..
           ls -la
 
@@ -91,17 +86,13 @@ jobs:
           name: release-assets
           if-no-files-found: error
           path: |
-            dist/*.whl
-            dist/*.tar.gz
-            dist/*-bundle.zip
+            dist/*-standalone-node-server-*.tar.gz
             vscode-agentchatbus/dist/*.vsix
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/*.whl
-            dist/*.tar.gz
-            dist/*-bundle.zip
+            dist/*-standalone-node-server-*.tar.gz
             vscode-agentchatbus/dist/*.vsix
           generate_release_notes: true
