@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import '../../../src/static/js/components/acb-agent-status-item.js';
+import '../../../web-ui/js/components/acb-agent-status-item.js';
 
 describe('acb-agent-status-item', () => {
   let element;
@@ -13,7 +13,7 @@ describe('acb-agent-status-item', () => {
     document.body.innerHTML = '';
   });
 
-  it('should display agent status indicator', () => {
+  it('renders avatar, status, and default SSE transport indicator', () => {
     const testData = {
       avatarEmoji: '😊',
       stateEmoji: '🟢',
@@ -28,10 +28,11 @@ describe('acb-agent-status-item', () => {
 
     expect(element.innerHTML).toContain('😊');
     expect(element.innerHTML).toContain('🟢');
-    expect(element.innerHTML).toContain('online');
+    expect(element.innerHTML).toContain('🌟');
+    expect(element.dataset.state).toBe('online');
   });
 
-  it('should display compressed character when offline for long time', () => {
+  it('renders compact offline mode with a descriptive title', () => {
     const testData = {
       avatarEmoji: '😊',
       stateEmoji: '⚪',
@@ -44,11 +45,13 @@ describe('acb-agent-status-item', () => {
 
     element.setData(testData);
 
-    expect(element.innerHTML).toContain('A');
-    expect(element.innerHTML).not.toContain('online');
+    const compactCard = element.querySelector('.agent-status-item--compact');
+    expect(compactCard).not.toBeNull();
+    expect(compactCard.title).toContain('Offline A');
+    expect(element.innerHTML).toContain('⚪');
   });
 
-  it('should include vertical line separator', () => {
+  it('renders stdio transport indicator when requested', () => {
     const testData = {
       avatarEmoji: '😊',
       stateEmoji: '🟢',
@@ -56,11 +59,12 @@ describe('acb-agent-status-item', () => {
       state: 'online',
       offlineDisplay: '',
       isLongOffline: false,
+      isStdio: true,
       escapeHtml: (v) => String(v ?? ""),
     };
 
     element.setData(testData);
 
-    expect(element.innerHTML).toContain('|');
+    expect(element.innerHTML).toContain('✡️');
   });
 });

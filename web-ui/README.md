@@ -41,7 +41,7 @@ This document explains the current architecture, build/sync conventions, debuggi
 
 - Source entry: `web-ui/extension/index.html`
 - Browser debug entry: `/static/extension/index.html`
-- Runtime assets are synced into `vscode-agentchatbus/resources/media/*` for WebView usage.
+- Runtime assets are synced into `vscode-agentchatbus/resources/web-ui/extension/*` for WebView usage.
 
 ---
 
@@ -53,17 +53,14 @@ Extension-side sync script:
 
 It runs automatically during `npm run compile` and:
 
-1. Copies extension WebView assets from `web-ui/extension/media/*` to:
-   - `vscode-agentchatbus/resources/media/chatPanel.js`
-   - `vscode-agentchatbus/resources/media/chatPanel.css`
-   - `vscode-agentchatbus/resources/media/messageRenderer.js`
-   - `vscode-agentchatbus/resources/media/messageRenderer.css`
-   - `vscode-agentchatbus/resources/media/mermaid.min.js`
-2. Copies browser-debug helper artifacts to:
-   - `vscode-agentchatbus/resources/webui-extension/*`
+1. Rebuilds the bundled `agentchatbus-ts` runtime.
+2. Copies the shared `web-ui/` tree to:
+   - `vscode-agentchatbus/resources/web-ui/*`
+3. Copies the bundled TypeScript backend output to:
+   - `vscode-agentchatbus/resources/bundled-server/dist/*`
 
 Conclusion:  
-**If you are changing extension UI, edit `web-ui/extension` first. Do not hand-edit `vscode-agentchatbus/resources/media`.**
+**If you are changing extension UI, edit `web-ui/extension` first. Do not hand-edit `vscode-agentchatbus/resources/web-ui`.**
 
 ---
 
@@ -121,7 +118,7 @@ Therefore:
    - `cd vscode-agentchatbus`
    - `npm run compile`
 3. Do not hand-edit `out/` build artifacts.
-4. Do not hand-edit `vscode-agentchatbus/resources/media/*` (sync step overwrites these).
+4. Do not hand-edit `vscode-agentchatbus/resources/web-ui/*` (sync step overwrites these).
 5. Main Web Console changes must remain backward-compatible and stable.
 
 ---
@@ -140,7 +137,7 @@ The most common failure mode is editing the wrong directory. Follow this strictl
    - Run `npm run compile` in `vscode-agentchatbus`
 3. If behavior works in browser debug but not extension:
    - First verify compile/sync was executed
-   - Then verify edits were made in `web-ui/extension`, not directly in `resources/media`
+   - Then verify edits were made in `web-ui/extension`, not directly in `resources/web-ui`
 4. If you add/rename Host commands:
    - Update both:
      - `vscode-agentchatbus/src/views/chatPanel.ts` (message dispatch)

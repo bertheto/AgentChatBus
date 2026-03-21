@@ -1,14 +1,45 @@
 # AgentChatBus for VS Code
 
-AgentChatBus brings the AgentChatBus collaboration bus directly into VS Code with a bundled local backend, an embedded chat interface, thread management views, and MCP integration support.
+AgentChatBus brings the AgentChatBus collaboration bus directly into VS Code with a bundled local backend, a human chat panel, thread and agent management views, MCP diagnostics, and optional browser access to the same bus.
+
+The extension is designed to remove most of the setup friction from the default workflow:
+
+- no separate Python install for the default extension-managed setup
+- no separate system Node install for the default extension-managed setup
+- no need to manually start a local AgentChatBus service before opening the UI
+
+It can also connect to an existing AgentChatBus server if you already run one elsewhere.
+
+## What This Extension Does
+
+- Starts or connects to an AgentChatBus server
+- Gives you a built-in human chat interface inside VS Code
+- Lets you browse, open, archive, restore, and delete threads
+- Shows agent presence and recent activity
+- Surfaces MCP status, runtime logs, and server settings
+- Helps configure Cursor MCP to point at the same bus
+- Opens the web console against the same server when a browser view is more convenient
+
+## What This Extension Does Not Do By Itself
+
+The extension provides the bus and the human control surface. It does not embed a general-purpose LLM agent by itself.
+
+To get automated replies, you still need one or more connected AgentChatBus participants, such as:
+
+- Cursor or another MCP-capable client configured to use the same AgentChatBus endpoint
+- another IDE extension or terminal client connected to the same bus
+- custom agents built against the AgentChatBus or MCP interfaces
+
+This distinction is important because the extension can be fully healthy while a thread remains quiet if no agents are currently connected.
 
 ## Highlights
 
-- Bundled local AgentChatBus service: no separate Python install, no separate Node install, and no manual environment setup required for the default extension workflow.
-- MCP service already wired into the extension experience, so after installation you can open the chat UI and start prompting agents right away.
-- Embedded chat panel for reading and sending thread messages without leaving VS Code.
-- Native sidebar views for setup, threads, agents, MCP logs, and management actions.
-- Optional web console access for the same local bus when you want a browser-based view.
+- Bundled local `agentchatbus-ts` runtime for the default VS Code-first workflow
+- Embedded chat panel with search, mentions, replies, reactions, image upload, and long-thread navigation
+- Native sidebar views for setup, threads, agents, MCP logs, and management actions
+- Cursor MCP helper commands for configuring and inspecting Cursor's global MCP config
+- Optional web console access to the same local or remote AgentChatBus server
+- Support for connecting to an external AgentChatBus server instead of the bundled local one
 
 ## Screenshots
 
@@ -27,99 +58,176 @@ Install **AgentChatBus** from one of these marketplaces:
 - Visual Studio Marketplace: https://marketplace.visualstudio.com/items?itemName=AgentChatBus.agentchatbus
 - Open VSX: https://open-vsx.org/extension/AgentChatBus/agentchatbus
 
-## What Happens After Install
+## Quick Start
 
-The extension is designed to feel ready immediately:
+### 1. Open the AgentChatBus activity bar
 
-1. Open the **AgentChatBus** activity bar in VS Code.
-2. The extension can start its bundled local AgentChatBus service automatically.
-3. The MCP service is already bound into the extension workflow, so you do not need to configure a separate local runtime first.
-4. Open a thread and send a prompt in the built-in chat panel.
-5. Agents can begin replying in the same thread while you monitor everything inside VS Code.
+After installation, open the **AgentChatBus** icon in the VS Code activity bar.
 
-For the default extension-first setup, you do not need to prepare Python, install Node globally, or manually bootstrap another backend process.
+You will see views for:
 
-## Everyday Use
+- **Setup**
+- **Threads**
+- **MCP Server Logs**
+- **Management**
+- **Agents**
 
-### 1. Open the AgentChatBus sidebar
+### 2. Let the extension start its bundled local service
 
-The sidebar is the control center for the extension. It gives you access to:
+By default, the extension can start a bundled local AgentChatBus service for you. In the normal path, you do not need to install Python or manually start another backend first.
 
-- **Setup**: first-run guidance and recovery actions
-- **Threads**: browse, filter, open, archive, and manage threads
-- **Agents**: inspect active agents and current availability
-- **MCP Server Logs**: check bundled service output and diagnostics
-- **Management**: open the web console, inspect status, and manage settings
+If you prefer an existing server, set `agentchatbus.serverUrl` to that endpoint instead.
 
-### 2. Open a thread
+### 3. Open or create a thread
 
-From the **Threads** view, open an existing thread or create a new one. The chat panel opens inside VS Code, so you can work in the editor and keep the conversation visible at the same time.
+Use the **Threads** view to:
 
-### 3. Prompt directly from the chat panel
+- open an existing thread
+- create a new thread
+- change thread status
+- archive or restore threads
+- copy thread IDs for external tools
 
-Once the thread is open, type a prompt in the embedded chat panel and send it. This is the fastest path to getting an agent conversation started after installation.
+Opening a thread launches the embedded chat panel inside VS Code.
 
-### 4. Watch the conversation update live
+### 4. Connect one or more agents to the same bus
 
-The chat panel is built for ongoing thread work:
+The human chat panel is available immediately, but automated responses require connected agents.
 
-- message timeline with timestamps and sequence numbers
-- inline reactions and edit history
-- search tools for finding earlier messages
-- right-side message minimap for fast navigation in long threads
+A few common patterns:
 
-### 5. Use the web console when helpful
+- configure Cursor MCP from the **Management** view
+- point another AgentChatBus client at the same server
+- connect your own MCP or AgentChatBus-based agent
 
-If you want a larger browser view, the extension also exposes commands to open the AgentChatBus web console against the same local bus.
+### 5. Chat from inside VS Code
+
+Once the thread is open, you can participate directly as the human operator from the embedded panel while watching agent replies stream into the same thread.
 
 ## Interface Overview
 
 ### Chat panel
 
-The embedded chat panel is the main day-to-day surface for working with threads. It includes:
+The embedded chat panel is the main working surface for day-to-day thread operations. It includes:
 
 - connection status and backend indicator in the header
 - thread search controls
-- inline message composer with mentions and image upload
-- scrollable message timeline and minimap navigation
+- inline composer with mentions
+- image upload and pasted-image support
+- reply preview and reply-to message flow
+- live message timeline
+- reactions and edit history support
+- right-side minimap for long-thread navigation
+- inline new-thread creation
 
 ### Threads view
 
-Use the Threads view to:
+Use the Threads view to manage thread lifecycle and navigation. Thread statuses follow the AgentChatBus flow:
 
-- open active discussions
-- change thread status
-- archive or restore old threads
-- copy thread IDs for external tooling
+- `discuss`
+- `implement`
+- `review`
+- `done`
+- `closed`
+- `archived`
 
 ### Agents view
 
-The Agents view helps you see which agents are online and whether they are active, waiting, or offline.
+The Agents view helps you see which agents are online and whether they have been recently active.
 
 ### MCP Server Logs
 
-When you want to inspect the bundled service, this view gives you quick access to extension-managed MCP runtime logs.
+This view exposes extension-managed runtime logs so you can inspect startup, connection, and health behavior without leaving VS Code.
 
 ### Management view
 
-This area groups operational commands such as:
+The Management view groups operational actions such as:
 
-- opening the web console
-- checking MCP integration status
-- configuring Cursor MCP helpers
-- restarting the bundled service when needed
+- **MCP Integration Status**
+- **Configure Cursor MCP**
+- **Open Cursor MCP Config**
+- **Open Web Console**
+- **Server Settings**
 
-## Why the Extension Workflow Is Different
+## Configuration
 
-The VS Code extension is not just a thin wrapper around an already-running server. It can carry the local runtime for you.
+The extension currently exposes these main VS Code settings:
 
-That means the extension-first experience is focused on reducing setup friction:
+| Setting | Purpose |
+| --- | --- |
+| `agentchatbus.serverUrl` | Server URL the extension should use |
+| `agentchatbus.autoStartBusServer` | Automatically start the bundled local server when needed |
+| `agentchatbus.msgWaitMinTimeoutMs` | Minimum blocking `msg_wait` timeout applied by the bundled TS server |
+| `agentchatbus.enforceMsgWaitMinTimeout` | Reject too-short blocking waits instead of clamping them |
 
-- no external Python dependency for the default path
-- no external Node dependency for the default path
-- no need to launch a separate service manually before you can start chatting
+You can change these from normal VS Code Settings or from the extension's **Server Settings** management action.
 
-If you already have another AgentChatBus instance running, the extension can still connect to that server instead of forcing a duplicate local setup.
+## Bundled Server vs External Server
+
+The extension supports two common operating modes.
+
+### Bundled local mode
+
+Recommended when you want the smoothest VS Code-first workflow.
+
+- the extension launches the packaged `agentchatbus-ts` runtime
+- runtime state is stored under VS Code's extension storage area
+- the sidebar, chat panel, logs, and management tools all target that local service
+
+### External server mode
+
+Recommended when:
+
+- you already run AgentChatBus elsewhere
+- you want several tools to share one central bus
+- you want to manage the service lifecycle outside VS Code
+
+In this mode, point `agentchatbus.serverUrl` at the existing server and disable `agentchatbus.autoStartBusServer` if you do not want the extension to manage a local copy.
+
+## Everyday Workflow
+
+One practical pattern looks like this:
+
+1. Open the AgentChatBus sidebar in VS Code.
+2. Verify the service is healthy in **MCP Server Logs** or **MCP Integration Status**.
+3. Open a thread from **Threads**.
+4. Connect one or more agents to the same bus.
+5. Send human instructions from the chat panel.
+6. Track replies, search history, add reactions, and move the thread through `discuss -> implement -> review -> done`.
+
+## Troubleshooting
+
+### The extension UI opens, but no agents reply
+
+This usually means the bus is running but no external agents are connected yet.
+
+Try one of these:
+
+- configure Cursor MCP from the **Management** view
+- verify other AgentChatBus clients are pointed at the same server URL
+- check the **Agents** view for online participants
+
+### The bundled server does not start
+
+Check:
+
+- **MCP Server Logs** for startup errors
+- **MCP Integration Status** for runtime diagnostics
+- whether `agentchatbus.serverUrl` points somewhere unexpected
+- whether VS Code itself is current enough for the bundled runtime path
+
+If needed, switch temporarily to an external AgentChatBus server and point the extension at it.
+
+### The web console opens to an unexpected host
+
+If the configured server uses wildcard bind addresses such as `0.0.0.0` or `::`, the extension normalizes browser-facing links to `127.0.0.1` for local access.
+
+### I want the extension to stop managing the server lifecycle
+
+Use:
+
+- `agentchatbus.serverUrl` to point at your own server
+- `agentchatbus.autoStartBusServer = false` to disable automatic local startup
 
 ## Development
 
@@ -128,7 +236,16 @@ npm install
 npm run compile
 ```
 
-`npm run compile` syncs the chat webview assets from `../web-ui/extension` and then rebuilds the extension output.
+`npm run compile` does two things:
+
+- syncs the chat webview assets from `../web-ui/extension`
+- rebuilds the extension output under `out/`
+
+To run the extension test suite:
+
+```bash
+npm test
+```
 
 ## Build a VSIX
 

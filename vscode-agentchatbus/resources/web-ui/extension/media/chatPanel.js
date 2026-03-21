@@ -1667,10 +1667,11 @@
   }
 
   function toAbsoluteUrl(url) {
-    if (!url) return '';
-    if (/^https?:\/\//i.test(url)) return url;
-    if (url.startsWith('/')) return `${state.baseUrl}${url}`;
-    return `${state.baseUrl}/${url}`;
+    const normalized = String(url || '').trim();
+    if (!normalized) return '';
+    if (/^(?:[a-z][a-z\d+.-]*:|\/\/)/i.test(normalized)) return normalized;
+    if (normalized.startsWith('/')) return `${state.baseUrl}${normalized}`;
+    return `${state.baseUrl}/${normalized}`;
   }
 
   function formatError(error) {

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { cp, mkdir, copyFile, rm, stat, writeFile } from 'node:fs/promises';
+import { cp, mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
@@ -14,19 +14,6 @@ const tsServerRoot = path.join(repoRoot, 'agentchatbus-ts');
 const bundledServerRoot = path.join(extensionRoot, 'resources', 'bundled-server');
 const bundledWebUiRoot = path.join(extensionRoot, 'resources', 'web-ui');
 
-const mappings = [
-  {
-    from: path.join(repoRoot, 'web-ui', 'extension', 'index.html'),
-    to: path.join(extensionRoot, 'resources', 'webui-extension', 'index.html'),
-    label: 'extension debug html',
-  },
-  {
-    from: path.join(repoRoot, 'web-ui', 'extension', 'media', 'vscodeBridgeBrowser.js'),
-    to: path.join(extensionRoot, 'resources', 'webui-extension', 'vscodeBridgeBrowser.js'),
-    label: 'extension debug browser bridge',
-  },
-];
-
 const legacyMediaArtifacts = [
   path.join(extensionRoot, 'resources', 'media', 'chatPanel.js'),
   path.join(extensionRoot, 'resources', 'media', 'chatPanel.css'),
@@ -34,20 +21,6 @@ const legacyMediaArtifacts = [
   path.join(extensionRoot, 'resources', 'media', 'messageRenderer.css'),
   path.join(extensionRoot, 'resources', 'media', 'mermaid.min.js'),
 ];
-
-async function ensureParentDir(filePath) {
-  await mkdir(path.dirname(filePath), { recursive: true });
-}
-
-async function copyOne(entry) {
-  await ensureParentDir(entry.to);
-  await copyFile(entry.from, entry.to);
-  const copied = await stat(entry.to);
-  return {
-    ...entry,
-    size: copied.size,
-  };
-}
 
 async function runTsServerBuild() {
   await new Promise((resolve, reject) => {
@@ -109,21 +82,10 @@ async function main() {
 
   await Promise.all(legacyMediaArtifacts.map((filePath) => rm(filePath, { force: true })));
 
-  const copied = [];
-  for (const mapping of mappings) {
-    copied.push(await copyOne(mapping));
-  }
-
   const syncedDirectories = [];
   syncedDirectories.push(await syncDirectory(path.join(tsServerRoot, 'dist'), path.join(bundledServerRoot, 'dist'), 'bundled TS server dist'));
   syncedDirectories.push(await syncDirectory(path.join(repoRoot, 'web-ui'), bundledWebUiRoot, 'bundled web-ui runtime'));
   const bundledServerPackageJson = await writeBundledServerPackageJson();
-
-  console.log('[sync:webui-assets] copied web-ui assets to vscode extension:');
-  for (const item of copied) {
-    const relTo = path.relative(extensionRoot, item.to);
-    console.log(`  - ${item.label}: ${relTo} (${item.size} bytes)`);
-  }
 
   console.log('[sync:webui-assets] synchronized runtime directories:');
   for (const entry of syncedDirectories) {
