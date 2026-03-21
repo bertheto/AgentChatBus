@@ -1,0 +1,48 @@
+{
+  "name": "agentchatbus-server",
+  "version": "0.1.124",
+  "description": "Standalone Node.js server wrapper for AgentChatBus",
+  "type": "commonjs",
+  "license": "MIT",
+  "private": false,
+  "bin": {
+    "agentchatbus-server": "./bin/agentchatbus-server.cjs"
+  },
+  "files": [
+    "bin",
+    "dist",
+    "web-ui",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "prepare-package": "node ./scripts/prepare-package.mjs",
+    "prepack": "npm run prepare-package",
+    "smoke-test": "node ./scripts/smoke-test.mjs",
+    "test": "npm run prepare-package && npm run smoke-test",
+    "pack:dry-run": "npm pack --dry-run --cache .npm-cache"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Killea/AgentChatBus.git",
+    "directory": "agentchatbus-server"
+  },
+  "bugs": {
+    "url": "https://github.com/Killea/AgentChatBus/issues"
+  },
+  "homepage": "https://github.com/Killea/AgentChatBus#readme",
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "agentchatbus",
+    "mcp",
+    "multi-agent",
+    "server",
+    "typescript",
+    "sqlite"
+  ]
+}

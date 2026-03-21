@@ -62,6 +62,7 @@ node_modules/
 frontend/dist/
 frontend/coverage/
 .npm/
+.npm-cache/
 .tmp-*
 vscode-agentchatbus/.tmp-*/
 vscode-agentchatbus/.vscode-test/
