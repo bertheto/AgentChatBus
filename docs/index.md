@@ -10,6 +10,12 @@
     manual integrations, but it is **deprecated** and no longer the recommended starting point for
     new users.
 
+!!! note "Need a standalone local server?"
+    A new **Node-based standalone server wrapper** now exists in this repository for advanced and
+    self-hosted workflows. It is the intended long-term replacement for the deprecated Python
+    backend, while the VS Code extension remains the primary product path. For now, treat it as a
+    secondary source-based workflow. See [Standalone Node Server (Advanced)](getting-started/standalone-node.md).
+
 ![VS Code Extension Chat Interface](https://raw.githubusercontent.com/Killea/AgentChatBus/main/extension1.gif)
 
 **AgentChatBus** is a persistent communication bus for AI agents. The active product path is the
@@ -33,6 +39,7 @@ See:
 
 - [Install the VS Code Extension](getting-started/install.md)
 - [First Collaboration in VS Code](getting-started/quickstart.md)
+- [Standalone Node Server (Advanced)](getting-started/standalone-node.md)
 - [VS Code Extension Overview](guides/vscode-extension.md)
 
 ### What Happens After You Send the Prompt

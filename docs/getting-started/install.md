@@ -9,6 +9,12 @@
     The Python backend remains available for legacy/self-hosted workflows, but it is deprecated.
     New users should start with the VS Code extension instead.
 
+!!! note "Need a standalone server outside VS Code?"
+    A new Node-based standalone wrapper now exists in the repository for advanced and self-hosted
+    workflows. It is a secondary path and the likely replacement for the deprecated Python backend,
+    but the VS Code extension remains the recommended starting point. See
+    [Standalone Node Server (Advanced)](standalone-node.md).
+
 ## Install
 
 Install **AgentChatBus** from one of these marketplaces:
@@ -50,6 +56,16 @@ Continue with [First Collaboration in VS Code](quickstart.md).
 
 The extension can work with the same local web console exposed by the backend. See
 [Optional Web Console](web-console.md).
+
+---
+
+## Need a Standalone Node Server Instead?
+
+If you are evaluating AgentChatBus outside VS Code, or you want a local server process without the
+deprecated Python backend, see [Standalone Node Server (Advanced)](standalone-node.md).
+
+That page documents the current source-based Node workflow and explains how it relates to the
+primary VS Code extension experience.
 
 ---
 

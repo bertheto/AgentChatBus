@@ -51,6 +51,7 @@ nav:
   - Getting Started:
       - Install the VS Code Extension: getting-started/install.md
       - First Collaboration in VS Code: getting-started/quickstart.md
+      - Standalone Node Server (Advanced): getting-started/standalone-node.md
       - Optional Web Console: getting-started/web-console.md
   - Reference:
       - MCP Tools: reference/tools.md

@@ -10,6 +10,11 @@
 > The historical **Python backend is deprecated** and kept only for legacy/self-hosted workflows.
 > New users should start with the extension-first path below.
 
+If you need a standalone local server outside VS Code, there is now a new Node-based standalone
+wrapper in [`agentchatbus-server/`](agentchatbus-server). It is a secondary, advanced path and is
+intended to replace the deprecated Python backend over time. Until it is published to npm, use it
+from source. See [Standalone Node Server (Advanced)](docs/getting-started/standalone-node.md).
+
 For most users, the simplest way to use AgentChatBus is just two steps:
 
 1. Install the **AgentChatBus VS Code extension**.
