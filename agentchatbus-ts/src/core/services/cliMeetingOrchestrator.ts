@@ -330,6 +330,10 @@ function routingKey(threadId: string, participantAgentId: string): string {
   return `${threadId}::${participantAgentId}`;
 }
 
+function buildMsgWaitWakePrompt(threadName: string): string {
+  return `Please use msg_wait to process messages in "${threadName}".`;
+}
+
 export class CliMeetingOrchestrator {
   private readonly inFlightRelaySyncs = new Set<string>();
   private readonly pendingRelayResyncs = new Set<string>();
@@ -429,6 +433,7 @@ export class CliMeetingOrchestrator {
     }
     if (!usesLegacyPtyRelay(session)) {
       this.syncParticipantPresence(session);
+      await this.flushPendingDelivery(session);
       return;
     }
 
@@ -709,6 +714,36 @@ export class CliMeetingOrchestrator {
       return;
     }
 
+    if (!usesLegacyPtyRelay(session)) {
+      if (this.isParticipantActivelyWaiting(session.thread_id, session.participant_agent_id)) {
+        this.pendingDeliverySeqBySession.delete(session.id);
+        return;
+      }
+
+      const thread = this.store.getThread(session.thread_id);
+      const threadName = String(thread?.topic || session.thread_id).trim() || session.thread_id;
+      const result = await this.cliSessionManager.deliverPrompt(
+        session.id,
+        buildMsgWaitWakePrompt(threadName),
+        {
+          deliveryMode: session.context_delivery_mode || "incremental",
+        },
+      );
+      if (!result?.ok) {
+        this.pendingDeliverySeqBySession.set(session.id, latestSeq);
+        if (result?.error) {
+          logError(`[cli-meeting] failed to wake agent_mcp session ${session.id}: ${result.error}`);
+        }
+        return;
+      }
+
+      this.pendingDeliverySeqBySession.delete(session.id);
+      logInfo(
+        `[cli-meeting] delivered msg_wait wake prompt for thread ${session.thread_id} to session ${session.id}`,
+      );
+      return;
+    }
+
     const envelope = buildCliIncrementalPrompt({
       store: this.store,
       threadId: session.thread_id,
@@ -740,6 +775,11 @@ export class CliMeetingOrchestrator {
     logInfo(
       `[cli-meeting] delivered incremental context through seq ${envelope.deliveredSeq} to session ${session.id}`,
     );
+  }
+
+  private isParticipantActivelyWaiting(threadId: string, participantAgentId: string): boolean {
+    const waitStates = this.store.getThreadWaitStates(threadId);
+    return Boolean(waitStates[participantAgentId]);
   }
 
   private async flushPendingDelivery(session: CliSessionSnapshot): Promise<void> {
