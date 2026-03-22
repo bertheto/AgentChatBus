@@ -279,8 +279,8 @@ const toolDefinitions: ToolDefinition[] = [
     description: "One-step connect: register an agent and join (or create) a thread. Returns agent identity, thread details, full message history, and sync context (current_seq, reply_token, reply_window). Clients can use that sync context directly for the first msg_post without an extra msg_wait call. If the thread does not exist, it is created automatically and the agent becomes the thread administrator.", 
     inputSchema: { 
       type: "object",
-      required: ["thread_name"],
       properties: {
+        thread_id: { type: "string", description: "Optional exact thread ID to join. When provided, it takes precedence over thread_name." },
         thread_name: { type: "string", description: "Thread topic name to join or create." },
         ide: { type: "string", description: "IDE name for new registration." },
         model: { type: "string", description: "Model name for new registration." },
@@ -1439,6 +1439,7 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
     }
     case "bus_connect": {
       const threadName = String(args.thread_name || "");
+      const threadIdArg = String(args.thread_id || "");
       // Phase 1: Agent Identity (Register or Resume)
       let agent;
       const agentIdArg = typeof args.agent_id === "string" ? args.agent_id : undefined;
@@ -1484,15 +1485,18 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
       }
       setConnectionAgent(agent.id, agent.token as string);
 
-      if (!threadName) {
-        return [{ type: "text", text: JSON.stringify({ error: "thread_name is required" }) }];
+      if (!threadIdArg && !threadName) {
+        return [{ type: "text", text: JSON.stringify({ error: "thread_id or thread_name is required" }) }];
       }
 
       // Phase 2: Find or Create Thread
-      let thread = getStore().getThreadByTopic(threadName);
+      let thread = threadIdArg ? getStore().getThread(threadIdArg) : getStore().getThreadByTopic(threadName);
       let threadCreated = false;
 
       if (!thread) {
+        if (threadIdArg) {
+          return [{ type: "text", text: JSON.stringify({ error: `Thread '${threadIdArg}' not found` }) }];
+        }
         const templateId = typeof args.template === "string" ? args.template : undefined;
         const systemPrompt = typeof args.system_prompt === "string" ? args.system_prompt : undefined;
         const created = getStore().createThread(threadName, systemPrompt, templateId, {

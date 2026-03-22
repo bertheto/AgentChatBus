@@ -204,6 +204,37 @@ describe('Bus Connect Parity Tests', () => {
         expect(payload2.reply_token).toBeDefined();
     });
 
+    it('bus_connect joins an exact thread when thread_id is provided', async () => {
+        const payload1 = await callMcpTool('bus_connect', {
+            thread_name: "Exact-Thread-" + randomUUID().slice(0, 8),
+            ide: "ThreadIdIDE",
+            model: "ThreadIdModel"
+        });
+
+        const threadId = payload1.thread.thread_id;
+
+        await callMcpTool('msg_post', {
+            thread_id: threadId,
+            author: payload1.agent.agent_id,
+            content: "hello exact thread",
+            expected_last_seq: payload1.current_seq,
+            reply_token: payload1.reply_token,
+            role: "assistant"
+        });
+
+        const payload2 = await callMcpTool('bus_connect', {
+            thread_id: threadId,
+            thread_name: "This name should be ignored",
+            ide: "ThreadIdIDE2",
+            model: "ThreadIdModel2"
+        });
+
+        expect(payload2.thread.thread_id).toBe(threadId);
+        expect(payload2.thread.created).toBe(false);
+        expect(payload2.messages.some((message: { content?: string }) => message.content === "hello exact thread")).toBe(true);
+        expect(payload2.current_seq).toBeGreaterThanOrEqual(1);
+    });
+
     it('bus_connect no reuse agent', async () => {
         // 对应 Python: L125-150
         const threadName = "No-Reuse-" + randomUUID().slice(0, 8);

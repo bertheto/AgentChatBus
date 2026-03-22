@@ -16,6 +16,7 @@ import {
   isIpAllowed,
   saveConfigDict,
 } from "../../core/config/env.js";
+import { buildCliMcpMeetingPrompt } from "../../core/services/cliMeetingContextBuilder.js";
 import { CliSessionManager } from "../../core/services/cliSessionManager.js";
 import { CliMeetingOrchestrator } from "../../core/services/cliMeetingOrchestrator.js";
 import { MemoryStore, memoryStore } from "../../core/services/memoryStore.js";
@@ -104,6 +105,29 @@ export function createHttpServer() {
   }
   const cliSessionManager = new CliSessionManager();
   const cliMeetingOrchestrator = new CliMeetingOrchestrator(store, cliSessionManager);
+  const loopbackHost = cfg.host === "0.0.0.0" ? "127.0.0.1" : cfg.host;
+  const serverUrl = `http://${loopbackHost}:${cfg.port}`;
+
+  function buildCliMcpLaunchEnv(input: {
+    threadId: string;
+    threadName: string;
+    participantAgentId: string;
+    participantDisplayName?: string;
+  }): Record<string, string> {
+    const participant = store.getAgent(input.participantAgentId);
+    if (!participant?.token) {
+      return {};
+    }
+    return {
+      AGENTCHATBUS_BASE_URL: serverUrl,
+      AGENTCHATBUS_THREAD_ID: input.threadId,
+      AGENTCHATBUS_THREAD_NAME: input.threadName,
+      AGENTCHATBUS_AGENT_ID: input.participantAgentId,
+      AGENTCHATBUS_AGENT_TOKEN: participant.token,
+      AGENTCHATBUS_AGENT_DISPLAY_NAME:
+        input.participantDisplayName || participant.display_name || participant.name || input.participantAgentId,
+    };
+  }
 
   const adminDecisionBySource = new Map<string, {
     action: string;
@@ -647,6 +671,9 @@ export function createHttpServer() {
     const promptSeed = typeof body.initial_instruction === "string"
       ? body.initial_instruction
       : String(body.prompt || "");
+    const meetingTransport = typeof body.meeting_transport === "string"
+      ? body.meeting_transport.trim()
+      : "agent_mcp";
 
     try {
       let finalPrompt = promptSeed;
@@ -654,6 +681,7 @@ export function createHttpServer() {
       let contextDeliveryMode: "join" | "resume" | "incremental" | undefined;
       let lastDeliveredSeq: number | undefined;
       let finalParticipantDisplayName = participantDisplayName || undefined;
+      let launchEnv: Record<string, string> | undefined;
 
       if (participantAgentId) {
         const prepared = cliMeetingOrchestrator.prepareSession({
@@ -667,11 +695,28 @@ export function createHttpServer() {
         contextDeliveryMode = prepared.contextDeliveryMode;
         lastDeliveredSeq = prepared.lastDeliveredSeq;
         finalParticipantDisplayName = prepared.participantDisplayName;
+        if (meetingTransport === "agent_mcp") {
+          finalPrompt = buildCliMcpMeetingPrompt({
+            store,
+            threadId: params.threadId,
+            participantAgentId,
+            participantDisplayName: finalParticipantDisplayName,
+            participantRole: prepared.participantRole,
+            initialInstruction: promptSeed,
+            serverUrl,
+          }).prompt;
+          launchEnv = buildCliMcpLaunchEnv({
+            threadId: params.threadId,
+            threadName: thread.topic,
+            participantAgentId,
+            participantDisplayName: finalParticipantDisplayName,
+          });
+        }
       }
 
       const session = cliSessionManager.createSession({
         threadId: params.threadId,
-        adapter: String(body.adapter || "cursor").trim() as "cursor" | "codex",
+        adapter: String(body.adapter || "cursor").trim() as "cursor" | "codex" | "claude",
         mode: String(body.mode || "headless").trim() as "headless" | "interactive",
         prompt: finalPrompt,
         initialInstruction: promptSeed,
@@ -680,10 +725,12 @@ export function createHttpServer() {
         participantAgentId: participantAgentId || undefined,
         participantDisplayName: finalParticipantDisplayName,
         participantRole,
+        meetingTransport: meetingTransport === "agent_mcp" ? "agent_mcp" : "pty_relay",
         contextDeliveryMode,
         lastDeliveredSeq,
         cols: body.cols === undefined ? undefined : Number(body.cols),
         rows: body.rows === undefined ? undefined : Number(body.rows),
+        launchEnv,
       });
       reply.code(201);
       return { session };
@@ -899,8 +946,31 @@ export function createHttpServer() {
           participantDisplayName: existingSession.participant_display_name,
           initialInstruction: existingSession.initial_instruction,
         });
+        const nextPrompt =
+          existingSession.meeting_transport === "agent_mcp"
+            ? buildCliMcpMeetingPrompt({
+                store,
+                threadId: existingSession.thread_id,
+                participantAgentId: existingSession.participant_agent_id,
+                participantDisplayName: existingSession.participant_display_name,
+                participantRole: prepared.participantRole,
+                initialInstruction: existingSession.initial_instruction,
+                serverUrl,
+              }).prompt
+            : prepared.prompt;
+        if (existingSession.meeting_transport === "agent_mcp") {
+          cliSessionManager.updateSessionLaunchEnv(
+            params.sessionId,
+            buildCliMcpLaunchEnv({
+              threadId: existingSession.thread_id,
+              threadName: store.getThread(existingSession.thread_id)?.topic || existingSession.thread_id,
+              participantAgentId: existingSession.participant_agent_id,
+              participantDisplayName: existingSession.participant_display_name,
+            }),
+          );
+        }
         cliSessionManager.updateSessionPrompt(params.sessionId, {
-          prompt: prepared.prompt,
+          prompt: nextPrompt,
         });
         cliSessionManager.updateMeetingState(params.sessionId, {
           participant_role: prepared.participantRole,

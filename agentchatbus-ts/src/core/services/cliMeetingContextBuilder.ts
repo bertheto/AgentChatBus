@@ -36,6 +36,16 @@ export interface CliMeetingPromptEnvelope {
   administrator: ThreadAdministratorInfo;
 }
 
+export interface BuildCliMcpMeetingPromptInput {
+  store: MemoryStore;
+  threadId: string;
+  participantAgentId: string;
+  participantRole: CliMeetingParticipantRole;
+  participantDisplayName?: string;
+  initialInstruction?: string;
+  serverUrl?: string;
+}
+
 function buildMeetingControlInstructions(input: {
   participantAgentId: string;
   participantName: string;
@@ -313,6 +323,49 @@ export function buildCliIncrementalPrompt(input: BuildCliIncrementalPromptInput)
     prompt,
     deliveredSeq,
     deliveryMode: "incremental",
+    administrator,
+  };
+}
+
+export function buildCliMcpMeetingPrompt(input: BuildCliMcpMeetingPromptInput): CliMeetingPromptEnvelope {
+  const thread = input.store.getThread(input.threadId);
+  if (!thread) {
+    throw new Error(`Thread '${input.threadId}' not found.`);
+  }
+  const participant = input.store.getAgent(input.participantAgentId);
+  if (!participant) {
+    throw new Error(`Participant agent '${input.participantAgentId}' not found.`);
+  }
+
+  const participantName = String(input.participantDisplayName || getAgentDisplayName(participant)).trim();
+  const administrator = getThreadAdministratorInfo(input.store, input.threadId);
+  const deliveredSeq = input.store.getThreadCurrentSeq(input.threadId);
+  const initialInstruction = String(input.initialInstruction || "").trim() || buildDefaultInstruction({
+    participantRole: input.participantRole,
+    hasHistory: deliveredSeq > 0,
+    administrator,
+    participantName,
+  });
+  const serverUrl = String(input.serverUrl || "").trim();
+
+  const prompt = [
+    "Please use the MCP tool `agentchatbus` to join the discussion.",
+    `Use \`bus_connect\` to join the thread "${thread.topic}".`,
+    serverUrl ? `If the MCP client asks for the server URL, use: ${serverUrl}` : "",
+    `When joining, resume the provided participant identity: ${participantName} (${input.participantAgentId}).`,
+    "If you need to wait for new messages, use `msg_wait` with a 10 minute timeout.",
+    "`msg_wait` does not consume resources; use it to maintain the connection.",
+    "After joining, stay connected, read new messages, and reply in-thread with AgentChatBus MCP tools.",
+    "Do not exit the agent process unless notified to do so.",
+    "Do not create a new thread.",
+    "Do not replace the provided participant identity with a new one unless resuming fails.",
+    `Initial instruction:\n${initialInstruction}`,
+  ].filter(Boolean).join("\n\n");
+
+  return {
+    prompt,
+    deliveredSeq,
+    deliveryMode: "join",
     administrator,
   };
 }

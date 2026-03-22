@@ -11,6 +11,7 @@ type CursorCommandRequest = {
   command: string;
   prompt: string;
   workspace: string;
+  env?: Record<string, string>;
 };
 
 type CursorCommandExecutionResult = {
@@ -107,7 +108,7 @@ class CursorHeadlessExecutor implements CursorCommandExecutor {
           ? ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", request.command, ...cursorArgs]
           : ["/d", "/s", "/c", "cursor-agent", ...cursorArgs])
         : cursorArgs;
-      const env = { ...process.env };
+      const env = { ...process.env, ...(request as { env?: Record<string, string> }).env };
       if (isWindows) {
         const commandDir = dirname(request.command);
         const currentPath = String(env.Path || env.PATH || "");
@@ -224,6 +225,7 @@ export class CursorHeadlessAdapter implements CliSessionAdapter {
           command: this.command,
           prompt: input.prompt,
           workspace,
+          env: input.env,
         },
         hooks
       );

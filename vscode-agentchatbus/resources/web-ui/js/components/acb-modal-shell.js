@@ -97,86 +97,111 @@
       if (this.childElementCount > 0) return;
 
       this.innerHTML = `
-        <div id="modal-overlay" onclick="closeModal(event)">
+        <div id="modal-overlay">
           <div id="modal" onclick="event.stopPropagation()">
-            <div class="modal-header-row" style="display:flex; justify-content:space-between; align-items:center; margin-bottom:18px;">
-              <h3 style="margin-bottom:0;">✦ Create New Thread</h3>
-              <button class="settings-close-btn" onclick="closeModal()" title="Close">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
-              </button>
-            </div>
+            <div class="meeting-modal-thread-shell">
+              <div class="modal-header-row meeting-modal-thread-shell__header">
+                <h3 style="margin-bottom:0;">✦ Create New Thread</h3>
+                <button class="settings-close-btn" onclick="closeModal()" title="Close">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                </button>
+              </div>
 
-            <div class="settings-field-description" style="margin-bottom:16px;">A thread is the shared meeting space for humans and agents.</div>
+              <div class="meeting-modal-thread-shell__intro settings-field-description">Create a thread and launch one or more agents into it.</div>
 
-            <div class="settings-field" style="margin-bottom:16px;">
-              <label for="modal-topic">Thread Topic</label>
-              <input id="modal-topic" type="text" placeholder="What is this task about?..." onkeydown="if(event.key==='Enter') submitModal()" />
-              <div class="settings-field-description">A short, descriptive name. Helps agents and humans understand the primary goal.</div>
-            </div>
+              <div class="meeting-modal-thread-shell__body">
+                <div id="thread-create-layout" class="meeting-modal-layout meeting-modal-layout--single">
+                  <div class="meeting-modal-layout__main">
+                    <div class="meeting-modal-section meeting-modal-section--compact">
+                      <div class="meeting-modal-section__title">Startup</div>
+                      <div class="meeting-modal-radio-group meeting-modal-radio-group--compact">
+                        <label class="meeting-modal-radio">
+                          <input type="radio" name="thread-launch-mode" value="thread_with_agent" checked onchange="window.AcbModals && window.AcbModals.syncThreadLaunchUi()" />
+                          <div>
+                            <strong>Create and start agents</strong>
+                            <span>Create the thread and immediately launch one or more participant sessions.</span>
+                          </div>
+                        </label>
+                        <label class="meeting-modal-radio">
+                          <input type="radio" name="thread-launch-mode" value="thread_only" onchange="window.AcbModals && window.AcbModals.syncThreadLaunchUi()" />
+                          <div>
+                            <strong>Create thread only</strong>
+                            <span>Deprecated. Not recommended. Open an empty meeting space first and add agents later.</span>
+                          </div>
+                        </label>
+                      </div>
+                    </div>
 
-            <div class="template-selector-wrap" style="margin-bottom: 24px;">
-              <label class="template-selector-label" for="modal-template">Collaboration Template</label>
-              <select id="modal-template">
-                <option value="">No template (Standard chat)</option>
-              </select>
-              <div id="modal-template-desc" class="settings-field-description" style="margin-top:4px; min-height:1.4em;"></div>
-              <div class="settings-field-description">Templates apply predefined system prompts and coordination rules for specific workflows.</div>
-            </div>
+                    <div class="meeting-modal-section meeting-modal-section--compact">
+                      <div class="meeting-modal-section__title">Thread</div>
+                      <div class="meeting-modal-grid meeting-modal-grid--thread-meta">
+                        <div class="settings-field">
+                          <label for="modal-topic">Thread Name</label>
+                          <input id="modal-topic" type="text" placeholder="Thread name" onkeydown="if(event.key==='Enter') submitModal()" />
+                          <div class="settings-field-description">A short, descriptive name. A default name is generated automatically, and you can edit it any time.</div>
+                        </div>
+                        <div class="settings-field">
+                          <label class="template-selector-label" for="modal-template">Collaboration Template</label>
+                          <select id="modal-template">
+                            <option value="">No template (Standard chat)</option>
+                          </select>
+                          <div id="modal-template-desc" class="settings-field-description" style="margin-top:4px; min-height:1.4em;"></div>
+                        </div>
+                      </div>
+                    </div>
 
-            <div class="meeting-modal-section">
-              <div class="meeting-modal-section__title">Startup</div>
-              <div class="meeting-modal-radio-group">
-                <label class="meeting-modal-radio">
-                  <input type="radio" name="thread-launch-mode" value="thread_only" checked onchange="window.AcbModals && window.AcbModals.syncThreadLaunchUi()" />
-                  <div>
-                    <strong>Create thread only</strong>
-                    <span>Open an empty meeting space first and add agents later.</span>
+                    <div id="thread-agent-config" class="meeting-modal-section meeting-modal-section--compact">
+                      <div class="meeting-modal-section__title">Agents To Start</div>
+                      <div class="settings-field thread-launch-shared-instruction">
+                        <label for="thread-launch-global-instruction">Shared Instruction</label>
+                        <input
+                          id="thread-launch-global-instruction"
+                          type="text"
+                          placeholder="Shared instruction for all agents"
+                        />
+                        <div class="settings-field-description">Applies to every agent by default. Leave an individual agent override blank to use this shared instruction.</div>
+                      </div>
+                      <div class="thread-launch-toolbar">
+                        <div class="thread-launch-toolbar__meta">
+                          <span class="thread-launch-toolbar__count-label">Count</span>
+                          <span id="thread-launch-agent-count" class="thread-launch-toolbar__count-badge">1</span>
+                        </div>
+                        <div class="settings-field thread-launch-toolbar__interval">
+                          <label for="thread-launch-interval-seconds">Interval</label>
+                          <select id="thread-launch-interval-seconds" onchange="window.AcbModals && window.AcbModals.syncThreadLaunchUi()">
+                            <option value="0">0s</option>
+                            <option value="1">1s</option>
+                            <option value="2" selected>2s</option>
+                            <option value="3">3s</option>
+                            <option value="5">5s</option>
+                          </select>
+                        </div>
+                        <button id="thread-launch-add-agent" class="btn-secondary thread-launch-toolbar__add" type="button" onclick="window.AcbModals && window.AcbModals.addThreadLaunchAgent()">Add Agent</button>
+                      </div>
+                      <div id="thread-launch-agents-list" class="thread-launch-agents-list" data-agent-count="1"></div>
+                      <div class="meeting-modal-hint">Agents launch sequentially. The first active agent becomes the administrator, and later agents join as participants.</div>
+                    </div>
+
+                    <details id="thread-agent-side" class="meeting-modal-preview meeting-modal-preview--collapsible">
+                      <summary class="meeting-modal-preview__summary">Resolved Launch Prompt</summary>
+                      <div id="thread-agent-prompt-meta" class="meeting-modal-preview__meta"></div>
+                      <pre id="thread-agent-prompt-preview" class="meeting-modal-preview__body meeting-modal-preview__body--compact"></pre>
+                    </details>
                   </div>
-                </label>
-                <label class="meeting-modal-radio">
-                  <input type="radio" name="thread-launch-mode" value="thread_with_agent" onchange="window.AcbModals && window.AcbModals.syncThreadLaunchUi()" />
-                  <div>
-                    <strong>Create and start first agent</strong>
-                    <span>Create the thread and immediately launch the first participant session.</span>
-                  </div>
-                </label>
+                </div>
               </div>
-            </div>
 
-            <div id="thread-agent-config" class="meeting-modal-section meeting-modal-hidden">
-              <div class="meeting-modal-section__title">First Agent</div>
-              <div class="meeting-modal-grid">
-                <div class="settings-field">
-                  <label for="thread-agent-adapter">Adapter</label>
-                  <select id="thread-agent-adapter">
-                    <option value="codex">Codex</option>
-                    <option value="cursor">Cursor</option>
-                    <option value="claude">Claude</option>
-                  </select>
+              <div class="meeting-modal-footer">
+                <div id="thread-agent-actions" class="modal-actions">
+                  <button class="btn-secondary" onclick="closeModal()">Cancel</button>
+                  <button id="btn-create-thread" class="btn-primary" onclick="submitModal()" disabled>Create and Start First Agent</button>
                 </div>
-                <div class="settings-field">
-                  <label for="thread-agent-mode">Mode</label>
-                  <select id="thread-agent-mode">
-                    <option value="interactive">Interactive</option>
-                    <option value="headless">Headless</option>
-                  </select>
-                </div>
-                <div class="settings-field" style="grid-column:1 / -1;">
-                  <label for="thread-agent-display-name">Display Name</label>
-                  <input id="thread-agent-display-name" type="text" placeholder="Optional: Codex Planner" />
-                  <div class="settings-field-description">If left blank, AgentChatBus will generate a participant label automatically.</div>
-                </div>
-              </div>
-              <div class="settings-field" style="margin-bottom:0;">
-                <label for="thread-agent-instruction">Initial Instruction</label>
-                <textarea id="thread-agent-instruction" class="meeting-modal-textarea" placeholder="Optional: give the first agent a kickoff instruction."></textarea>
-                <div class="meeting-modal-hint">The first active agent in a new thread becomes the administrator.</div>
-              </div>
-            </div>
 
-            <div class="modal-actions">
-              <button class="btn-secondary" onclick="closeModal()">Cancel</button>
-              <button id="btn-create-thread" class="btn-primary" onclick="submitModal()" disabled>Create Thread</button>
+                <div id="thread-thread-only-actions" class="modal-actions meeting-modal-hidden">
+                  <button class="btn-secondary" onclick="closeModal()">Cancel</button>
+                  <button id="btn-create-thread-only" class="btn-primary" onclick="submitModal()" disabled>Create Thread</button>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -245,6 +270,10 @@
                     <label for="agent-modal-instruction">Initial Instruction</label>
                     <textarea id="agent-modal-instruction" class="meeting-modal-textarea" placeholder="Optional: brief the agent on why it is joining this thread."></textarea>
                     <div id="agent-modal-hint" class="meeting-modal-hint">New agents join as participants unless they are the first active agent in the thread.</div>
+                    <div class="meeting-modal-preview">
+                      <div class="meeting-modal-preview__label">Resolved Launch Prompt</div>
+                      <pre id="agent-modal-prompt-preview" class="meeting-modal-preview__body"></pre>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -363,9 +392,12 @@
     _attachTopicGuard() {
       const input = this.querySelector("#modal-topic");
       const btn = this.querySelector("#btn-create-thread");
-      if (!input || !btn) return;
+      const threadOnlyBtn = this.querySelector("#btn-create-thread-only");
+      if (!input || (!btn && !threadOnlyBtn)) return;
       const sync = () => {
-        btn.disabled = input.value.trim().length === 0;
+        const disabled = input.value.trim().length === 0;
+        if (btn) btn.disabled = disabled;
+        if (threadOnlyBtn) threadOnlyBtn.disabled = disabled;
         this._syncThreadLaunchButtonLabel();
       };
       input.addEventListener("input", sync);
@@ -382,9 +414,20 @@
 
     _syncThreadLaunchButtonLabel() {
       const btn = this.querySelector("#btn-create-thread");
-      const mode = this.querySelector('input[name="thread-launch-mode"]:checked')?.value || "thread_only";
-      if (!btn) return;
-      btn.textContent = mode === "thread_with_agent" ? "Create and Start Agent" : "Create Thread";
+      const threadOnlyBtn = this.querySelector("#btn-create-thread-only");
+      const mode = this.querySelector('input[name="thread-launch-mode"]:checked')?.value || "thread_with_agent";
+      const agentCount = Math.max(
+        1,
+        Number(this.querySelector("#thread-launch-agents-list")?.dataset.agentCount || "1")
+      );
+      if (btn) {
+        btn.textContent = mode === "thread_with_agent"
+          ? (agentCount > 1 ? "Create and Start Agents" : "Create and Start First Agent")
+          : "Create Thread";
+      }
+      if (threadOnlyBtn) {
+        threadOnlyBtn.textContent = "Create Thread";
+      }
     }
 
     _attachMinimapToggle() {

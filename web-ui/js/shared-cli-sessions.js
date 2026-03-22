@@ -587,6 +587,9 @@
     if (session.participant_role) {
       metaBits.push(`role ${escapeHtml(session.participant_role)}`);
     }
+    if (session.meeting_transport) {
+      metaBits.push(`transport ${escapeHtml(session.meeting_transport)}`);
+    }
     if (session.shell) {
       metaBits.push(`shell ${escapeHtml(session.shell)}`);
     }

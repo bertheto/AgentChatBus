@@ -4,6 +4,7 @@ import { getConfig } from "../config/registry.js";
 import { eventBus } from "../../shared/eventBus.js";
 import { logError, logInfo } from "../../shared/logger.js";
 import { CursorHeadlessAdapter } from "./adapters/cursorHeadlessAdapter.js";
+import { CursorInteractiveAdapter } from "./adapters/cursorInteractiveAdapter.js";
 import { CodexInteractiveAdapter } from "./adapters/codexInteractiveAdapter.js";
 import { ClaudeInteractiveAdapter } from "./adapters/claudeInteractiveAdapter.js";
 
@@ -34,6 +35,7 @@ export interface CliSessionSnapshot {
   participant_agent_id?: string;
   participant_display_name?: string;
   participant_role?: "administrator" | "participant";
+  meeting_transport?: CliMeetingTransport;
   created_at: string;
   updated_at: string;
   run_count: number;
@@ -88,10 +90,12 @@ export interface CreateCliSessionInput {
   participantAgentId?: string;
   participantDisplayName?: string;
   participantRole?: "administrator" | "participant";
+  meetingTransport?: CliMeetingTransport;
   contextDeliveryMode?: "join" | "resume" | "incremental";
   lastDeliveredSeq?: number;
   cols?: number;
   rows?: number;
+  launchEnv?: Record<string, string>;
 }
 
 export interface CliSessionMeetingStatePatch {
@@ -125,6 +129,7 @@ type CliSessionRuntime = {
   screenState: CliSessionScreenRuntime | null;
   automationState: CliSessionAutomationRuntime | null;
   replyCapture: CliSessionReplyCaptureRuntime | null;
+  launchEnv: Record<string, string>;
 };
 
 type CliSessionScreenSnapshot = {
@@ -174,7 +179,13 @@ type CliSessionReplyCaptureRuntime = {
   finalizeTimer: NodeJS.Timeout | null;
 };
 
-import type { CliSessionAdapter, CliAdapterRunInput, CliAdapterRunHooks, CliAdapterRunResult } from "./adapters/types.js";
+import type {
+  CliMeetingTransport,
+  CliSessionAdapter,
+  CliAdapterRunInput,
+  CliAdapterRunHooks,
+  CliAdapterRunResult,
+} from "./adapters/types.js";
 
 import {
   CLI_REPLY_TIMEOUT_MS,
@@ -295,6 +306,86 @@ function looksLikeClaudeWorkingScreen(screenExcerpt: string | undefined): boolea
     || normalized.includes("working")
     || normalized.includes("processing")
   );
+}
+
+function looksLikeClaudeProceedPrompt(screenExcerpt: string | undefined): boolean {
+  const normalized = normalizeScreenMatchText(String(screenExcerpt || ""));
+  if (!normalized) {
+    return false;
+  }
+  return (
+    normalized.includes("do you want to proceed")
+    && normalized.includes("yes")
+    && normalized.includes("no")
+  );
+}
+
+function looksLikeClaudeUsableScreen(screen: CliSessionScreenSnapshot): boolean {
+  const normalized = String(screen.normalizedText || "").trim();
+  if (!normalized) {
+    return false;
+  }
+  if (looksLikeClaudeWorkingScreen(screen.text)) {
+    return false;
+  }
+  if (looksLikeClaudeProceedPrompt(screen.text)) {
+    return false;
+  }
+  return true;
+}
+
+function looksLikeClaudePastedTextPrompt(screenExcerpt: string | undefined): boolean {
+  const normalized = normalizeScreenMatchText(String(screenExcerpt || ""));
+  if (!normalized) {
+    return false;
+  }
+  return (
+    normalized.includes("pasted text")
+    || normalized.includes("paste text")
+  );
+}
+
+function looksLikeCursorIdleScreen(screenExcerpt: string | undefined): boolean {
+  return looksLikeClaudeIdleScreen(screenExcerpt);
+}
+
+function looksLikeCursorWorkingScreen(screenExcerpt: string | undefined): boolean {
+  return looksLikeClaudeWorkingScreen(screenExcerpt);
+}
+
+function looksLikeCursorProceedPrompt(screenExcerpt: string | undefined): boolean {
+  return looksLikeClaudeProceedPrompt(screenExcerpt);
+}
+
+function looksLikeCursorUsableScreen(screen: CliSessionScreenSnapshot): boolean {
+  const normalized = String(screen.normalizedText || "").trim();
+  if (!normalized) {
+    return false;
+  }
+  if (looksLikeCursorWorkingScreen(screen.text)) {
+    return false;
+  }
+  if (looksLikeCursorProceedPrompt(screen.text)) {
+    return false;
+  }
+  return true;
+}
+
+function looksLikeCursorPastedTextPrompt(screenExcerpt: string | undefined): boolean {
+  return looksLikeClaudePastedTextPrompt(screenExcerpt);
+}
+
+function isCursorPromptShowingText(screenExcerpt: string | undefined, prompt: string): boolean {
+  return isClaudePromptShowingText(screenExcerpt, prompt);
+}
+
+function isClaudePromptShowingText(screenExcerpt: string | undefined, prompt: string): boolean {
+  const normalizedScreen = normalizeScreenMatchText(String(screenExcerpt || ""));
+  const normalizedPrompt = normalizePromptMatchText(prompt);
+  if (!normalizedScreen || !normalizedPrompt) {
+    return false;
+  }
+  return normalizedScreen.includes(normalizedPrompt);
 }
 
 function looksLikeCodexContinuePrompt(normalizedText: string): boolean {
@@ -519,6 +610,23 @@ function extractCodexReplyFromTranscript(rawOutput: string, prompt: string): str
     const candidate = normalizePromptMatchText(line.replace(/^\s*[>›]\s*/, ""));
     if (candidate.includes(normalizedPrompt)) {
       promptIndex = index;
+    }
+  }
+  if (promptIndex < 0) {
+    for (let index = lines.length - 1; index >= 0; index -= 1) {
+      const trimmed = lines[index]?.trim() || "";
+      if (isCodexWorkingLine(trimmed)) {
+        promptIndex = index;
+        break;
+      }
+    }
+  }
+  if (promptIndex < 0) {
+    for (let index = lines.length - 1; index >= 0; index -= 1) {
+      if (/^\s*[>›]\s/.test(lines[index] || "")) {
+        promptIndex = index;
+        break;
+      }
     }
   }
   if (promptIndex < 0) {
@@ -755,7 +863,12 @@ export class CliSessionManager {
   private readonly runtimes = new Map<string, CliSessionRuntime>();
   private readonly adapters = new Map<string, CliSessionAdapter>();
 
-  constructor(adapters: CliSessionAdapter[] = [new CursorHeadlessAdapter(), new CodexInteractiveAdapter(), new ClaudeInteractiveAdapter()]) {
+  constructor(adapters: CliSessionAdapter[] = [
+    new CursorHeadlessAdapter(),
+    new CursorInteractiveAdapter(),
+    new CodexInteractiveAdapter(),
+    new ClaudeInteractiveAdapter(),
+  ]) {
     for (const adapter of adapters) {
       this.adapters.set(this.adapterKey(adapter.adapterId, adapter.mode), adapter);
     }
@@ -780,6 +893,7 @@ export class CliSessionManager {
     const participantAgentId = String(input.participantAgentId || "").trim() || undefined;
     const participantDisplayName = String(input.participantDisplayName || "").trim() || undefined;
     const participantRole = input.participantRole;
+    const meetingTransport = input.meetingTransport || "agent_mcp";
     const contextDeliveryMode = input.contextDeliveryMode;
     const lastDeliveredSeq = Number.isFinite(Number(input.lastDeliveredSeq))
       ? Number(input.lastDeliveredSeq)
@@ -797,6 +911,7 @@ export class CliSessionManager {
       participant_agent_id: participantAgentId,
       participant_display_name: participantDisplayName,
       participant_role: participantRole,
+      meeting_transport: meetingTransport,
       created_at: nowIso(),
       updated_at: nowIso(),
       run_count: 0,
@@ -824,8 +939,13 @@ export class CliSessionManager {
       screenState: null,
       automationState: null,
       replyCapture: null,
+      launchEnv: { ...(input.launchEnv || {}) },
     };
 
+    // Keep the PTY-facing runtime shape even for "agent_mcp" sessions.
+    // The new MCP-first entry path no longer depends on PTY relay for meeting coordination,
+    // but the existing terminal/session plumbing is still useful for visibility, fallback
+    // adapters, and future hybrid flows. This compatibility layer is intentionally retained.
     this.runtimes.set(snapshot.id, runtime);
     this.emitSessionEvent("cli.session.created", runtime);
     runtime.runPromise = this.runRuntime(runtime);
@@ -847,6 +967,17 @@ export class CliSessionManager {
       return this.cloneSnapshot(runtime.snapshot);
     }
     runtime.snapshot.prompt = nextPrompt;
+    runtime.snapshot.updated_at = nowIso();
+    this.emitSessionEvent("cli.session.state", runtime);
+    return this.cloneSnapshot(runtime.snapshot);
+  }
+
+  updateSessionLaunchEnv(sessionId: string, launchEnv: Record<string, string>): CliSessionSnapshot | null {
+    const runtime = this.runtimes.get(sessionId);
+    if (!runtime) {
+      return null;
+    }
+    runtime.launchEnv = { ...launchEnv };
     runtime.snapshot.updated_at = nowIso();
     this.emitSessionEvent("cli.session.state", runtime);
     return this.cloneSnapshot(runtime.snapshot);
@@ -1139,6 +1270,7 @@ export class CliSessionManager {
           workspace: runtime.snapshot.workspace,
           cols: normalizeTerminalCols(runtime.snapshot.cols),
           rows: normalizeTerminalRows(runtime.snapshot.rows),
+          env: runtime.launchEnv,
         },
         {
           signal: runtime.abortController.signal,
@@ -1309,7 +1441,7 @@ export class CliSessionManager {
     if (runtime.snapshot.adapter === "claude" && runtime.snapshot.mode === "interactive") {
       runtime.automationState = {
         profile: "codex-startup",
-        continueSent: true,
+        continueSent: false,
         initialPromptTextSent: false,
         initialPromptEnterSent: false,
         initialPromptEnterRetried: false,
@@ -1322,6 +1454,26 @@ export class CliSessionManager {
       runtime.snapshot.automation_state = runtime.snapshot.prompt.trim()
         ? "waiting_for_claude_ready"
         : "waiting_for_claude_startup";
+      this.scheduleClaudeStartupEnter(runtime, 500);
+    }
+
+    if (runtime.snapshot.adapter === "cursor" && runtime.snapshot.mode === "interactive") {
+      runtime.automationState = {
+        profile: "codex-startup",
+        continueSent: false,
+        initialPromptTextSent: false,
+        initialPromptEnterSent: false,
+        initialPromptEnterRetried: false,
+        deliveryPromptEnterRetried: false,
+        manualOverride: false,
+        sawReadyScreen: false,
+        sawWorkingScreen: false,
+        submitTimer: null,
+      };
+      runtime.snapshot.automation_state = runtime.snapshot.prompt.trim()
+        ? "waiting_for_cursor_ready"
+        : "waiting_for_cursor_startup";
+      this.scheduleCursorStartupEnter(runtime, 500);
     }
   }
 
@@ -1495,6 +1647,21 @@ export class CliSessionManager {
     if (areEquivalentReplyExcerpts(excerpt, capture.baselineExcerpt)) {
       return;
     }
+    const latestScreen = runtime.screenState?.latest;
+    if (
+      runtime.snapshot.adapter === "codex"
+      && latestScreen
+      && looksLikeCodexReplyIdleScreen(latestScreen)
+    ) {
+      this.updateReplyCaptureState(runtime, "completed", {
+        excerpt: stripTrailingPlaceholderLine(excerpt, latestScreen) || excerpt,
+        clearTimer: true,
+      });
+      if (runtime.snapshot.mode === "interactive") {
+        this.updateAutomationState(runtime, "waiting_for_codex_prompt");
+      }
+      return;
+    }
     const nextState = "streaming";
     this.updateReplyCaptureState(runtime, nextState, { excerpt });
   }
@@ -1517,9 +1684,6 @@ export class CliSessionManager {
       if (!hasStableReplySignal) {
         return;
       }
-    }
-    if (capture.baselineExcerpt && !capture.excerpt) {
-      return;
     }
     const screenExcerpt = extractCodexReplyFromScreen(screen, capture.prompt);
     const finalExcerpt = stripTrailingPlaceholderLine(screenExcerpt || capture.excerpt, screen);
@@ -1553,6 +1717,9 @@ export class CliSessionManager {
         excerpt: latestExcerpt,
         clearTimer: true,
       });
+      if (runtime.snapshot.adapter === "codex" && runtime.snapshot.mode === "interactive") {
+        this.updateAutomationState(runtime, "waiting_for_codex_prompt");
+      }
     }, CLI_REPLY_FINALIZE_DEBOUNCE_MS);
   }
 
@@ -1600,12 +1767,317 @@ export class CliSessionManager {
     }, delayMs);
   }
 
+  private scheduleClaudeStartupEnter(runtime: CliSessionRuntime, delayMs: number): void {
+    const automation = runtime.automationState;
+    if (!automation || automation.profile !== "codex-startup") {
+      return;
+    }
+    if (runtime.snapshot.adapter !== "claude" || runtime.snapshot.mode !== "interactive") {
+      return;
+    }
+    if (automation.submitTimer) {
+      clearTimeout(automation.submitTimer);
+    }
+    automation.submitTimer = setTimeout(() => {
+      automation.submitTimer = null;
+      if (runtime.snapshot.adapter !== "claude" || runtime.snapshot.mode !== "interactive") {
+        return;
+      }
+      if (automation.manualOverride || !runtime.controls?.write || automation.continueSent) {
+        return;
+      }
+      automation.continueSent = true;
+      runtime.controls.write("\r");
+      this.updateAutomationState(runtime, "sent_claude_startup_enter");
+      logInfo(`[cli-session] ${runtime.snapshot.id} auto-sent Enter for Claude startup prompt.`);
+    }, delayMs);
+  }
+
+  private scheduleClaudePastedTextEnter(
+    runtime: CliSessionRuntime,
+    nextState: string,
+    delayMs: number,
+  ): void {
+    const automation = runtime.automationState;
+    if (!automation || automation.profile !== "codex-startup") {
+      return;
+    }
+    if (runtime.snapshot.adapter !== "claude" || runtime.snapshot.mode !== "interactive") {
+      return;
+    }
+    if (automation.submitTimer) {
+      clearTimeout(automation.submitTimer);
+    }
+    automation.submitTimer = setTimeout(() => {
+      automation.submitTimer = null;
+      if (runtime.snapshot.adapter !== "claude" || runtime.snapshot.mode !== "interactive") {
+        return;
+      }
+      if (automation.manualOverride || !runtime.controls?.write) {
+        return;
+      }
+      runtime.controls.write("\r");
+      this.updateAutomationState(runtime, nextState);
+      logInfo(`[cli-session] ${runtime.snapshot.id} auto-submitted Claude pasted text prompt.`);
+    }, delayMs);
+  }
+
+  private scheduleCursorStartupEnter(runtime: CliSessionRuntime, delayMs: number): void {
+    const automation = runtime.automationState;
+    if (!automation || automation.profile !== "codex-startup") {
+      return;
+    }
+    if (runtime.snapshot.adapter !== "cursor" || runtime.snapshot.mode !== "interactive") {
+      return;
+    }
+    if (automation.submitTimer) {
+      clearTimeout(automation.submitTimer);
+    }
+    automation.submitTimer = setTimeout(() => {
+      automation.submitTimer = null;
+      if (runtime.snapshot.adapter !== "cursor" || runtime.snapshot.mode !== "interactive") {
+        return;
+      }
+      if (automation.manualOverride || !runtime.controls?.write || automation.continueSent) {
+        return;
+      }
+      automation.continueSent = true;
+      runtime.controls.write("\r");
+      this.updateAutomationState(runtime, "sent_cursor_startup_enter");
+      logInfo(`[cli-session] ${runtime.snapshot.id} auto-sent Enter for Cursor startup prompt.`);
+    }, delayMs);
+  }
+
+  private scheduleCursorDelayedEnter(
+    runtime: CliSessionRuntime,
+    nextState: string,
+    delayMs: number,
+  ): void {
+    const automation = runtime.automationState;
+    if (!automation || automation.profile !== "codex-startup") {
+      return;
+    }
+    if (runtime.snapshot.adapter !== "cursor" || runtime.snapshot.mode !== "interactive") {
+      return;
+    }
+    if (automation.submitTimer) {
+      clearTimeout(automation.submitTimer);
+    }
+    automation.submitTimer = setTimeout(() => {
+      automation.submitTimer = null;
+      if (runtime.snapshot.adapter !== "cursor" || runtime.snapshot.mode !== "interactive") {
+        return;
+      }
+      if (automation.manualOverride || !runtime.controls?.write) {
+        return;
+      }
+      runtime.controls.write("\r");
+      this.updateAutomationState(runtime, nextState);
+      logInfo(`[cli-session] ${runtime.snapshot.id} auto-submitted Cursor prompt after delayed Enter.`);
+    }, delayMs);
+  }
+
+  private runClaudeAutomation(runtime: CliSessionRuntime, screen: CliSessionScreenSnapshot): void {
+    const automation = runtime.automationState;
+    if (!automation || !runtime.controls?.write) {
+      return;
+    }
+    if (automation.manualOverride) {
+      return;
+    }
+
+    const screenText = screen.text || "";
+    const initialPrompt = String(runtime.snapshot.prompt || "").trim();
+
+    if (looksLikeClaudeWorkingScreen(screenText)) {
+      automation.sawWorkingScreen = true;
+      if (runtime.replyCapture && runtime.replyCapture.state !== "completed") {
+        this.updateReplyCaptureState(runtime, "working", {
+          excerpt: runtime.replyCapture.excerpt,
+        });
+      }
+      this.updateAutomationState(runtime, "claude_working");
+      return;
+    }
+
+    if (looksLikeClaudeProceedPrompt(screenText)) {
+      runtime.controls.write("\r");
+      this.updateAutomationState(runtime, "sent_claude_proceed_enter");
+      logInfo(`[cli-session] ${runtime.snapshot.id} auto-confirmed Claude tool prompt.`);
+      return;
+    }
+
+    if (!initialPrompt) {
+      return;
+    }
+
+    if (looksLikeClaudeIdleScreen(screenText) || (automation.continueSent && looksLikeClaudeUsableScreen(screen))) {
+      automation.sawReadyScreen = true;
+    }
+
+    if (!automation.sawReadyScreen) {
+      return;
+    }
+
+    if (!automation.initialPromptTextSent) {
+      automation.initialPromptTextSent = true;
+      this.startReplyCapture(runtime, initialPrompt);
+      runtime.controls.write(initialPrompt);
+      if (looksLikeClaudePastedTextPrompt(screenText)) {
+        automation.initialPromptEnterSent = true;
+        this.scheduleClaudePastedTextEnter(runtime, "sent_claude_initial_prompt", 300);
+        this.updateAutomationState(runtime, "waiting_for_claude_paste_submit");
+        logInfo(`[cli-session] ${runtime.snapshot.id} detected Claude pasted text UI for initial prompt.`);
+      } else {
+        automation.initialPromptEnterSent = true;
+        runtime.controls.write("\r");
+        this.updateAutomationState(runtime, "sent_claude_initial_prompt");
+        logInfo(`[cli-session] ${runtime.snapshot.id} auto-submitted initial Claude prompt.`);
+      }
+      return;
+    }
+
+    if (
+      automation.initialPromptTextSent
+      && !automation.initialPromptEnterRetried
+      && !automation.sawWorkingScreen
+      && looksLikeClaudePastedTextPrompt(screenText)
+    ) {
+      automation.initialPromptEnterRetried = true;
+      this.scheduleClaudePastedTextEnter(runtime, "resent_claude_initial_paste_enter", 300);
+      this.updateAutomationState(runtime, "waiting_for_claude_initial_paste_submit");
+      logInfo(`[cli-session] ${runtime.snapshot.id} detected delayed Claude pasted text UI for initial prompt.`);
+      return;
+    }
+
+    if (
+      runtime.snapshot.automation_state === "meeting_delivery_prompt_sent"
+      && !automation.deliveryPromptEnterRetried
+      && runtime.replyCapture
+      && !runtime.replyCapture.excerpt
+      && isClaudePromptShowingText(screenText, initialPrompt)
+    ) {
+      automation.deliveryPromptEnterRetried = true;
+      if (looksLikeClaudePastedTextPrompt(screenText)) {
+        this.scheduleClaudePastedTextEnter(runtime, "resent_claude_delivery_enter", 300);
+        this.updateAutomationState(runtime, "waiting_for_claude_delivery_paste_submit");
+        logInfo(`[cli-session] ${runtime.snapshot.id} detected Claude pasted text UI for meeting prompt delivery.`);
+      } else if (looksLikeClaudeUsableScreen(screen)) {
+        runtime.controls.write("\r");
+        this.updateAutomationState(runtime, "resent_claude_delivery_enter");
+        logInfo(`[cli-session] ${runtime.snapshot.id} retried Enter for Claude meeting prompt delivery.`);
+      }
+    }
+  }
+
+  private runCursorAutomation(runtime: CliSessionRuntime, screen: CliSessionScreenSnapshot): void {
+    const automation = runtime.automationState;
+    if (!automation || !runtime.controls?.write) {
+      return;
+    }
+    if (automation.manualOverride) {
+      return;
+    }
+
+    const screenText = screen.text || "";
+    const initialPrompt = String(runtime.snapshot.prompt || "").trim();
+
+    if (looksLikeCursorWorkingScreen(screenText)) {
+      automation.sawWorkingScreen = true;
+      if (runtime.replyCapture && runtime.replyCapture.state !== "completed") {
+        this.updateReplyCaptureState(runtime, "working", {
+          excerpt: runtime.replyCapture.excerpt,
+        });
+      }
+      this.updateAutomationState(runtime, "cursor_working");
+      return;
+    }
+
+    if (looksLikeCursorProceedPrompt(screenText)) {
+      runtime.controls.write("\r");
+      this.updateAutomationState(runtime, "sent_cursor_proceed_enter");
+      logInfo(`[cli-session] ${runtime.snapshot.id} auto-confirmed Cursor tool prompt.`);
+      return;
+    }
+
+    if (!initialPrompt) {
+      return;
+    }
+
+    if (looksLikeCursorIdleScreen(screenText) || (automation.continueSent && looksLikeCursorUsableScreen(screen))) {
+      automation.sawReadyScreen = true;
+    }
+
+    if (!automation.sawReadyScreen) {
+      return;
+    }
+
+    if (!automation.initialPromptTextSent) {
+      automation.initialPromptTextSent = true;
+      this.startReplyCapture(runtime, initialPrompt);
+      runtime.controls.write(initialPrompt);
+      automation.initialPromptEnterSent = true;
+      if (looksLikeCursorPastedTextPrompt(screenText)) {
+        this.scheduleCursorDelayedEnter(runtime, "sent_cursor_initial_prompt", 300);
+        this.updateAutomationState(runtime, "waiting_for_cursor_paste_submit");
+        logInfo(`[cli-session] ${runtime.snapshot.id} detected Cursor pasted text UI for initial prompt.`);
+      } else {
+        this.scheduleCursorDelayedEnter(runtime, "sent_cursor_initial_prompt", 300);
+        this.updateAutomationState(runtime, "waiting_for_cursor_initial_submit");
+        logInfo(`[cli-session] ${runtime.snapshot.id} scheduled delayed Enter for initial Cursor prompt.`);
+      }
+      return;
+    }
+
+    if (
+      automation.initialPromptTextSent
+      && !automation.initialPromptEnterRetried
+      && !automation.sawWorkingScreen
+      && looksLikeCursorPastedTextPrompt(screenText)
+    ) {
+      automation.initialPromptEnterRetried = true;
+      this.scheduleCursorDelayedEnter(runtime, "resent_cursor_initial_paste_enter", 300);
+      this.updateAutomationState(runtime, "waiting_for_cursor_initial_paste_submit");
+      logInfo(`[cli-session] ${runtime.snapshot.id} detected delayed Cursor pasted text UI for initial prompt.`);
+      return;
+    }
+
+    if (
+      runtime.snapshot.automation_state === "meeting_delivery_prompt_sent"
+      && !automation.deliveryPromptEnterRetried
+      && runtime.replyCapture
+      && !runtime.replyCapture.excerpt
+      && isCursorPromptShowingText(screenText, initialPrompt)
+    ) {
+      automation.deliveryPromptEnterRetried = true;
+      if (looksLikeCursorPastedTextPrompt(screenText)) {
+        this.scheduleCursorDelayedEnter(runtime, "resent_cursor_delivery_enter", 300);
+        this.updateAutomationState(runtime, "waiting_for_cursor_delivery_paste_submit");
+        logInfo(`[cli-session] ${runtime.snapshot.id} detected Cursor pasted text UI for meeting prompt delivery.`);
+      } else if (looksLikeCursorUsableScreen(screen)) {
+        this.scheduleCursorDelayedEnter(runtime, "resent_cursor_delivery_enter", 300);
+        this.updateAutomationState(runtime, "waiting_for_cursor_delivery_submit");
+        logInfo(`[cli-session] ${runtime.snapshot.id} scheduled delayed Enter for Cursor meeting prompt delivery.`);
+      }
+    }
+  }
+
   private runAutomation(runtime: CliSessionRuntime, screen: CliSessionScreenSnapshot): void {
     const automation = runtime.automationState;
     if (!automation || !runtime.controls?.write) {
       return;
     }
     if (automation.profile !== "codex-startup") {
+      return;
+    }
+
+    if (runtime.snapshot.adapter === "claude" && runtime.snapshot.mode === "interactive") {
+      this.runClaudeAutomation(runtime, screen);
+      return;
+    }
+
+    if (runtime.snapshot.adapter === "cursor" && runtime.snapshot.mode === "interactive") {
+      this.runCursorAutomation(runtime, screen);
       return;
     }
 

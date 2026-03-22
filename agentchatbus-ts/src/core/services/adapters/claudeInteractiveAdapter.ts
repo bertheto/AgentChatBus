@@ -147,7 +147,7 @@ export class ClaudeInteractiveAdapter implements CliSessionAdapter {
           {
             name: "xterm-256color",
             cwd: workspace,
-            env: process.env,
+            env: { ...process.env, ...(input.env || {}) },
             cols: normalizeTerminalCols(input.cols),
             rows: normalizeTerminalRows(input.rows),
             useConpty,

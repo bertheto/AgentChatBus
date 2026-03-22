@@ -16,6 +16,12 @@ const RELAY_BLOCKED_STATES = new Set(["stale", "error"]);
 const DELIVERY_BUSY_REPLY_STATES = new Set(["waiting_for_reply", "working", "streaming"]);
 const MEETING_CONTROL_MARKER = "agentchatbus_meeting_control";
 
+function usesLegacyPtyRelay(session: CliSessionSnapshot): boolean {
+  // The PTY relay path remains in-tree as a compatibility layer for non-MCP CLI flows.
+  // Newer "agent_mcp" sessions bypass relay entirely and let the agent talk to the bus directly.
+  return String(session.meeting_transport || "pty_relay") === "pty_relay";
+}
+
 function normalizeScreenText(value: string | undefined): string {
   return String(value || "")
     .replace(/\r/g, "\n")
@@ -142,6 +148,74 @@ function getDesiredRelayContent(session: CliSessionSnapshot): string | undefined
     return extractInteractiveWorkingStatus(session.screen_excerpt) || "Working...";
   }
   return undefined;
+}
+
+function normalizeMergeText(value: string | undefined): string {
+  return String(value || "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .trim();
+}
+
+function findLongestSuffixPrefixOverlap(left: string, right: string): number {
+  const maxLength = Math.min(left.length, right.length);
+  for (let length = maxLength; length > 0; length -= 1) {
+    if (left.slice(-length) === right.slice(0, length)) {
+      return length;
+    }
+  }
+  return 0;
+}
+
+function findLongestLineSuffixPrefixOverlap(leftLines: string[], rightLines: string[]): number {
+  const maxLength = Math.min(leftLines.length, rightLines.length);
+  for (let length = maxLength; length > 0; length -= 1) {
+    if (leftLines.slice(-length).join("\n") === rightLines.slice(0, length).join("\n")) {
+      return length;
+    }
+  }
+  return 0;
+}
+
+function mergeStreamingRelayContent(existingContent: string, nextContent: string): string {
+  const existing = normalizeMergeText(existingContent);
+  const next = normalizeMergeText(nextContent);
+  if (!existing) {
+    return next;
+  }
+  if (!next) {
+    return existing;
+  }
+  if (existing === next) {
+    return existing;
+  }
+  if (next.includes(existing)) {
+    return next;
+  }
+  if (existing.includes(next)) {
+    return existing;
+  }
+
+  const charOverlap = findLongestSuffixPrefixOverlap(existing, next);
+  if (charOverlap > 0) {
+    return `${existing}${next.slice(charOverlap)}`.trim();
+  }
+
+  const existingLines = existing.split("\n");
+  const nextLines = next.split("\n");
+  const lineOverlap = findLongestLineSuffixPrefixOverlap(existingLines, nextLines);
+  if (lineOverlap > 0) {
+    return [...existingLines, ...nextLines.slice(lineOverlap)].join("\n").trim();
+  }
+
+  return `${existing}\n${next}`.trim();
+}
+
+function shouldUseStreamingAppendMerge(session: CliSessionSnapshot): boolean {
+  if (session.mode !== "interactive") {
+    return false;
+  }
+  return DELIVERY_BUSY_REPLY_STATES.has(String(session.reply_capture_state || ""));
 }
 
 function isObjectRecord(value: unknown): value is Record<string, unknown> {
@@ -353,6 +427,10 @@ export class CliMeetingOrchestrator {
     if (!session?.participant_agent_id) {
       return;
     }
+    if (!usesLegacyPtyRelay(session)) {
+      this.syncParticipantPresence(session);
+      return;
+    }
 
     this.syncParticipantPresence(session);
     await this.syncRelayMessage(session);
@@ -385,7 +463,8 @@ export class CliMeetingOrchestrator {
     }
 
     const sessions = this.cliSessionManager.listSessionsForThread(threadId)
-      .filter((session) => Boolean(session.participant_agent_id));
+      .filter((session) => Boolean(session.participant_agent_id))
+      .filter((session) => usesLegacyPtyRelay(session));
     const targetSeq = Number.isFinite(Number(payload?.seq))
       ? Number(payload?.seq)
       : this.store.getThreadCurrentSeq(threadId);
@@ -511,10 +590,7 @@ export class CliMeetingOrchestrator {
         .map((session) => String(session.participant_agent_id || "").trim())
         .filter(Boolean),
     );
-    if (participantIds.size > 1) {
-      return true;
-    }
-    return this.store.getThreadAgents(threadId).length > 1;
+    return participantIds.size > 1;
   }
 
   private getParticipantRoutingState(threadId: string, participantAgentId: string): MeetingRoutingState {
@@ -598,17 +674,24 @@ export class CliMeetingOrchestrator {
     if (session.mode !== "interactive") {
       return;
     }
-    if (
-      this.isMultiParticipantThread(session.thread_id)
-      && this.getParticipantRoutingState(session.thread_id, session.participant_agent_id) !== "online"
-    ) {
-      return;
-    }
     const deliveredSeq = Number(session.last_delivered_seq) || 0;
     const pendingSeq = this.pendingDeliverySeqBySession.get(session.id) || 0;
     const latestSeq = Number.isFinite(Number(requestedTargetSeq))
       ? Number(requestedTargetSeq)
-      : this.store.getThreadCurrentSeq(session.thread_id);
+      : Math.max(
+        pendingSeq,
+        this.store.getThreadCurrentSeq(session.thread_id),
+      );
+    if (
+      this.isMultiParticipantThread(session.thread_id)
+      && this.getParticipantRoutingState(session.thread_id, session.participant_agent_id) !== "online"
+    ) {
+      this.pendingDeliverySeqBySession.set(
+        session.id,
+        Math.max(pendingSeq, latestSeq),
+      );
+      return;
+    }
     if (Number.isFinite(Number(requestedTargetSeq))) {
       if (latestSeq <= deliveredSeq) {
         return;
@@ -758,13 +841,32 @@ export class CliMeetingOrchestrator {
         return;
       }
 
+      const nextContent =
+        shouldUseStreamingAppendMerge(session)
+        && !isInteractivePlaceholderContent(existingMessage.content)
+        && !isInteractivePlaceholderContent(desiredContent)
+          ? mergeStreamingRelayContent(existingMessage.content, desiredContent)
+          : desiredContent;
+
+      if (existingMessage.content === nextContent) {
+        if (session.meeting_post_state !== "posted" || session.meeting_post_error) {
+          this.cliSessionManager.updateMeetingState(session.id, {
+            meeting_post_state: "posted",
+            meeting_post_error: "",
+            last_posted_seq: existingMessage.seq,
+            last_posted_message_id: existingMessage.id,
+          });
+        }
+        return;
+      }
+
       this.cliSessionManager.updateMeetingState(session.id, {
         meeting_post_state: "posting",
         meeting_post_error: "",
       });
       const edited = this.store.editMessage(
         existingMessage.id,
-        desiredContent,
+        nextContent,
         session.participant_agent_id,
       );
       if (!edited) {

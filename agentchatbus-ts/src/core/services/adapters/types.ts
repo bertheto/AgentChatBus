@@ -1,12 +1,14 @@
 export type CliSessionAdapterId = "cursor" | "codex" | "claude";
 export type CliSessionMode = "headless" | "interactive";
 export type CliSessionStream = "stdout" | "stderr";
+export type CliMeetingTransport = "pty_relay" | "agent_mcp";
 
 export type CliAdapterRunInput = {
   prompt: string;
   workspace: string;
   cols: number;
   rows: number;
+  env?: Record<string, string>;
 };
 
 export type CliSessionControls = {

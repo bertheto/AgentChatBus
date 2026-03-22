@@ -90,6 +90,10 @@
 
   // Cache of available templates populated on first modal open
   let _templates = null;
+  const DEFAULT_THREAD_LAUNCH_INTERVAL_SECONDS = 2;
+  const MAX_THREAD_LAUNCH_AGENTS = 4;
+  let _threadLaunchAgents = [];
+  let _selectedThreadLaunchAgentId = "";
 
   async function _loadTemplates(api) {
     if (_templates !== null) return _templates;
@@ -124,18 +128,49 @@
   }
 
   function getThreadLaunchMode() {
-    return document.querySelector('input[name="thread-launch-mode"]:checked')?.value || "thread_only";
+    return document.querySelector('input[name="thread-launch-mode"]:checked')?.value || "thread_with_agent";
   }
 
   function syncThreadLaunchUi() {
     const mode = getThreadLaunchMode();
+    const modalEl = document.getElementById("modal");
+    const layoutEl = document.getElementById("thread-create-layout");
     const configEl = document.getElementById("thread-agent-config");
+    const sideEl = document.getElementById("thread-agent-side");
+    const agentActionsEl = document.getElementById("thread-agent-actions");
+    const threadOnlyActionsEl = document.getElementById("thread-thread-only-actions");
     const submitBtn = document.getElementById("btn-create-thread");
+    const submitBtnThreadOnly = document.getElementById("btn-create-thread-only");
+    const agentCount = Math.max(
+      1,
+      Number(document.getElementById("thread-launch-agents-list")?.dataset.agentCount || "1"),
+    );
+    const isWithAgent = mode === "thread_with_agent";
+    if (modalEl) {
+      modalEl.classList.toggle("modal--thread-only", !isWithAgent);
+    }
+    if (layoutEl) {
+      layoutEl.classList.toggle("meeting-modal-layout--single", true);
+    }
     if (configEl) {
-      configEl.classList.toggle("meeting-modal-hidden", mode !== "thread_with_agent");
+      configEl.classList.toggle("meeting-modal-hidden", !isWithAgent);
+    }
+    if (sideEl) {
+      sideEl.classList.toggle("meeting-modal-hidden", !isWithAgent);
+    }
+    if (agentActionsEl) {
+      agentActionsEl.classList.toggle("meeting-modal-hidden", !isWithAgent);
+    }
+    if (threadOnlyActionsEl) {
+      threadOnlyActionsEl.classList.toggle("meeting-modal-hidden", isWithAgent);
     }
     if (submitBtn) {
-      submitBtn.textContent = mode === "thread_with_agent" ? "Create and Start Agent" : "Create Thread";
+      submitBtn.textContent = isWithAgent
+        ? (agentCount > 1 ? "Create and Start Agents" : "Create and Start First Agent")
+        : "Create Thread";
+    }
+    if (submitBtnThreadOnly) {
+      submitBtnThreadOnly.textContent = "Create Thread";
     }
   }
 
@@ -211,6 +246,7 @@
     return {
       adapter,
       mode,
+      meetingTransport: "agent_mcp",
       displayName,
       initialInstruction,
     };
@@ -221,8 +257,64 @@
       return config.displayName;
     }
     const adapterLabel = config.adapter === "cursor" ? "Cursor" : config.adapter === "claude" ? "Claude" : "Codex";
-    const modeLabel = config.mode === "headless" ? "Headless" : "Interactive";
-    return `${adapterLabel} ${modeLabel}`;
+    return adapterLabel;
+  }
+
+  function createThreadLaunchAgent(overrides = {}) {
+    return {
+      id: `thread-agent-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      adapter: "claude",
+      mode: "interactive",
+      meetingTransport: "agent_mcp",
+      displayName: "",
+      initialInstruction: "",
+      ...overrides,
+    };
+  }
+
+  function getThreadLaunchAgentById(agentId) {
+    return _threadLaunchAgents.find((agent) => agent.id === agentId) || null;
+  }
+
+  function getThreadLaunchAgentConfigs() {
+    return _threadLaunchAgents.map((agent) => ({
+      adapter: agent.adapter || "claude",
+      mode: "interactive",
+      meetingTransport: "agent_mcp",
+      displayName: "",
+      initialInstruction: String(agent.initialInstruction || "").trim(),
+    }));
+  }
+
+  function getThreadLaunchIntervalMs() {
+    const raw = Number(document.getElementById("thread-launch-interval-seconds")?.value || DEFAULT_THREAD_LAUNCH_INTERVAL_SECONDS);
+    const seconds = Number.isFinite(raw) ? Math.max(0, Math.min(30, raw)) : DEFAULT_THREAD_LAUNCH_INTERVAL_SECONDS;
+    return Math.round(seconds * 1000);
+  }
+
+  function getThreadLaunchGlobalInstruction() {
+    return String(document.getElementById("thread-launch-global-instruction")?.value || "").trim();
+  }
+
+  function buildDefaultThreadName() {
+    const now = new Date();
+    const pad = (value) => String(value).padStart(2, "0");
+    const yy = String(now.getFullYear()).slice(-2);
+    const mm = pad(now.getMonth() + 1);
+    const dd = pad(now.getDate());
+    const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    let suffix = "";
+    if (globalThis.crypto && typeof globalThis.crypto.getRandomValues === "function") {
+      const bytes = new Uint8Array(3);
+      globalThis.crypto.getRandomValues(bytes);
+      suffix = Array.from(bytes, (value) => alphabet[value % alphabet.length]).join("");
+    } else {
+      suffix = Array.from({ length: 3 }, () => {
+        const index = Math.floor(Math.random() * alphabet.length);
+        return alphabet[index];
+      }).join("");
+    }
+    return `Thread${yy}${mm}${dd}-${suffix}`;
   }
 
   function buildDefaultInstruction({ topic, config, isFirstAgent }) {
@@ -237,6 +329,378 @@
         ? "Respond in plain text."
         : "",
     ].filter(Boolean).join(" ");
+  }
+
+  function getResolvedThreadLaunchInstruction({ topic, config, isFirstAgent }) {
+    const agentInstruction = String(config.initialInstruction || "").trim();
+    if (agentInstruction) {
+      return agentInstruction;
+    }
+    const globalInstruction = getThreadLaunchGlobalInstruction();
+    if (globalInstruction) {
+      return globalInstruction;
+    }
+    return buildDefaultInstruction({ topic, config, isFirstAgent });
+  }
+
+  function syncThreadLaunchGlobalInstructionField(options = {}) {
+    const globalInstructionEl = document.getElementById("thread-launch-global-instruction");
+    if (!globalInstructionEl) {
+      return;
+    }
+    const topic = String(options.topic || document.getElementById("modal-topic")?.value || "").trim() || "current thread";
+    const firstAgent = _threadLaunchAgents[0] || createThreadLaunchAgent({ adapter: "claude" });
+    const defaultInstruction = buildDefaultInstruction({
+      topic,
+      config: firstAgent,
+      isFirstAgent: true,
+    });
+    const shouldReplace =
+      options.force === true
+      || !String(globalInstructionEl.value || "").trim()
+      || globalInstructionEl.dataset.autogenerated === "1";
+    globalInstructionEl.placeholder = defaultInstruction;
+    if (!shouldReplace) {
+      return;
+    }
+    globalInstructionEl.value = defaultInstruction;
+    globalInstructionEl.dataset.autogenerated = "1";
+  }
+
+  function buildLaunchPromptPreview({ topic, threadId, config, isFirstAgent }) {
+    const participantName = buildDefaultParticipantName(config);
+    const initialInstruction = getResolvedThreadLaunchInstruction({ topic, config, isFirstAgent });
+    return [
+      "Please use the MCP tool `agentchatbus` to join the discussion.",
+      "",
+      `Use \`bus_connect\` to join the thread "${topic}".`,
+      "",
+      `When joining, resume the provided participant identity: ${participantName} (agent id assigned at launch time).`,
+      "",
+      "If you need to wait for new messages, use `msg_wait` with a 10 minute timeout.",
+      "",
+      "`msg_wait` does not consume resources; use it to maintain the connection.",
+      "",
+      "After joining, stay connected, read new messages, and reply in-thread with AgentChatBus MCP tools.",
+      "",
+      "Do not exit the agent process unless notified to do so.",
+      "",
+      "Do not create a new thread.",
+      "",
+      "Do not replace the provided participant identity with a new one unless resuming fails.",
+      "",
+      `Initial instruction:\n${initialInstruction}`,
+    ].join("\n");
+  }
+
+  function syncThreadLaunchPromptPreview() {
+    const previewEl = document.getElementById("thread-agent-prompt-preview");
+    const metaEl = document.getElementById("thread-agent-prompt-meta");
+    const detailsEl = document.getElementById("thread-agent-side");
+    if (!previewEl) {
+      return;
+    }
+    const topic = String(document.getElementById("modal-topic")?.value || "").trim() || "current thread";
+    const selectedAgent = getThreadLaunchAgentById(_selectedThreadLaunchAgentId) || _threadLaunchAgents[0] || null;
+    if (!selectedAgent) {
+      previewEl.textContent = "";
+      if (metaEl) {
+        metaEl.textContent = "";
+      }
+      if (detailsEl) {
+        detailsEl.classList.add("meeting-modal-hidden");
+      }
+      return;
+    }
+    const index = Math.max(0, _threadLaunchAgents.findIndex((agent) => agent.id === selectedAgent.id));
+    const isFirstAgent = index === 0;
+    const roleLabel = isFirstAgent ? "Administrator" : "Participant";
+    previewEl.textContent = buildLaunchPromptPreview({
+      topic,
+      threadId: "",
+      config: selectedAgent,
+      isFirstAgent,
+    });
+    if (metaEl) {
+      metaEl.textContent = `Previewing Agent ${index + 1} · ${roleLabel} · ${buildDefaultParticipantName(selectedAgent)}`;
+    }
+    if (detailsEl) {
+      detailsEl.classList.remove("meeting-modal-hidden");
+    }
+  }
+
+  function renderThreadLaunchAgents() {
+    const listEl = document.getElementById("thread-launch-agents-list");
+    const countEl = document.getElementById("thread-launch-agent-count");
+    const addBtn = document.getElementById("thread-launch-add-agent");
+    if (!listEl) {
+      return;
+    }
+    if (!_threadLaunchAgents.length) {
+      _threadLaunchAgents = [createThreadLaunchAgent()];
+    }
+    if (!getThreadLaunchAgentById(_selectedThreadLaunchAgentId)) {
+      _selectedThreadLaunchAgentId = _threadLaunchAgents[0]?.id || "";
+    }
+    const topic = String(document.getElementById("modal-topic")?.value || "").trim() || "current thread";
+    syncThreadLaunchGlobalInstructionField({ topic });
+    listEl.innerHTML = _threadLaunchAgents.map((agent, index) => {
+      const isFirstAgent = index === 0;
+      const selectedClass = agent.id === _selectedThreadLaunchAgentId ? " is-selected" : "";
+      return `
+        <div class="thread-launch-agent-row${selectedClass}" onclick="window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')">
+          <div class="thread-launch-agent-row__header">
+            <div class="thread-launch-agent-row__meta">
+              <button class="thread-launch-agent-row__title" type="button" onclick="event.stopPropagation(); window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')">
+                Agent ${index + 1}
+              </button>
+              <span class="thread-launch-agent-row__badge${isFirstAgent ? " thread-launch-agent-row__badge--admin" : ""}">
+                ${isFirstAgent ? "Administrator" : "Participant"}
+              </span>
+            </div>
+            ${index > 0 ? `<button class="btn-secondary btn-compact thread-launch-agent-row__remove" type="button" onclick="event.stopPropagation(); window.AcbModals && window.AcbModals.removeThreadLaunchAgent('${_escapeHtml(agent.id)}')">Remove</button>` : ""}
+          </div>
+          <div class="thread-launch-agent-row__fields">
+            <div class="settings-field">
+              <label>Adapter</label>
+              <div class="thread-launch-adapter-group" onclick="event.stopPropagation()">
+                <label class="thread-launch-adapter-option">
+                  <input
+                    type="radio"
+                    name="thread-launch-adapter-${_escapeHtml(agent.id)}"
+                    value="codex"
+                    data-agent-id="${_escapeHtml(agent.id)}"
+                    data-field="adapter"
+                    ${agent.adapter === "codex" ? "checked" : ""}
+                    onclick="event.stopPropagation()"
+                    onchange="window.AcbModals && window.AcbModals.updateThreadLaunchAgentField(this)"
+                  />
+                  <span>Codex</span>
+                </label>
+                <label class="thread-launch-adapter-option">
+                  <input
+                    type="radio"
+                    name="thread-launch-adapter-${_escapeHtml(agent.id)}"
+                    value="cursor"
+                    data-agent-id="${_escapeHtml(agent.id)}"
+                    data-field="adapter"
+                    ${agent.adapter === "cursor" ? "checked" : ""}
+                    onclick="event.stopPropagation()"
+                    onchange="window.AcbModals && window.AcbModals.updateThreadLaunchAgentField(this)"
+                  />
+                  <span>Cursor</span>
+                </label>
+                <label class="thread-launch-adapter-option">
+                  <input
+                    type="radio"
+                    name="thread-launch-adapter-${_escapeHtml(agent.id)}"
+                    value="claude"
+                    data-agent-id="${_escapeHtml(agent.id)}"
+                    data-field="adapter"
+                    ${agent.adapter === "claude" ? "checked" : ""}
+                    onclick="event.stopPropagation()"
+                    onchange="window.AcbModals && window.AcbModals.updateThreadLaunchAgentField(this)"
+                  />
+                  <span>Claude</span>
+                </label>
+              </div>
+            </div>
+            <div class="settings-field">
+              <label>Instruction Override</label>
+              <input
+                type="text"
+                value="${_escapeHtml(String(agent.initialInstruction || ""))}"
+                data-agent-id="${_escapeHtml(agent.id)}"
+                data-field="initialInstruction"
+                placeholder="Leave blank to use the shared instruction"
+                onclick="event.stopPropagation()"
+                onfocus="event.stopPropagation(); window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')"
+                oninput="window.AcbModals && window.AcbModals.updateThreadLaunchAgentField(this)"
+              />
+            </div>
+          </div>
+        </div>
+      `;
+    }).join("");
+    listEl.dataset.agentCount = String(_threadLaunchAgents.length);
+    if (countEl) {
+      countEl.textContent = String(_threadLaunchAgents.length);
+    }
+    if (addBtn) {
+      addBtn.disabled = _threadLaunchAgents.length >= MAX_THREAD_LAUNCH_AGENTS;
+    }
+    syncThreadLaunchPromptPreview();
+    syncThreadLaunchUi();
+  }
+
+  function resetThreadLaunchAgents() {
+    _threadLaunchAgents = [createThreadLaunchAgent({ adapter: "claude" })];
+    _selectedThreadLaunchAgentId = _threadLaunchAgents[0].id;
+    syncThreadLaunchGlobalInstructionField({ force: true });
+    const intervalEl = document.getElementById("thread-launch-interval-seconds");
+    if (intervalEl) {
+      intervalEl.value = String(DEFAULT_THREAD_LAUNCH_INTERVAL_SECONDS);
+    }
+    renderThreadLaunchAgents();
+  }
+
+  function addThreadLaunchAgent() {
+    if (_threadLaunchAgents.length >= MAX_THREAD_LAUNCH_AGENTS) {
+      return;
+    }
+    const nextAgent = createThreadLaunchAgent({ adapter: "codex" });
+    _threadLaunchAgents.push(nextAgent);
+    _selectedThreadLaunchAgentId = nextAgent.id;
+    renderThreadLaunchAgents();
+  }
+
+  function removeThreadLaunchAgent(agentId) {
+    if (_threadLaunchAgents.length <= 1) {
+      return;
+    }
+    _threadLaunchAgents = _threadLaunchAgents.filter((agent) => agent.id !== agentId);
+    if (!getThreadLaunchAgentById(_selectedThreadLaunchAgentId)) {
+      _selectedThreadLaunchAgentId = _threadLaunchAgents[0]?.id || "";
+    }
+    renderThreadLaunchAgents();
+  }
+
+  function selectThreadLaunchAgent(agentId) {
+    if (!getThreadLaunchAgentById(agentId)) {
+      return;
+    }
+    if (_selectedThreadLaunchAgentId === agentId) {
+      return;
+    }
+    _selectedThreadLaunchAgentId = agentId;
+    renderThreadLaunchAgents();
+  }
+
+  function updateThreadLaunchAgentField(element) {
+    const agentId = String(element?.dataset?.agentId || "").trim();
+    const field = String(element?.dataset?.field || "").trim();
+    const agent = getThreadLaunchAgentById(agentId);
+    if (!agent || !field) {
+      return;
+    }
+    _selectedThreadLaunchAgentId = agentId;
+    if (field === "adapter") {
+      agent.adapter = String(element.value || "claude").trim() || "claude";
+      if (_threadLaunchAgents[0]?.id === agentId) {
+        syncThreadLaunchGlobalInstructionField();
+      }
+      renderThreadLaunchAgents();
+      return;
+    }
+    if (field === "initialInstruction") {
+      agent.initialInstruction = String(element.value || "");
+      syncThreadLaunchPromptPreview();
+      return;
+    }
+  }
+
+  function syncLaunchPromptPreview(prefix, options = {}) {
+    const previewEl = document.getElementById(`${prefix}-prompt-preview`);
+    if (!previewEl) {
+      return;
+    }
+    const topic = String(options.topic || "").trim() || "current thread";
+    const config = readAgentLaunchConfig(prefix);
+    previewEl.textContent = buildLaunchPromptPreview({
+      topic,
+      threadId: options.threadId,
+      config,
+      isFirstAgent: Boolean(options.isFirstAgent),
+    });
+  }
+
+  function syncDefaultInstructionField(prefix, options = {}) {
+    const instructionEl = document.getElementById(`${prefix}-instruction`);
+    if (!instructionEl) {
+      return;
+    }
+    const topic = String(options.topic || "").trim() || "current thread";
+    const config = readAgentLaunchConfig(prefix);
+    const defaultInstruction = buildDefaultInstruction({
+      topic,
+      config,
+      isFirstAgent: Boolean(options.isFirstAgent),
+    });
+    const shouldReplace =
+      options.force === true
+      || !String(instructionEl.value || "").trim()
+      || instructionEl.dataset.autogenerated === "1";
+    instructionEl.placeholder = defaultInstruction;
+    if (!shouldReplace) {
+      syncLaunchPromptPreview(prefix, options);
+      return;
+    }
+    instructionEl.value = defaultInstruction;
+    instructionEl.dataset.autogenerated = "1";
+    syncLaunchPromptPreview(prefix, options);
+  }
+
+  function markInstructionAsUserEdited(prefix) {
+    const instructionEl = document.getElementById(`${prefix}-instruction`);
+    if (!instructionEl) {
+      return;
+    }
+    instructionEl.dataset.autogenerated = "0";
+  }
+
+  function bindInstructionAutofill(prefix, options = {}) {
+    const topicInputId = options.topicInputId;
+    const getTopic = options.getTopic;
+    const isFirstAgent = Boolean(options.isFirstAgent);
+    const bind = (elementId, eventName = "change") => {
+      const el = document.getElementById(elementId);
+      if (!el || el.dataset.defaultInstructionBound === "1") {
+        return;
+      }
+      el.dataset.defaultInstructionBound = "1";
+      el.addEventListener(eventName, () => {
+        const nextOptions = {
+          topic: typeof getTopic === "function" ? getTopic() : "",
+          threadId: typeof options.getThreadId === "function" ? options.getThreadId() : undefined,
+          isFirstAgent,
+        };
+        syncDefaultInstructionField(prefix, nextOptions);
+        syncLaunchPromptPreview(prefix, nextOptions);
+      });
+    };
+
+    bind(`${prefix}-adapter`);
+    bind(`${prefix}-mode`);
+    bind(`${prefix}-display-name`, "input");
+
+    const instructionEl = document.getElementById(`${prefix}-instruction`);
+    if (instructionEl && instructionEl.dataset.userEditBound !== "1") {
+      instructionEl.dataset.userEditBound = "1";
+      instructionEl.addEventListener("input", () => {
+        markInstructionAsUserEdited(prefix);
+        syncLaunchPromptPreview(prefix, {
+          topic: typeof getTopic === "function" ? getTopic() : "",
+          threadId: typeof options.getThreadId === "function" ? options.getThreadId() : undefined,
+          isFirstAgent,
+        });
+      });
+    }
+
+    if (topicInputId) {
+      const topicEl = document.getElementById(topicInputId);
+      if (topicEl && topicEl.dataset.defaultInstructionBound !== "1") {
+        topicEl.dataset.defaultInstructionBound = "1";
+        topicEl.addEventListener("input", () => {
+          const nextOptions = {
+            topic: typeof getTopic === "function" ? getTopic() : "",
+            threadId: typeof options.getThreadId === "function" ? options.getThreadId() : undefined,
+            isFirstAgent,
+          };
+          syncDefaultInstructionField(prefix, nextOptions);
+          syncLaunchPromptPreview(prefix, nextOptions);
+        });
+      }
+    }
   }
 
   async function registerParticipantAgent(api, config) {
@@ -271,6 +735,7 @@
       body: JSON.stringify({
         adapter: config.adapter,
         mode: config.mode,
+        meeting_transport: config.meetingTransport,
         initial_instruction: config.initialInstruction || "",
         requested_by_agent_id: uiAgent.agent_id,
         participant_agent_id: participantAgent.agent_id,
@@ -283,12 +748,35 @@
   }
 
   function openThreadModal(api) {
-    const launchThreadOnly = document.querySelector('input[name="thread-launch-mode"][value="thread_only"]');
-    if (launchThreadOnly) {
-      launchThreadOnly.checked = true;
+    const topicInputEl = document.getElementById("modal-topic");
+    const launchWithAgent = document.querySelector('input[name="thread-launch-mode"][value="thread_with_agent"]');
+    if (launchWithAgent) {
+      launchWithAgent.checked = true;
     }
-    resetAgentForm("thread-agent");
+    if (topicInputEl && !String(topicInputEl.value || "").trim()) {
+      topicInputEl.value = buildDefaultThreadName();
+    }
+    if (topicInputEl && topicInputEl.dataset.threadLaunchBound !== "1") {
+      topicInputEl.dataset.threadLaunchBound = "1";
+      topicInputEl.addEventListener("input", () => {
+        syncThreadLaunchGlobalInstructionField({
+          topic: String(topicInputEl.value || "").trim() || "current thread",
+        });
+        renderThreadLaunchAgents();
+      });
+    }
+    const globalInstructionEl = document.getElementById("thread-launch-global-instruction");
+    if (globalInstructionEl && globalInstructionEl.dataset.threadLaunchBound !== "1") {
+      globalInstructionEl.dataset.threadLaunchBound = "1";
+      globalInstructionEl.addEventListener("input", () => {
+        globalInstructionEl.dataset.autogenerated = "0";
+      });
+      globalInstructionEl.addEventListener("input", () => {
+        syncThreadLaunchPromptPreview();
+      });
+    }
     setModalVisible("thread", true);
+    resetThreadLaunchAgents();
     syncThreadLaunchUi();
     setTimeout(() => document.getElementById("modal-topic").focus(), 100);
     if (api) {
@@ -312,7 +800,18 @@
     const template = templateSel ? templateSel.value || null : null;
     const launchMode = getThreadLaunchMode();
     const shouldLaunchFirstAgent = launchMode === "thread_with_agent";
-    const firstAgentConfig = shouldLaunchFirstAgent ? readAgentLaunchConfig("thread-agent") : null;
+    const launchAgentConfigs = shouldLaunchFirstAgent
+      ? getThreadLaunchAgentConfigs().map((config, index) => ({
+        ...config,
+        initialInstruction: getResolvedThreadLaunchInstruction({
+          topic,
+          config,
+          isFirstAgent: index === 0,
+        }),
+      }))
+      : [];
+    const firstAgentConfig = shouldLaunchFirstAgent ? launchAgentConfigs[0] || null : null;
+    const launchIntervalMs = getThreadLaunchIntervalMs();
 
     // UI-14: get or register a browser-session agent to provide auth for thread creation
     const uiAgent = window.AcbUiAgent ? await window.AcbUiAgent.ensureUiAgent() : null;
@@ -339,10 +838,10 @@
     if (templateSel) templateSel.value = "";
     const descEl = document.getElementById("modal-template-desc");
     if (descEl) descEl.textContent = "";
-    resetAgentForm("thread-agent");
-    const launchThreadOnly = document.querySelector('input[name="thread-launch-mode"][value="thread_only"]');
-    if (launchThreadOnly) {
-      launchThreadOnly.checked = true;
+    resetThreadLaunchAgents();
+    const launchWithAgent = document.querySelector('input[name="thread-launch-mode"][value="thread_with_agent"]');
+    if (launchWithAgent) {
+      launchWithAgent.checked = true;
     }
     syncThreadLaunchUi();
     closeThreadModal();
@@ -361,6 +860,7 @@
       }),
     });
     if (t) {
+      const followupLaunchConfigs = shouldLaunchFirstAgent ? launchAgentConfigs.slice(1) : [];
       if (shouldLaunchFirstAgent && participantAgent && firstAgentConfig) {
         await createParticipantSession(api, {
           threadId: t.id,
@@ -384,6 +884,34 @@
       if (window.AcbChat && typeof window.AcbChat.refreshThreadAdmin === "function") {
         await window.AcbChat.refreshThreadAdmin(t.id, api);
       }
+      if (window.AcbCliSessions && typeof window.AcbCliSessions.refreshThread === "function") {
+        await window.AcbCliSessions.refreshThread(t.id, api);
+      }
+      for (let index = 0; index < followupLaunchConfigs.length; index += 1) {
+        const config = followupLaunchConfigs[index];
+        if (launchIntervalMs > 0) {
+          await new Promise((resolve) => setTimeout(resolve, launchIntervalMs));
+        }
+        const nextParticipantAgent = await registerParticipantAgent(api, config);
+        if (!nextParticipantAgent) {
+          console.error(`[Thread Create] Could not register participant agent ${index + 2}`);
+          continue;
+        }
+        const session = await createParticipantSession(api, {
+          threadId: t.id,
+          threadTopic: topic,
+          uiAgent,
+          participantAgent: nextParticipantAgent,
+          config,
+          isFirstAgent: false,
+        });
+        if (!session) {
+          console.error(`[Thread Create] Failed to create participant CLI session ${index + 2}`);
+        }
+      }
+      if (followupLaunchConfigs.length > 0 && window.AcbCliSessions && typeof window.AcbCliSessions.refreshThread === "function") {
+        await window.AcbCliSessions.refreshThread(t.id, api);
+      }
     }
   }
 
@@ -393,6 +921,11 @@
       return;
     }
     resetAgentForm("agent-modal");
+    bindInstructionAutofill("agent-modal", {
+      getTopic: () => document.getElementById("thread-title")?.textContent?.trim() || "current thread",
+      getThreadId: () => window.currentThreadId || "",
+      isFirstAgent: false,
+    });
     resetAutoAssembleForm();
     switchAddAgentTab("manual");
     const threadTitle = document.getElementById("thread-title")?.textContent?.trim() || "current thread";
@@ -408,9 +941,28 @@
         roleHintEl.textContent = count > 0
           ? "New agents join as participants."
           : "The first launched agent in this thread will become the administrator.";
+        syncDefaultInstructionField("agent-modal", {
+          topic: threadTitle,
+          threadId,
+          isFirstAgent: count === 0,
+          force: true,
+        });
       } catch {
         roleHintEl.textContent = "New agents join as participants unless they are the first active agent in the thread.";
+        syncDefaultInstructionField("agent-modal", {
+          topic: threadTitle,
+          threadId,
+          isFirstAgent: false,
+          force: true,
+        });
       }
+    } else {
+      syncDefaultInstructionField("agent-modal", {
+        topic: threadTitle,
+        threadId,
+        isFirstAgent: false,
+        force: true,
+      });
     }
     setModalVisible("agent", true);
   }
@@ -874,6 +1426,10 @@
     closeThreadModal,
     submitThreadModal,
     syncThreadLaunchUi,
+    addThreadLaunchAgent,
+    removeThreadLaunchAgent,
+    selectThreadLaunchAgent,
+    updateThreadLaunchAgentField,
     openAddAgentModal,
     closeAddAgentModal,
     submitAddAgentModal,
