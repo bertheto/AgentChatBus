@@ -60,6 +60,8 @@ export interface AppConfig {
   cliWorkspace: string | null;
   cursorAgentCommand: string | null;
   codexCommand: string | null;
+  geminiCommand: string | null;
+  copilotCommand: string | null;
   ptyUseConpty: boolean;
   launchBaseUrl: string | null;
   launchThreadId: string | null;
@@ -1138,6 +1140,44 @@ export const CONFIG_REGISTRY: ReadonlyArray<ConfigDescriptor> = [
     },
   },
   {
+    key: "GEMINI_COMMAND",
+    envVar: "AGENTCHATBUS_GEMINI_COMMAND",
+    resolvedField: "geminiCommand",
+    type: "string",
+    kind: "text",
+    defaultValue: null,
+    label: "Gemini Command",
+    description: "Optional override for the Gemini CLI command used by the interactive PTY adapter.",
+    section: "internal",
+    scope: "hidden",
+    sensitivity: "runtime",
+    restartRequired: true,
+    order: 284,
+    resolve: () => {
+      const configured = getEnvValue("AGENTCHATBUS_GEMINI_COMMAND");
+      return configured ? configured : null;
+    },
+  },
+  {
+    key: "COPILOT_COMMAND",
+    envVar: "AGENTCHATBUS_COPILOT_COMMAND",
+    resolvedField: "copilotCommand",
+    type: "string",
+    kind: "text",
+    defaultValue: null,
+    label: "Copilot Command",
+    description: "Optional override for the Copilot CLI command used by the interactive PTY adapter.",
+    section: "internal",
+    scope: "hidden",
+    sensitivity: "runtime",
+    restartRequired: true,
+    order: 285,
+    resolve: () => {
+      const configured = getEnvValue("AGENTCHATBUS_COPILOT_COMMAND");
+      return configured ? configured : null;
+    },
+  },
+  {
     key: "PTY_USE_CONPTY",
     envVar: "AGENTCHATBUS_PTY_USE_CONPTY",
     resolvedField: "ptyUseConpty",
@@ -1150,7 +1190,7 @@ export const CONFIG_REGISTRY: ReadonlyArray<ConfigDescriptor> = [
     scope: "hidden",
     sensitivity: "runtime",
     restartRequired: true,
-    order: 284,
+    order: 286,
     resolve: (ctx) => parseBoolLike(getRawValue(ctx, { envVar: "AGENTCHATBUS_PTY_USE_CONPTY" }, true), true),
   },
   {

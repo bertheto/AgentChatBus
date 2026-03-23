@@ -1,4 +1,4 @@
-export type CliSessionAdapterId = "cursor" | "codex" | "claude";
+export type CliSessionAdapterId = "cursor" | "codex" | "claude" | "gemini" | "copilot";
 export type CliSessionMode = "headless" | "interactive";
 export type CliSessionStream = "stdout" | "stderr";
 export type CliMeetingTransport = "pty_relay" | "agent_mcp";

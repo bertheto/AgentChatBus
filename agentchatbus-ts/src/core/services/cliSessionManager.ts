@@ -7,11 +7,13 @@ import { CursorHeadlessAdapter } from "./adapters/cursorHeadlessAdapter.js";
 import { CursorInteractiveAdapter } from "./adapters/cursorInteractiveAdapter.js";
 import { CodexInteractiveAdapter } from "./adapters/codexInteractiveAdapter.js";
 import { ClaudeInteractiveAdapter } from "./adapters/claudeInteractiveAdapter.js";
+import { GeminiInteractiveAdapter } from "./adapters/geminiInteractiveAdapter.js";
+import { CopilotInteractiveAdapter } from "./adapters/copilotInteractiveAdapter.js";
 
 type HeadlessTerminalInstance = import("@xterm/headless").Terminal;
 const { Terminal: HeadlessTerminal } = xtermHeadless;
 
-export type CliSessionAdapterId = "cursor" | "codex" | "claude";
+export type CliSessionAdapterId = "cursor" | "codex" | "claude" | "gemini" | "copilot";
 export type CliSessionMode = "headless" | "interactive";
 export type CliSessionState =
   | "created"
@@ -891,6 +893,8 @@ export class CliSessionManager {
     new CursorInteractiveAdapter(),
     new CodexInteractiveAdapter(),
     new ClaudeInteractiveAdapter(),
+    new GeminiInteractiveAdapter(),
+    new CopilotInteractiveAdapter(),
   ]) {
     for (const adapter of adapters) {
       this.adapters.set(this.adapterKey(adapter.adapterId, adapter.mode), adapter);
