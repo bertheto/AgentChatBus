@@ -2936,7 +2936,7 @@ body[data-theme="light"] .meeting-modal-preview--collapsible {
 
 .meeting-modal-preview__body--compact {
   margin: 0 12px 12px;
-  max-height: min(22vh, 180px);
+  max-height: min(16vh, 132px);
 }
 
 .thread-launch-toolbar {
@@ -3007,9 +3007,9 @@ body[data-theme="light"] .meeting-modal-preview--collapsible {
 .thread-launch-agents-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  max-height: min(34vh, 340px);
-  overflow: auto;
+  gap: 10px;
+  max-height: none;
+  overflow: visible;
   width: 100%;
 }
 
@@ -3019,15 +3019,15 @@ body[data-theme="light"] .meeting-modal-preview--collapsible {
   grid-template-areas:
     "header"
     "fields";
-  gap: 10px;
+  gap: 12px;
   align-items: start;
-  padding: 10px;
+  padding: 12px;
   border: 1px solid var(--border);
   border-radius: 12px;
   background: var(--bg-panel);
   width: 100%;
   min-width: 0;
-  overflow: hidden;
+  overflow: visible;
   cursor: pointer;
 }
 
@@ -3086,10 +3086,14 @@ body[data-theme="light"] .meeting-modal-preview--collapsible {
 .thread-launch-agent-row__fields {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: 12px;
+  gap: 14px;
   grid-area: fields;
   min-width: 0;
   align-items: start;
+}
+
+.thread-launch-agent-row__fields .settings-field label {
+  margin-bottom: 6px;
 }
 
 .thread-launch-agent-row__fields .settings-field {

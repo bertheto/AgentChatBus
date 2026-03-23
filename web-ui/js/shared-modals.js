@@ -510,10 +510,19 @@
       const isFirstAgent = index === 0;
       const selectedClass = agent.id === _selectedThreadLaunchAgentId ? " is-selected" : "";
       return `
-        <div class="thread-launch-agent-row${selectedClass}" onclick="window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')">
+        <div
+          class="thread-launch-agent-row${selectedClass}"
+          onclick="window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')"
+          onpointerdown="window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')"
+        >
           <div class="thread-launch-agent-row__header">
             <div class="thread-launch-agent-row__meta">
-              <button class="thread-launch-agent-row__title" type="button" onclick="event.stopPropagation(); window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')">
+              <button
+                class="thread-launch-agent-row__title"
+                type="button"
+                onclick="event.stopPropagation(); window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')"
+                onpointerdown="event.stopPropagation(); window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')"
+              >
                 Agent ${index + 1}
               </button>
               <span class="thread-launch-agent-row__badge${isFirstAgent ? " thread-launch-agent-row__badge--admin" : ""}">
@@ -522,11 +531,22 @@
             </div>
             ${index > 0 ? `<button class="btn-secondary btn-compact thread-launch-agent-row__remove" type="button" onclick="event.stopPropagation(); window.AcbModals && window.AcbModals.removeThreadLaunchAgent('${_escapeHtml(agent.id)}')">Remove</button>` : ""}
           </div>
-          <div class="thread-launch-agent-row__fields">
+          <div
+            class="thread-launch-agent-row__fields"
+            onclick="window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')"
+            onpointerdown="window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')"
+          >
             <div class="settings-field">
               <label>Adapter</label>
-              <div class="thread-launch-adapter-group" onclick="event.stopPropagation()">
-                <label class="thread-launch-adapter-option">
+              <div
+                class="thread-launch-adapter-group"
+                onclick="event.stopPropagation(); window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')"
+                onpointerdown="event.stopPropagation(); window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')"
+              >
+                <label
+                  class="thread-launch-adapter-option"
+                  onpointerdown="event.stopPropagation(); window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')"
+                >
                   <input
                     type="radio"
                     name="thread-launch-adapter-${_escapeHtml(agent.id)}"
@@ -534,12 +554,16 @@
                     data-agent-id="${_escapeHtml(agent.id)}"
                     data-field="adapter"
                     ${agent.adapter === "codex" ? "checked" : ""}
-                    onclick="event.stopPropagation()"
+                    onclick="event.stopPropagation(); window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')"
+                    onpointerdown="event.stopPropagation(); window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')"
                     onchange="window.AcbModals && window.AcbModals.updateThreadLaunchAgentField(this)"
                   />
                   <span>Codex</span>
                 </label>
-                <label class="thread-launch-adapter-option">
+                <label
+                  class="thread-launch-adapter-option"
+                  onpointerdown="event.stopPropagation(); window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')"
+                >
                   <input
                     type="radio"
                     name="thread-launch-adapter-${_escapeHtml(agent.id)}"
@@ -547,12 +571,16 @@
                     data-agent-id="${_escapeHtml(agent.id)}"
                     data-field="adapter"
                     ${agent.adapter === "cursor" ? "checked" : ""}
-                    onclick="event.stopPropagation()"
+                    onclick="event.stopPropagation(); window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')"
+                    onpointerdown="event.stopPropagation(); window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')"
                     onchange="window.AcbModals && window.AcbModals.updateThreadLaunchAgentField(this)"
                   />
                   <span>Cursor</span>
                 </label>
-                <label class="thread-launch-adapter-option">
+                <label
+                  class="thread-launch-adapter-option"
+                  onpointerdown="event.stopPropagation(); window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')"
+                >
                   <input
                     type="radio"
                     name="thread-launch-adapter-${_escapeHtml(agent.id)}"
@@ -560,7 +588,8 @@
                     data-agent-id="${_escapeHtml(agent.id)}"
                     data-field="adapter"
                     ${agent.adapter === "claude" ? "checked" : ""}
-                    onclick="event.stopPropagation()"
+                    onclick="event.stopPropagation(); window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')"
+                    onpointerdown="event.stopPropagation(); window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')"
                     onchange="window.AcbModals && window.AcbModals.updateThreadLaunchAgentField(this)"
                   />
                   <span>Claude</span>
@@ -575,7 +604,8 @@
                 data-agent-id="${_escapeHtml(agent.id)}"
                 data-field="initialInstruction"
                 placeholder="Leave blank to use the shared instruction"
-                onclick="event.stopPropagation()"
+                onclick="event.stopPropagation(); window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')"
+                onpointerdown="event.stopPropagation(); window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')"
                 onfocus="event.stopPropagation(); window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')"
                 oninput="window.AcbModals && window.AcbModals.updateThreadLaunchAgentField(this)"
               />
