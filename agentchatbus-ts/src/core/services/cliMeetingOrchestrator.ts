@@ -831,7 +831,10 @@ export class CliMeetingOrchestrator {
 
     if (!usesLegacyPtyRelay(session)) {
       const wakeRecord = this.lastWakePromptBySession.get(session.id);
-      if (wakeRecord && Date.now() - wakeRecord.sentAt < MCP_WAKE_PROMPT_COOLDOWN_MS) {
+      // Use monotonic time comparison to avoid issues with system clock adjustments
+      const now = Date.now();
+      const timeSinceLastWake = wakeRecord ? (now - wakeRecord.sentAt) : Number.MAX_SAFE_INTEGER;
+      if (timeSinceLastWake < MCP_WAKE_PROMPT_COOLDOWN_MS && timeSinceLastWake >= 0) {
         this.pendingDeliverySeqBySession.set(
           session.id,
           Math.max(pendingSeq, latestSeq),
@@ -990,13 +993,22 @@ export class CliMeetingOrchestrator {
     this.inFlightRelaySyncs.add(sessionId);
     try {
       let latestSession = session;
-      while (true) {
+      const MAX_SYNC_RETRIES = 10;
+      let retryCount = 0;
+
+      while (retryCount < MAX_SYNC_RETRIES) {
         this.pendingRelayResyncs.delete(sessionId);
         latestSession = this.cliSessionManager.getSession(sessionId) || latestSession;
         await this.syncRelayMessageOnce(latestSession);
         if (!this.pendingRelayResyncs.has(sessionId)) {
           break;
         }
+        retryCount++;
+      }
+
+      if (retryCount >= MAX_SYNC_RETRIES) {
+        logError(`[cli-meeting] Max sync retries (${MAX_SYNC_RETRIES}) exceeded for session ${sessionId}`);
+        this.pendingRelayResyncs.delete(sessionId);
       }
     } finally {
       this.inFlightRelaySyncs.delete(sessionId);

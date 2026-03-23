@@ -286,7 +286,9 @@ describe("HTTP compatibility shell", () => {
     expect(threadAgentsResponse.statusCode).toBe(200);
     const threadAgents = threadAgentsResponse.json();
     expect(Array.isArray(threadAgents)).toBe(true);
-    expect(threadAgents.some((agent: any) => agent.id === participant.agent_id)).toBe(false);
+    // CLI-invited agents are now automatically added to thread participants
+    // to mirror bus_connect semantics and keep thread membership durable
+    expect(threadAgents.some((agent: any) => agent.id === participant.agent_id)).toBe(true);
 
     const forbiddenControl = await server.inject({
       method: "POST",

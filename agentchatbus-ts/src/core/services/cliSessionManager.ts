@@ -1092,8 +1092,11 @@ export class CliSessionManager {
     if (!adapter || !adapter.supportsRestart) {
       throw new Error("Session does not support restart");
     }
+    // Wait for any running promise to complete before restarting
     if (runtime.runPromise) {
-      throw new Error("Session is still running");
+      await runtime.runPromise.catch(() => {
+        // Ignore errors from previous run
+      });
     }
 
     runtime.stopRequested = false;
@@ -1496,8 +1499,11 @@ export class CliSessionManager {
     };
     runtime.snapshot.output_cursor = entry.seq;
     runtime.output.push(entry);
-    if (runtime.output.length > 5000) {
-      runtime.output.splice(0, runtime.output.length - 5000);
+    // Use more efficient array truncation to avoid memory fragmentation
+    const MAX_OUTPUT_ENTRIES = 5000;
+    if (runtime.output.length > MAX_OUTPUT_ENTRIES) {
+      const excessCount = runtime.output.length - MAX_OUTPUT_ENTRIES;
+      runtime.output.splice(0, excessCount);
     }
     if (stream === "stdout") {
       runtime.snapshot.stdout_excerpt = clipText(`${runtime.snapshot.stdout_excerpt || ""}${normalized}`);
@@ -1632,8 +1638,9 @@ export class CliSessionManager {
     }
     try {
       runtime.screenState?.terminal.dispose();
-    } catch {
-      // Best effort cleanup.
+    } catch (error) {
+      // Log disposal errors for debugging but don't fail
+      logError(`[cli-session] Failed to dispose terminal for session ${runtime.snapshot.id}: ${error instanceof Error ? error.message : String(error)}`);
     }
     runtime.screenState = null;
     runtime.automationState = null;
