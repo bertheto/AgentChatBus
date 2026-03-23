@@ -11,7 +11,7 @@ import type { CliSessionManager, CliSessionSnapshot } from "./cliSessionManager.
 import type { MemoryStore } from "./memoryStore.js";
 
 const PARTICIPANT_HEARTBEAT_INTERVAL_MS = 10_000;
-const MCP_WAKE_PROMPT_COOLDOWN_MS = 2_500;
+const MCP_WAKE_PROMPT_COOLDOWN_MS = 30_000;
 const ONLINE_SESSION_STATES = new Set(["created", "starting", "running"]);
 const RESTARTABLE_SESSION_STATES = new Set(["completed", "failed", "stopped"]);
 const RELAY_BLOCKED_STATES = new Set(["stale", "error"]);
@@ -731,6 +731,7 @@ export class CliMeetingOrchestrator {
       // deliver the new message. Do not queue a redundant wake-up or restart.
       this.pendingDeliverySeqBySession.delete(session.id);
       this.lastWakePromptBySession.delete(session.id);
+      this.cliSessionManager.clearWakePromptState(session.id);
       return;
     }
 
@@ -777,10 +778,6 @@ export class CliMeetingOrchestrator {
 
     if (!usesLegacyPtyRelay(session)) {
       const wakeRecord = this.lastWakePromptBySession.get(session.id);
-      if (wakeRecord && latestSeq <= wakeRecord.seq) {
-        this.pendingDeliverySeqBySession.delete(session.id);
-        return;
-      }
       if (wakeRecord && Date.now() - wakeRecord.sentAt < MCP_WAKE_PROMPT_COOLDOWN_MS) {
         this.pendingDeliverySeqBySession.set(
           session.id,
