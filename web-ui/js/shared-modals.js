@@ -130,7 +130,7 @@
       }
       return parsed
         .map((value) => String(value || "").trim().toLowerCase())
-        .filter((value) => value === "codex" || value === "cursor" || value === "claude");
+        .filter((value) => value === "codex" || value === "cursor" || value === "claude" || value === "gemini" || value === "copilot");
     } catch {
       return [];
     }
@@ -140,7 +140,7 @@
     try {
       const adapters = _threadLaunchAgents
         .map((agent) => String(agent?.adapter || "").trim().toLowerCase())
-        .map((value) => (value === "cursor" || value === "claude" ? value : "codex"));
+        .map((value) => (value === "cursor" || value === "claude" || value === "gemini" || value === "copilot" ? value : "codex"));
       globalThis.localStorage?.setItem(
         THREAD_LAUNCH_ADAPTER_STORAGE_KEY,
         JSON.stringify(adapters),
@@ -154,10 +154,10 @@
     const normalizedFallback = String(fallback || "claude").trim().toLowerCase();
     const preferences = readThreadLaunchAdapterPreferences();
     const preferred = String(preferences[slotIndex] || "").trim().toLowerCase();
-    if (preferred === "codex" || preferred === "cursor" || preferred === "claude") {
+    if (preferred === "codex" || preferred === "cursor" || preferred === "claude" || preferred === "gemini" || preferred === "copilot") {
       return preferred;
     }
-    if (normalizedFallback === "codex" || normalizedFallback === "cursor" || normalizedFallback === "claude") {
+    if (normalizedFallback === "codex" || normalizedFallback === "cursor" || normalizedFallback === "claude" || normalizedFallback === "gemini" || normalizedFallback === "copilot") {
       return normalizedFallback;
     }
     return "claude";
@@ -324,7 +324,10 @@
     if (config.displayName) {
       return config.displayName;
     }
-    const adapterLabel = config.adapter === "cursor" ? "Cursor" : config.adapter === "claude" ? "Claude" : "Codex";
+    const adapterLabel = config.adapter === "cursor" ? "Cursor" :
+                         config.adapter === "claude" ? "Claude" :
+                         config.adapter === "gemini" ? "Gemini" :
+                         config.adapter === "copilot" ? "Copilot" : "Codex";
     return adapterLabel;
   }
 
@@ -663,6 +666,40 @@
                   />
                   <span>Claude</span>
                 </label>
+                <label
+                  class="thread-launch-adapter-option"
+                  onpointerdown="event.stopPropagation(); window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')"
+                >
+                  <input
+                    type="radio"
+                    name="thread-launch-adapter-${_escapeHtml(agent.id)}"
+                    value="gemini"
+                    data-agent-id="${_escapeHtml(agent.id)}"
+                    data-field="adapter"
+                    ${agent.adapter === "gemini" ? "checked" : ""}
+                    onclick="event.stopPropagation(); window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')"
+                    onpointerdown="event.stopPropagation(); window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')"
+                    onchange="window.AcbModals && window.AcbModals.updateThreadLaunchAgentField(this)"
+                  />
+                  <span>Gemini</span>
+                </label>
+                <label
+                  class="thread-launch-adapter-option"
+                  onpointerdown="event.stopPropagation(); window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')"
+                >
+                  <input
+                    type="radio"
+                    name="thread-launch-adapter-${_escapeHtml(agent.id)}"
+                    value="copilot"
+                    data-agent-id="${_escapeHtml(agent.id)}"
+                    data-field="adapter"
+                    ${agent.adapter === "copilot" ? "checked" : ""}
+                    onclick="event.stopPropagation(); window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')"
+                    onpointerdown="event.stopPropagation(); window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')"
+                    onchange="window.AcbModals && window.AcbModals.updateThreadLaunchAgentField(this)"
+                  />
+                  <span>Copilot</span>
+                </label>
               </div>
             </div>
             <div class="settings-field">
@@ -894,7 +931,10 @@
   }
 
   async function registerParticipantAgent(api, config) {
-    const adapterLabel = config.adapter === "cursor" ? "Cursor" : config.adapter === "claude" ? "Claude" : "Codex";
+    const adapterLabel = config.adapter === "cursor" ? "Cursor" :
+                         config.adapter === "claude" ? "Claude" :
+                         config.adapter === "gemini" ? "Gemini" :
+                         config.adapter === "copilot" ? "Copilot" : "Codex";
     const modeLabel = config.mode === "headless" ? "Headless CLI" : "Interactive CLI";
     const displayName = buildDefaultParticipantName(config);
     const result = await api("/api/agents/register", {

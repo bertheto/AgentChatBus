@@ -4,6 +4,14 @@
   const terminalVisibilityByThread = new Map();
   const terminalInstances = new Map();
   const ACTIVE_SESSION_STATES = new Set(["created", "starting", "running"]);
+  const DELIVERY_BUSY_REPLY_STATES = new Set(["waiting_for_reply", "working", "streaming"]);
+  const DELIVERY_BUSY_AUTOMATION_STATES = new Set([
+    "codex_working",
+    "claude_working",
+    "cursor_working",
+    "gemini_working",
+    "copilot_working",
+  ]);
 
   function escapeHtml(value) {
     return String(value ?? "")
@@ -154,6 +162,30 @@
     return getSessionsForThread(threadId).filter((session) => Boolean(session?.participant_agent_id));
   }
 
+  function isSessionDeliveryBusy(session) {
+    if (!session || !isActiveSession(session)) {
+      return false;
+    }
+
+    if (String(session?.interactive_work_state || "").trim() === "busy") {
+      return true;
+    }
+
+    if (String(session?.meeting_post_state || "").trim() === "posting") {
+      return true;
+    }
+
+    if (DELIVERY_BUSY_REPLY_STATES.has(String(session?.reply_capture_state || "").trim())) {
+      return true;
+    }
+
+    if (DELIVERY_BUSY_AUTOMATION_STATES.has(String(session?.automation_state || "").trim())) {
+      return true;
+    }
+
+    return false;
+  }
+
   function getDeliverySummaryForSeq(seq, threadId = getActiveThreadId()) {
     const normalizedSeq = Number(seq);
     if (!threadId || !Number.isFinite(normalizedSeq) || normalizedSeq <= 0) {
@@ -169,7 +201,11 @@
     const waiting = [];
     for (const session of sessions) {
       const label = sessionDisplayName(session);
-      if ((Number(session?.last_delivered_seq) || 0) >= normalizedSeq) {
+      const acknowledgedSeq = Number(session?.last_acknowledged_seq) || 0;
+      const deliveryBusy = isSessionDeliveryBusy(session);
+      const deliverySettled = acknowledgedSeq >= normalizedSeq && !deliveryBusy;
+
+      if (deliverySettled) {
         delivered.push(label);
       } else {
         waiting.push(label);
@@ -180,6 +216,8 @@
       participantCount: sessions.length,
       delivered,
       waiting,
+      waitingCount: waiting.length,
+      deliveredCount: delivered.length,
     };
   }
 

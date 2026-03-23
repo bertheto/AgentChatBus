@@ -66,11 +66,21 @@ export class CopilotInteractiveAdapter implements CliSessionAdapter {
     hooks: CliAdapterRunHooks,
     useConpty: boolean,
   ): Promise<CliAdapterRunResult> {
+    const initialPrompt = String(input.prompt || "").trim();
     const commandParts = [
       `& ${toPowerShellSingleQuoted(this.copilotCommand)}`,
+      "--model",
+      "gpt-5-mini",
       "--no-alt-screen",
       "--disable-builtin-mcps",
+      "--allow-all-tools",
+      "--no-ask-user",
+      "--no-custom-instructions",
     ];
+    if (initialPrompt) {
+      commandParts.push("-i");
+      commandParts.push(toPowerShellSingleQuoted(initialPrompt));
+    }
 
     return await runInteractivePtyInChild({
       workerName: "interactivePtyWorker",

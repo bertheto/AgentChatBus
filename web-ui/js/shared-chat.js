@@ -316,13 +316,17 @@
     const deliveredLabel = summarizeNames(summary.delivered);
     const chips = [];
     if (summary.waiting.length) {
+      const waitingCount = Number(summary.waitingCount) || summary.waiting.length;
+      const waitingText = `Waiting for ${waitingCount} agent${waitingCount === 1 ? "" : "s"}`;
+      const waitingTitle = waitingLabel ? `Waiting for: ${waitingLabel}` : waitingText;
       chips.push(
-        `<span class="msg-human-delivery__chip msg-human-delivery__chip--waiting" title="Waiting for: ${waitingLabel}">Waiting for ${waitingLabel}</span>`,
+        `<span class="msg-human-delivery__chip msg-human-delivery__chip--waiting" title="${waitingTitle}">${waitingText}</span>`,
       );
     }
-    if (summary.delivered.length) {
+    if (!summary.waiting.length && summary.delivered.length) {
+      const deliveredTitle = deliveredLabel ? `Delivered to: ${deliveredLabel}` : "Delivered";
       chips.push(
-        `<span class="msg-human-delivery__chip msg-human-delivery__chip--delivered" title="Delivered to: ${deliveredLabel}">Delivered to ${deliveredLabel}</span>`,
+        `<span class="msg-human-delivery__chip msg-human-delivery__chip--delivered" title="${deliveredTitle}">Delivered to ${deliveredLabel}</span>`,
       );
     }
     if (!chips.length) {

@@ -9,6 +9,7 @@ import { CodexInteractiveAdapter } from "./adapters/codexInteractiveAdapter.js";
 import { ClaudeInteractiveAdapter } from "./adapters/claudeInteractiveAdapter.js";
 import { GeminiInteractiveAdapter } from "./adapters/geminiInteractiveAdapter.js";
 import { CopilotInteractiveAdapter } from "./adapters/copilotInteractiveAdapter.js";
+import { isCodexWorkingLine, looksLikeConversationalWorkingScreen } from "./cliInteractiveHeuristics.js";
 
 type HeadlessTerminalInstance = import("@xterm/headless").Terminal;
 const { Terminal: HeadlessTerminal } = xtermHeadless;
@@ -61,6 +62,8 @@ export interface CliSessionSnapshot {
   screen_cursor_x?: number;
   screen_cursor_y?: number;
   screen_buffer?: "normal" | "alternate";
+  interactive_work_state?: "busy" | "idle";
+  interactive_work_reason?: string;
   automation_state?: string;
   reply_capture_state?: string;
   reply_capture_excerpt?: string;
@@ -164,6 +167,16 @@ type CliSessionAutomationRuntime = {
   sawReadyScreen: boolean;
   sawWorkingScreen: boolean;
   submitTimer: NodeJS.Timeout | null;
+  toolApprovalRetryTimer: NodeJS.Timeout | null;
+  activitySettleTimer: NodeJS.Timeout | null;
+  lastCopilotToolApprovalAt?: number;
+  lastCopilotToolApprovalKey?: string;
+  lastCopilotDecisionAt?: number;
+  lastCopilotDecisionKey?: string;
+  lastCopilotActivityMarker?: string;
+  lastCopilotActivityChangedAt?: number;
+  copilotCorrectionSent?: boolean;
+  copilotAskUserCorrectionSent?: boolean;
 };
 
 type CliSessionReplyCaptureState =
@@ -214,7 +227,10 @@ const DEFAULT_HEADLESS_SCREEN_SNAPSHOT: CliSessionScreenSnapshot = {
   cursorY: 0,
   bufferType: "normal",
 };
-const CLAUDE_INITIAL_PROMPT_ENTER_DELAY_MS = 600;
+const CLAUDE_INITIAL_PROMPT_ENTER_DELAY_MS = 1000;
+const COPILOT_TOOL_APPROVAL_ENTER_COOLDOWN_MS = 200;
+const COPILOT_DECISION_PROMPT_COOLDOWN_MS = 3000;
+const COPILOT_ACTIVITY_SETTLE_MS = 2000;
 const ANSI_CSI_SEQUENCE = /\u001b\[[0-?]*[ -/]*[@-~]/g;
 const ANSI_OSC_SEQUENCE = /\u001b\][^\u0007]*(?:\u0007|\u001b\\)/g;
 const ANSI_SINGLE_CHAR_SEQUENCE = /\u001b[@-_]/g;
@@ -290,6 +306,40 @@ function buildHeadlessScreenSummary(screen: CliSessionScreenSnapshot): string | 
   return clipText(trimmed, 1200);
 }
 
+export function extractObservedAgentCurrentSeq(screenExcerpt: string | undefined): number | undefined {
+  const text = String(screenExcerpt || "");
+  if (!text.trim()) {
+    return undefined;
+  }
+
+  const matches: number[] = [];
+  const patterns = [
+    /"current_seq"\s*:\s*(\d+)/gi,
+    /\bcurrent[_ ]seq\s*[=:]\s*(\d+)/gi,
+    /\bcurrent seq\b[^\d]{0,12}(\d+)/gi,
+  ];
+
+  for (const pattern of patterns) {
+    pattern.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    do {
+      match = pattern.exec(text);
+      if (!match?.[1]) {
+        continue;
+      }
+      const value = Number(match[1]);
+      if (Number.isFinite(value) && value > 0) {
+        matches.push(value);
+      }
+    } while (match);
+  }
+
+  if (!matches.length) {
+    return undefined;
+  }
+  return Math.max(...matches);
+}
+
 function looksLikeClaudeIdleScreen(screenExcerpt: string | undefined): boolean {
   const normalized = normalizeScreenMatchText(String(screenExcerpt || ""));
   if (!normalized) {
@@ -306,14 +356,7 @@ function looksLikeClaudeIdleScreen(screenExcerpt: string | undefined): boolean {
 }
 
 function looksLikeClaudeWorkingScreen(screenExcerpt: string | undefined): boolean {
-  const text = String(screenExcerpt || "");
-  const normalized = normalizeScreenMatchText(text);
-  // Claude shows "Thinking..." or similar when working
-  return (
-    normalized.includes("thinking")
-    || normalized.includes("working")
-    || normalized.includes("processing")
-  );
+  return looksLikeConversationalWorkingScreen(screenExcerpt);
 }
 
 function looksLikeClaudeProceedPrompt(screenExcerpt: string | undefined): boolean {
@@ -389,6 +432,18 @@ function looksLikeCursorPastedTextPrompt(screenExcerpt: string | undefined): boo
   return looksLikeClaudePastedTextPrompt(screenExcerpt);
 }
 
+function isClaudeFamilyAdapter(adapter: CliSessionAdapterId): boolean {
+  return adapter === "claude" || adapter === "gemini";
+}
+
+function getClaudeFamilyAdapterLabel(adapter: CliSessionAdapterId): string {
+  return adapter === "gemini" ? "Gemini" : "Claude";
+}
+
+function getClaudeFamilyStatePrefix(adapter: CliSessionAdapterId): string {
+  return adapter === "gemini" ? "gemini" : "claude";
+}
+
 function isCursorPromptShowingText(screenExcerpt: string | undefined, prompt: string): boolean {
   return isClaudePromptShowingText(screenExcerpt, prompt);
 }
@@ -400,6 +455,375 @@ function isClaudePromptShowingText(screenExcerpt: string | undefined, prompt: st
     return false;
   }
   return normalizedScreen.includes(normalizedPrompt);
+}
+
+function looksLikeCopilotPromptLine(screenText: string): boolean {
+  return String(screenText || "")
+    .split("\n")
+    .some((line) => /^\s*❯\s/.test(line));
+}
+
+type CopilotPromptLine = {
+  index: number;
+  text: string;
+};
+
+function getCopilotPromptLines(screenText: string): CopilotPromptLine[] {
+  return String(screenText || "")
+    .split("\n")
+    .map((line, index) => ({ index, line }))
+    .filter(({ line }) => /^\s*❯\s/.test(line))
+    .map(({ index, line }) => ({
+      index,
+      text: line.replace(/^\s*❯\s*/, "").trim(),
+    }));
+}
+
+function getCopilotPromptLineText(screenText: string): string | undefined {
+  const promptLines = getCopilotPromptLines(screenText);
+  return promptLines[promptLines.length - 1]?.text;
+}
+
+function isCopilotFooterLine(line: string): boolean {
+  const normalized = normalizePromptMatchText(line);
+  if (!normalized) {
+    return false;
+  }
+  return (
+    normalized.includes("shift tab switch mode")
+    || normalized.includes("remaining reqs")
+    || normalized.includes("type to mention files")
+    || normalized.includes("ctrl s run command")
+    || normalized.includes("ctrl q enqueue")
+  );
+}
+
+function isCopilotWorkspaceStatusLine(line: string): boolean {
+  const trimmed = String(line || "").trim();
+  if (!trimmed) {
+    return false;
+  }
+  return /^~\\/.test(trimmed) && /\[[^\]]+\]/.test(trimmed);
+}
+
+function looksLikeCopilotIdleScreen(screenExcerpt: string | undefined): boolean {
+  const normalized = normalizeScreenMatchText(String(screenExcerpt || ""));
+  if (!normalized) {
+    return false;
+  }
+  return (
+    normalized.includes("type to mention files")
+    || normalized.includes("describe a task to get started")
+    || (
+      normalized.includes("shift tab switch mode")
+      && looksLikeCopilotPromptLine(String(screenExcerpt || ""))
+    )
+  );
+}
+
+function looksLikeCopilotToolApprovalPrompt(screenExcerpt: string | undefined): boolean {
+  const normalized = normalizeScreenMatchText(String(screenExcerpt || ""));
+  if (!normalized) {
+    return false;
+  }
+  const mentionsToolPrompt =
+    normalized.includes("do you want to use this tool")
+    || normalized.includes("do you want to use these tools")
+    || normalized.includes("approve tool")
+    || normalized.includes("approve all tools");
+  const mentionsPositiveChoice =
+    normalized.includes("enter to select")
+    || normalized.includes(" 1 yes ")
+    || normalized.startsWith("1 yes ")
+    || normalized.includes(" yes and approve ")
+    || normalized.includes("agentchatbus");
+  return mentionsToolPrompt && mentionsPositiveChoice;
+}
+
+function looksLikeCopilotSeqMismatchChoicePrompt(screenExcerpt: string | undefined): boolean {
+  const normalized = normalizeScreenMatchText(String(screenExcerpt || ""));
+  if (!normalized) {
+    return false;
+  }
+  return (
+    normalized.includes("msg post was rejected due to a seq mismatch")
+    && normalized.includes("use the interface options or reply with your choice")
+  );
+}
+
+function extractCopilotSeqMismatchChoice(screenExcerpt: string | undefined): string | undefined {
+  if (!looksLikeCopilotSeqMismatchChoicePrompt(screenExcerpt)) {
+    return undefined;
+  }
+  const text = String(screenExcerpt || "");
+  if (/wait for further instructions/i.test(text)) {
+    return "Wait for further instructions";
+  }
+  if (/post a short reply acknowledging and proposing a coordination plan/i.test(text)) {
+    return "Post a short reply acknowledging and proposing a coordination plan";
+  }
+  return undefined;
+}
+
+function extractCopilotToolApprovalKey(screenExcerpt: string | undefined): string | undefined {
+  const normalized = normalizeScreenMatchText(String(screenExcerpt || ""));
+  if (!normalized || !looksLikeCopilotToolApprovalPrompt(screenExcerpt)) {
+    return undefined;
+  }
+
+  const toolMatch = normalized.match(
+    /\b(bus connect|msg post|msg wait|thread create|thread close|thread archive|thread set state|thread settings update|agent update|agent register)\b/,
+  );
+  if (toolMatch?.[1]) {
+    return toolMatch[1];
+  }
+
+  const permissionMatch = normalized.match(/permission request \d+ remaining/);
+  if (permissionMatch?.[0]) {
+    return `${permissionMatch[0]}::${normalized.slice(0, 160)}`;
+  }
+
+  return normalized.slice(0, 160);
+}
+
+function looksLikeCopilotBackgroundTaskDetour(screenExcerpt: string | undefined): boolean {
+  const normalized = normalizeScreenMatchText(String(screenExcerpt || ""));
+  if (!normalized) {
+    return false;
+  }
+  return (
+    normalized.includes("background agent started")
+    || normalized.includes("read agent with agent id")
+    || normalized.includes("background tasks")
+    || normalized.includes("1 background tasks")
+    || normalized.includes("1 background tasks")
+    || normalized.includes("1 background tasks shift tab switch mode")
+    || normalized.includes("1 background tasks shift tab")
+    || normalized.includes("background tasks shift tab")
+    || normalized.includes("background /tasks")
+  );
+}
+
+function looksLikeCopilotForeignToolingLeak(screenExcerpt: string | undefined): boolean {
+  const normalized = normalizeScreenMatchText(String(screenExcerpt || ""));
+  if (!normalized) {
+    return false;
+  }
+  return (
+    normalized.includes("report_intent")
+    || normalized.includes("multi_tool_use.parallel")
+    || normalized.includes("developer instructions")
+  );
+}
+
+function looksLikeCopilotAskUserDetour(screenExcerpt: string | undefined): boolean {
+  const normalized = normalizeScreenMatchText(String(screenExcerpt || ""));
+  if (!normalized) {
+    return false;
+  }
+  return (
+    normalized.includes("asked user")
+    || normalized.includes("use the provided ask user tool")
+    || normalized.includes("use the provided ask_user tool")
+    || normalized.includes("would you like me to post")
+    || normalized.includes("confirm whether to post")
+    || normalized.includes("post updated introduction now")
+    || normalized.includes("ready to post the introduction now")
+    || normalized.includes("ready to post an updated introduction")
+    || normalized.includes("ready to post the short introduction now")
+  );
+}
+
+function looksLikeCopilotWorkingScreen(screenExcerpt: string | undefined): boolean {
+  return looksLikeConversationalWorkingScreen(screenExcerpt);
+}
+
+function looksLikeCopilotUsableScreen(screen: CliSessionScreenSnapshot): boolean {
+  const normalized = String(screen.normalizedText || "").trim();
+  if (!normalized) {
+    return false;
+  }
+  if (looksLikeCopilotWorkingScreen(screen.text)) {
+    return false;
+  }
+  if (looksLikeCopilotToolApprovalPrompt(screen.text)) {
+    return false;
+  }
+  if (looksLikeClaudeProceedPrompt(screen.text)) {
+    return false;
+  }
+  return looksLikeCopilotPromptLine(screen.text);
+}
+
+function looksLikeCopilotReplyIdleScreen(screen: CliSessionScreenSnapshot): boolean {
+  return !looksLikeCopilotWorkingScreen(screen.text)
+    && !looksLikeClaudeProceedPrompt(screen.text)
+    && looksLikeCopilotUsableScreen(screen);
+}
+
+function extractCopilotTerminalError(screenExcerpt: string | undefined): string | undefined {
+  const lines = String(screenExcerpt || "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  for (const line of lines) {
+    if (isCopilotFooterLine(line) || isCopilotWorkspaceStatusLine(line)) {
+      continue;
+    }
+    if (/^✗\s+/u.test(line)) {
+      return clipText(line.replace(/^✗\s+/u, "").trim(), 500);
+    }
+    const normalized = normalizeScreenMatchText(line);
+    if (
+      normalized.includes("you have no quota")
+      || normalized.includes("execution failed")
+      || normalized.includes("request failed")
+      || normalized.includes("rate limit")
+    ) {
+      return clipText(line, 500);
+    }
+  }
+  return undefined;
+}
+
+function isCopilotToolApprovalLine(line: string): boolean {
+  const normalized = normalizePromptMatchText(line);
+  if (!normalized) {
+    return false;
+  }
+  if (
+    normalized.includes("do you want to use this tool")
+    || normalized.includes("to navigate")
+    || normalized.includes("enter to select")
+    || normalized.includes("approve tool")
+    || normalized.includes("approve all tools")
+    || normalized.includes("tell copilot what to do differently")
+  ) {
+    return true;
+  }
+  return /^\d+\.\s/.test(String(line || "").trim());
+}
+
+function stripCopilotStatusPrefix(line: string): string {
+  return String(line || "").replace(/^[●○◎◉◌•]+\s*/u, "").trim();
+}
+
+function isCopilotTranscriptBulletLine(line: string): boolean {
+  const normalized = normalizePromptMatchText(stripCopilotStatusPrefix(line));
+  if (!normalized) {
+    return false;
+  }
+
+  const transcriptPrefixes = [
+    "msg_wait",
+    "msg_post",
+    "msg_get",
+    "msg_list",
+    "msg_edit",
+    "msg_react",
+    "bus_connect",
+    "thread_create",
+    "thread_get",
+    "thread_list",
+    "thread_close",
+    "thread_archive",
+    "thread_set_state",
+    "thread_settings_get",
+    "thread_settings_update",
+    "thread_wait_state_get",
+    "agent_register",
+    "agent_update",
+    "agent_resume",
+    "agent_list",
+    "sync_context",
+  ];
+
+  return transcriptPrefixes.some((prefix) => normalized === prefix || normalized.startsWith(`${prefix} `));
+}
+
+function extractCopilotActivityMarker(screenText: string): string | undefined {
+  const lines = String(screenText || "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  // Prefer the newest visible activity line near the bottom of the terminal.
+  // Copilot can leave older spinner rows higher in the viewport while continuing
+  // work on a newer row below; scanning bottom-up avoids latching onto stale rows.
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = lines[index];
+    if (/^\s*❯\s/.test(line)) {
+      continue;
+    }
+    if (isCopilotWorkspaceStatusLine(line) || isCopilotFooterLine(line)) {
+      continue;
+    }
+    if (isCopilotToolApprovalLine(line)) {
+      continue;
+    }
+    if (isCopilotTranscriptBulletLine(line)) {
+      continue;
+    }
+    const match = /^\s*([◉●◎○◌])\b/u.exec(line) || /^\s*([◉●◎○◌])/u.exec(line);
+    if (match?.[1]) {
+      return `${match[1]}::${stripCopilotStatusPrefix(line).slice(0, 120)}`;
+    }
+  }
+
+  return undefined;
+}
+
+function extractCopilotReplyFromScreen(screen: CliSessionScreenSnapshot): string | undefined {
+  const lines = String(screen.text || "")
+    .split("\n")
+    .map((line) => line.trimEnd());
+
+  const replyLines: string[] = [];
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      if (replyLines.length > 0 && replyLines[replyLines.length - 1] !== "") {
+        replyLines.push("");
+      }
+      continue;
+    }
+    if (/^\s*❯\s/.test(line)) {
+      break;
+    }
+    if (isCopilotWorkspaceStatusLine(trimmed) || isCopilotFooterLine(trimmed)) {
+      if (replyLines.length > 0) {
+        break;
+      }
+      continue;
+    }
+    if (looksLikeCopilotWorkingScreen(trimmed) || isCopilotToolApprovalLine(trimmed)) {
+      continue;
+    }
+    const normalized = normalizeScreenMatchText(trimmed);
+    if (
+      normalized.includes("choose one")
+      || normalized.includes("use the interface options or reply with your choice")
+    ) {
+      continue;
+    }
+    replyLines.push(stripCopilotStatusPrefix(trimmed));
+  }
+
+  const reply = replyLines.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+  if (!reply) {
+    return undefined;
+  }
+  return clipText(reply, 2400);
+}
+
+function isCopilotPromptShowingText(screenExcerpt: string | undefined, prompt: string): boolean {
+  const promptLine = getCopilotPromptLineText(String(screenExcerpt || ""));
+  if (!promptLine) {
+    return false;
+  }
+  const normalizedPromptLine = normalizePromptMatchText(promptLine);
+  const normalizedPrompt = normalizePromptMatchText(prompt);
+  return Boolean(normalizedPrompt) && normalizedPromptLine.includes(normalizedPrompt);
 }
 
 function looksLikeCodexContinuePrompt(normalizedText: string): boolean {
@@ -499,11 +923,6 @@ function looksLikeCodexWorkingScreen(screen: CliSessionScreenSnapshot): boolean 
   return String(screen.text || "")
     .split("\n")
     .some((line) => isCodexWorkingLine(line));
-}
-
-function isCodexWorkingLine(line: string): boolean {
-  const normalizedText = normalizePromptMatchText(line);
-  return normalizedText.includes("working") && normalizedText.includes("esc to interrupt");
 }
 
 function looksLikeCodexPastedContentPrompt(screen: CliSessionScreenSnapshot): boolean {
@@ -608,6 +1027,58 @@ function extractClaudeReplyFromTranscript(rawOutput: string, prompt: string): st
     }
     // Skip the prompt marker ">"
     if (trimmed === ">") {
+      break;
+    }
+    replyLines.push(trimmed);
+  }
+
+  const reply = replyLines.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+  if (!reply) {
+    return undefined;
+  }
+  return clipText(reply, 2400);
+}
+
+function extractCopilotReplyFromTranscript(rawOutput: string, prompt: string): string | undefined {
+  const normalizedPrompt = normalizePromptMatchText(prompt);
+  if (!normalizedPrompt) {
+    return undefined;
+  }
+
+  const lines = normalizeTranscriptText(rawOutput)
+    .split("\n")
+    .map((line) => line.trimEnd());
+  let promptIndex = -1;
+  for (let index = 0; index < lines.length; index += 1) {
+    const candidate = normalizePromptMatchText(lines[index]?.replace(/^\s*❯\s*/, ""));
+    if (candidate.includes(normalizedPrompt)) {
+      promptIndex = index;
+    }
+  }
+  if (promptIndex < 0) {
+    return undefined;
+  }
+
+  const replyLines: string[] = [];
+  for (let index = promptIndex + 1; index < lines.length; index += 1) {
+    const line = lines[index] || "";
+    const trimmed = line.trim();
+    if (!trimmed) {
+      if (replyLines.length > 0) {
+        replyLines.push("");
+      }
+      continue;
+    }
+    if (looksLikeCopilotWorkingScreen(trimmed)) {
+      continue;
+    }
+    if (isCopilotToolApprovalLine(trimmed)) {
+      continue;
+    }
+    if (/^\s*❯\s/.test(line)) {
+      break;
+    }
+    if (isCopilotFooterLine(trimmed) || isCopilotWorkspaceStatusLine(trimmed)) {
       break;
     }
     replyLines.push(trimmed);
@@ -1052,6 +1523,7 @@ export class CliSessionManager {
     automation.wakePromptText = undefined;
     automation.wakePromptEnterSent = false;
     automation.wakePromptEnterRetried = false;
+    automation.copilotAskUserCorrectionSent = false;
     if (hadWakePrompt) {
       runtime.snapshot.updated_at = nowIso();
       this.emitSessionEvent("cli.session.state", runtime);
@@ -1120,6 +1592,8 @@ export class CliSessionManager {
     runtime.snapshot.screen_cursor_x = undefined;
     runtime.snapshot.screen_cursor_y = undefined;
     runtime.snapshot.screen_buffer = undefined;
+    runtime.snapshot.interactive_work_state = undefined;
+    runtime.snapshot.interactive_work_reason = undefined;
     runtime.snapshot.automation_state = undefined;
     runtime.snapshot.reply_capture_state = undefined;
     runtime.snapshot.reply_capture_excerpt = undefined;
@@ -1236,13 +1710,19 @@ export class CliSessionManager {
 
     if (runtime.snapshot.adapter === "codex" && runtime.snapshot.mode === "interactive") {
       this.updateAutomationState(runtime, "meeting_wake_prompt_sent");
-      this.scheduleCodexDeliveryEnter(runtime, 900, "sent_codex_wake_enter");
+      this.scheduleCodexDeliveryEnter(runtime, 1000, "sent_codex_wake_enter");
     } else if (runtime.snapshot.adapter === "cursor" && runtime.snapshot.mode === "interactive") {
       this.updateAutomationState(runtime, "meeting_wake_prompt_sent");
-      this.scheduleCursorDelayedEnter(runtime, "sent_cursor_wake_enter", 300);
+      this.scheduleCursorDelayedEnter(runtime, "sent_cursor_wake_enter", 1000);
     } else if (runtime.snapshot.adapter === "claude" && runtime.snapshot.mode === "interactive") {
       this.updateAutomationState(runtime, "meeting_wake_prompt_sent");
-      this.scheduleClaudePastedTextEnter(runtime, "sent_claude_wake_enter", 300);
+      this.scheduleClaudePastedTextEnter(runtime, "sent_claude_wake_enter", 1000);
+    } else if (runtime.snapshot.adapter === "gemini" && runtime.snapshot.mode === "interactive") {
+      this.updateAutomationState(runtime, "meeting_wake_prompt_sent");
+      this.scheduleClaudePastedTextEnter(runtime, "sent_gemini_wake_enter", 1000);
+    } else if (runtime.snapshot.adapter === "copilot" && runtime.snapshot.mode === "interactive") {
+      this.updateAutomationState(runtime, "meeting_wake_prompt_sent");
+      this.scheduleCopilotDelayedEnter(runtime, "sent_copilot_wake_enter", 1000);
     } else {
       runtime.controls.write("\r");
     }
@@ -1311,6 +1791,7 @@ export class CliSessionManager {
       runtime.automationState.wakePromptText = undefined;
       runtime.automationState.wakePromptEnterSent = false;
       runtime.automationState.wakePromptEnterRetried = false;
+      runtime.automationState.copilotAskUserCorrectionSent = false;
     }
     runtime.replyCapture = null;
     this.startReplyCapture(runtime, normalizedPrompt, {
@@ -1320,9 +1801,15 @@ export class CliSessionManager {
     runtime.controls.write(normalizedPrompt);
     this.updateAutomationState(runtime, "meeting_delivery_prompt_sent");
     if (runtime.snapshot.adapter === "codex" && runtime.snapshot.mode === "interactive") {
-      this.scheduleCodexDeliveryEnter(runtime, 600);
+      this.scheduleCodexDeliveryEnter(runtime, 1000);
+    } else if (runtime.snapshot.adapter === "cursor" && runtime.snapshot.mode === "interactive") {
+      this.scheduleCursorDelayedEnter(runtime, "sent_cursor_delivery_enter", 1000);
     } else if (runtime.snapshot.adapter === "claude" && runtime.snapshot.mode === "interactive") {
-      this.scheduleClaudePastedTextEnter(runtime, "sent_claude_delivery_enter", 300);
+      this.scheduleClaudePastedTextEnter(runtime, "sent_claude_delivery_enter", 1000);
+    } else if (runtime.snapshot.adapter === "gemini" && runtime.snapshot.mode === "interactive") {
+      this.scheduleClaudePastedTextEnter(runtime, "sent_gemini_delivery_enter", 1000);
+    } else if (runtime.snapshot.adapter === "copilot" && runtime.snapshot.mode === "interactive") {
+      this.scheduleCopilotDelayedEnter(runtime, "sent_copilot_delivery_enter", 1000);
     } else {
       runtime.controls.write("\r");
     }
@@ -1396,6 +1883,15 @@ export class CliSessionManager {
       runtime.snapshot.state = "running";
       runtime.snapshot.updated_at = nowIso();
       this.emitSessionEvent("cli.session.state", runtime);
+
+      if (
+        runtime.snapshot.adapter === "copilot"
+        && runtime.snapshot.mode === "interactive"
+        && runtime.snapshot.prompt.trim()
+        && !runtime.replyCapture
+      ) {
+        this.startReplyCapture(runtime, runtime.snapshot.prompt);
+      }
 
       const result = await adapter.run(
         {
@@ -1576,13 +2072,17 @@ export class CliSessionManager {
         sawReadyScreen: false,
         sawWorkingScreen: false,
         submitTimer: null,
+        toolApprovalRetryTimer: null,
+        activitySettleTimer: null,
+        copilotAskUserCorrectionSent: false,
       };
       runtime.snapshot.automation_state = runtime.snapshot.prompt.trim()
         ? "waiting_for_codex_prompt"
         : "waiting_for_codex_startup";
     }
 
-    if (runtime.snapshot.adapter === "claude" && runtime.snapshot.mode === "interactive") {
+    if (isClaudeFamilyAdapter(runtime.snapshot.adapter) && runtime.snapshot.mode === "interactive") {
+      const statePrefix = getClaudeFamilyStatePrefix(runtime.snapshot.adapter);
       runtime.automationState = {
         profile: "codex-startup",
         continueSent: false,
@@ -1597,11 +2097,14 @@ export class CliSessionManager {
         sawReadyScreen: false,
         sawWorkingScreen: false,
         submitTimer: null,
+        toolApprovalRetryTimer: null,
+        activitySettleTimer: null,
+        copilotAskUserCorrectionSent: false,
       };
       runtime.snapshot.automation_state = runtime.snapshot.prompt.trim()
-        ? "waiting_for_claude_ready"
-        : "waiting_for_claude_startup";
-      this.scheduleClaudeStartupEnter(runtime, 500);
+        ? `waiting_for_${statePrefix}_ready`
+        : `waiting_for_${statePrefix}_startup`;
+      this.scheduleClaudeStartupEnter(runtime, 1000);
     }
 
     if (runtime.snapshot.adapter === "cursor" && runtime.snapshot.mode === "interactive") {
@@ -1619,11 +2122,38 @@ export class CliSessionManager {
         sawReadyScreen: false,
         sawWorkingScreen: false,
         submitTimer: null,
+        toolApprovalRetryTimer: null,
+        activitySettleTimer: null,
+        copilotAskUserCorrectionSent: false,
       };
       runtime.snapshot.automation_state = runtime.snapshot.prompt.trim()
         ? "waiting_for_cursor_ready"
         : "waiting_for_cursor_startup";
-      this.scheduleCursorStartupEnter(runtime, 500);
+      this.scheduleCursorStartupEnter(runtime, 1000);
+    }
+
+    if (runtime.snapshot.adapter === "copilot" && runtime.snapshot.mode === "interactive") {
+      runtime.automationState = {
+        profile: "codex-startup",
+        continueSent: false,
+        initialPromptTextSent: Boolean(runtime.snapshot.prompt.trim()),
+        initialPromptEnterSent: Boolean(runtime.snapshot.prompt.trim()),
+        initialPromptEnterRetried: false,
+        deliveryPromptEnterRetried: false,
+        wakePromptText: undefined,
+        wakePromptEnterSent: false,
+        wakePromptEnterRetried: false,
+        manualOverride: false,
+        sawReadyScreen: false,
+        sawWorkingScreen: false,
+        submitTimer: null,
+        toolApprovalRetryTimer: null,
+        activitySettleTimer: null,
+        copilotAskUserCorrectionSent: false,
+      };
+      runtime.snapshot.automation_state = runtime.snapshot.prompt.trim()
+        ? "copilot_prompt_passed_to_cli"
+        : "waiting_for_copilot_startup";
     }
   }
 
@@ -1631,6 +2161,14 @@ export class CliSessionManager {
     if (runtime.automationState?.submitTimer) {
       clearTimeout(runtime.automationState.submitTimer);
       runtime.automationState.submitTimer = null;
+    }
+    if (runtime.automationState?.toolApprovalRetryTimer) {
+      clearTimeout(runtime.automationState.toolApprovalRetryTimer);
+      runtime.automationState.toolApprovalRetryTimer = null;
+    }
+    if (runtime.automationState?.activitySettleTimer) {
+      clearTimeout(runtime.automationState.activitySettleTimer);
+      runtime.automationState.activitySettleTimer = null;
     }
     if (runtime.replyCapture?.timeoutTimer) {
       clearTimeout(runtime.replyCapture.timeoutTimer);
@@ -1673,6 +2211,9 @@ export class CliSessionManager {
               screenState.latest = screen;
               this.refreshScreenSnapshot(runtime, screen);
               this.runAutomation(runtime, screen);
+              if (this.syncObservedMeetingProgressFromScreen(runtime, screen)) {
+                this.emitSessionEvent("cli.session.state", runtime);
+              }
               resolve();
             });
           })
@@ -1691,6 +2232,35 @@ export class CliSessionManager {
     runtime.snapshot.screen_cursor_x = screen.cursorX;
     runtime.snapshot.screen_cursor_y = screen.cursorY;
     runtime.snapshot.screen_buffer = screen.bufferType;
+  }
+
+  private syncObservedMeetingProgressFromScreen(
+    runtime: CliSessionRuntime,
+    screen: CliSessionScreenSnapshot,
+  ): boolean {
+    if (!runtime.snapshot.participant_agent_id || runtime.snapshot.mode !== "interactive") {
+      return false;
+    }
+
+    const observedCurrentSeq = extractObservedAgentCurrentSeq(screen.text);
+    if (!Number.isFinite(observedCurrentSeq) || Number(observedCurrentSeq) <= 0) {
+      return false;
+    }
+
+    const previousDeliveredSeq = Number(runtime.snapshot.last_delivered_seq) || 0;
+    const nextDeliveredSeq = Math.max(previousDeliveredSeq, Number(observedCurrentSeq));
+
+    if (nextDeliveredSeq === previousDeliveredSeq) {
+      return false;
+    }
+
+    // Seeing current_seq in CLI tool output only proves that the model observed
+    // a sync context, not that it actually processed or acknowledged the message.
+    // Keep acknowledgement progression separate so the orchestrator can re-wake
+    // weaker models that drop the msg_wait result without responding.
+    runtime.snapshot.last_delivered_seq = nextDeliveredSeq;
+    runtime.snapshot.updated_at = nowIso();
+    return true;
   }
 
   private startReplyCapture(
@@ -1720,8 +2290,15 @@ export class CliSessionManager {
       if (capture.excerpt) {
         return;
       }
+      const adapterLabel = runtime.snapshot.adapter === "copilot"
+        ? "Copilot"
+        : runtime.snapshot.adapter === "cursor"
+          ? "Cursor"
+          : isClaudeFamilyAdapter(runtime.snapshot.adapter)
+            ? getClaudeFamilyAdapterLabel(runtime.snapshot.adapter)
+            : "Codex";
       this.updateReplyCaptureState(runtime, "timeout", {
-        error: `Timed out waiting for ${runtime.snapshot.adapter === "claude" ? "Claude" : "Codex"} reply to '${prompt}'.`,
+        error: `Timed out waiting for ${adapterLabel} reply to '${prompt}'.`,
       });
       this.updateAutomationState(runtime, "reply_timeout");
       logError(`[cli-session] ${runtime.snapshot.id} ${runtime.replyCapture?.error || "Reply capture timed out."}`);
@@ -1788,9 +2365,14 @@ export class CliSessionManager {
     }
 
     // Use adapter-specific extraction
-    const excerpt = runtime.snapshot.adapter === "claude"
+    const excerpt = (
+      runtime.snapshot.adapter === "cursor"
+      || isClaudeFamilyAdapter(runtime.snapshot.adapter)
+    )
       ? extractClaudeReplyFromTranscript(capture.rawOutput, capture.prompt)
-      : extractCodexReplyFromTranscript(capture.rawOutput, capture.prompt);
+      : runtime.snapshot.adapter === "copilot"
+        ? extractCopilotReplyFromTranscript(capture.rawOutput, capture.prompt)
+        : extractCodexReplyFromTranscript(capture.rawOutput, capture.prompt);
 
     if (!excerpt) {
       return;
@@ -1800,7 +2382,16 @@ export class CliSessionManager {
     }
     const latestScreen = runtime.screenState?.latest;
     if (
-      runtime.snapshot.adapter === "claude"
+      runtime.snapshot.adapter === "copilot"
+      && latestScreen
+      && looksLikeCopilotReplyIdleScreen(latestScreen)
+    ) {
+      this.updateReplyCaptureState(runtime, "streaming", { excerpt });
+      this.finalizeReplyCaptureIfIdle(runtime, latestScreen);
+      return;
+    }
+    if (
+      (runtime.snapshot.adapter === "cursor" || isClaudeFamilyAdapter(runtime.snapshot.adapter))
       && latestScreen
       && looksLikeClaudeReplyIdleScreen(latestScreen)
     ) {
@@ -1831,7 +2422,58 @@ export class CliSessionManager {
     if (!capture) {
       return;
     }
-    if (runtime.snapshot.adapter === "claude" && runtime.snapshot.mode === "interactive") {
+    if (runtime.snapshot.adapter === "copilot" && runtime.snapshot.mode === "interactive") {
+      if (!looksLikeCopilotReplyIdleScreen(screen)) {
+        this.clearReplyCaptureFinalizeTimer(runtime);
+        return;
+      }
+      const automation = runtime.automationState;
+      if (automation?.profile === "codex-startup") {
+        const hasStableReplySignal = automation.sawWorkingScreen || Boolean(capture.excerpt);
+        if (!hasStableReplySignal) {
+          return;
+        }
+      }
+      const finalExcerpt = String(capture.excerpt || extractCopilotReplyFromScreen(screen) || "").trim();
+      if (!finalExcerpt) {
+        return;
+      }
+      if (areEquivalentReplyExcerpts(finalExcerpt, capture.baselineExcerpt)) {
+        return;
+      }
+      this.clearReplyCaptureFinalizeTimer(runtime);
+      capture.finalizeTimer = setTimeout(() => {
+        if (runtime.replyCapture !== capture) {
+          return;
+        }
+        capture.finalizeTimer = null;
+        const latestScreen = runtime.screenState?.latest || screen;
+        if (!looksLikeCopilotReplyIdleScreen(latestScreen)) {
+          return;
+        }
+        const latestExcerpt = String(
+          runtime.replyCapture?.excerpt
+          || extractCopilotReplyFromScreen(latestScreen)
+          || "",
+        ).trim();
+        if (!latestExcerpt) {
+          return;
+        }
+        if (areEquivalentReplyExcerpts(latestExcerpt, capture.baselineExcerpt)) {
+          return;
+        }
+        this.updateReplyCaptureState(runtime, "completed", {
+          excerpt: latestExcerpt,
+          clearTimer: true,
+        });
+        this.updateAutomationState(runtime, "waiting_for_copilot_ready");
+      }, CLI_REPLY_FINALIZE_DEBOUNCE_MS);
+      return;
+    }
+    if (
+      (runtime.snapshot.adapter === "cursor" || isClaudeFamilyAdapter(runtime.snapshot.adapter))
+      && runtime.snapshot.mode === "interactive"
+    ) {
       if (!looksLikeClaudeReplyIdleScreen(screen)) {
         this.clearReplyCaptureFinalizeTimer(runtime);
         return;
@@ -1871,7 +2513,14 @@ export class CliSessionManager {
           excerpt: latestExcerpt,
           clearTimer: true,
         });
-        this.updateAutomationState(runtime, "waiting_for_claude_ready");
+        if (runtime.snapshot.adapter === "cursor") {
+          this.updateAutomationState(runtime, "waiting_for_cursor_ready");
+        } else {
+          this.updateAutomationState(
+            runtime,
+            `waiting_for_${getClaudeFamilyStatePrefix(runtime.snapshot.adapter)}_ready`,
+          );
+        }
       }, CLI_REPLY_FINALIZE_DEBOUNCE_MS);
       return;
     }
@@ -1946,7 +2595,7 @@ export class CliSessionManager {
         automation.initialPromptEnterSent = true;
         runtime.controls.write("\r");
         this.updateAutomationState(runtime, "sent_initial_prompt_enter");
-        this.scheduleCodexPromptSubmit(runtime, 900);
+        this.scheduleCodexPromptSubmit(runtime, 1000);
         logInfo(`[cli-session] ${runtime.snapshot.id} auto-submitted initial Codex prompt.`);
         return;
       }
@@ -2012,7 +2661,7 @@ export class CliSessionManager {
     if (!automation || automation.profile !== "codex-startup") {
       return;
     }
-    if (runtime.snapshot.adapter !== "claude" || runtime.snapshot.mode !== "interactive") {
+    if (!isClaudeFamilyAdapter(runtime.snapshot.adapter) || runtime.snapshot.mode !== "interactive") {
       return;
     }
     if (automation.submitTimer) {
@@ -2020,7 +2669,7 @@ export class CliSessionManager {
     }
     automation.submitTimer = setTimeout(() => {
       automation.submitTimer = null;
-      if (runtime.snapshot.adapter !== "claude" || runtime.snapshot.mode !== "interactive") {
+      if (!isClaudeFamilyAdapter(runtime.snapshot.adapter) || runtime.snapshot.mode !== "interactive") {
         return;
       }
       if (automation.manualOverride || !runtime.controls?.write || automation.continueSent) {
@@ -2028,8 +2677,10 @@ export class CliSessionManager {
       }
       automation.continueSent = true;
       runtime.controls.write("\r");
-      this.updateAutomationState(runtime, "sent_claude_startup_enter");
-      logInfo(`[cli-session] ${runtime.snapshot.id} auto-sent Enter for Claude startup prompt.`);
+      const statePrefix = getClaudeFamilyStatePrefix(runtime.snapshot.adapter);
+      const adapterLabel = getClaudeFamilyAdapterLabel(runtime.snapshot.adapter);
+      this.updateAutomationState(runtime, `sent_${statePrefix}_startup_enter`);
+      logInfo(`[cli-session] ${runtime.snapshot.id} auto-sent Enter for ${adapterLabel} startup prompt.`);
     }, delayMs);
   }
 
@@ -2042,7 +2693,7 @@ export class CliSessionManager {
     if (!automation || automation.profile !== "codex-startup") {
       return;
     }
-    if (runtime.snapshot.adapter !== "claude" || runtime.snapshot.mode !== "interactive") {
+    if (!isClaudeFamilyAdapter(runtime.snapshot.adapter) || runtime.snapshot.mode !== "interactive") {
       return;
     }
     if (automation.submitTimer) {
@@ -2050,15 +2701,16 @@ export class CliSessionManager {
     }
     automation.submitTimer = setTimeout(() => {
       automation.submitTimer = null;
-      if (runtime.snapshot.adapter !== "claude" || runtime.snapshot.mode !== "interactive") {
+      if (!isClaudeFamilyAdapter(runtime.snapshot.adapter) || runtime.snapshot.mode !== "interactive") {
         return;
       }
       if (automation.manualOverride || !runtime.controls?.write) {
         return;
       }
       runtime.controls.write("\r");
+      const adapterLabel = getClaudeFamilyAdapterLabel(runtime.snapshot.adapter);
       this.updateAutomationState(runtime, nextState);
-      logInfo(`[cli-session] ${runtime.snapshot.id} auto-submitted Claude prompt after delayed Enter.`);
+      logInfo(`[cli-session] ${runtime.snapshot.id} auto-submitted ${adapterLabel} prompt after delayed Enter.`);
     }, delayMs);
   }
 
@@ -2117,9 +2769,245 @@ export class CliSessionManager {
     }, delayMs);
   }
 
+  private scheduleCopilotDelayedEnter(
+    runtime: CliSessionRuntime,
+    nextState: string,
+    delayMs: number,
+  ): void {
+    const automation = runtime.automationState;
+    if (!automation || automation.profile !== "codex-startup") {
+      return;
+    }
+    if (runtime.snapshot.adapter !== "copilot" || runtime.snapshot.mode !== "interactive") {
+      return;
+    }
+    if (automation.submitTimer) {
+      clearTimeout(automation.submitTimer);
+    }
+    automation.submitTimer = setTimeout(() => {
+      automation.submitTimer = null;
+      if (runtime.snapshot.adapter !== "copilot" || runtime.snapshot.mode !== "interactive") {
+        return;
+      }
+      if (automation.manualOverride || !runtime.controls?.write) {
+        return;
+      }
+      if (String(automation.wakePromptText || "").trim()) {
+        automation.wakePromptEnterSent = true;
+      }
+      runtime.controls.write("\r");
+      this.updateAutomationState(runtime, nextState);
+      logInfo(`[cli-session] ${runtime.snapshot.id} auto-submitted Copilot prompt after delayed Enter.`);
+    }, delayMs);
+  }
+
+  private clearCopilotToolApprovalRetry(runtime: CliSessionRuntime): void {
+    const automation = runtime.automationState;
+    if (!automation?.toolApprovalRetryTimer) {
+      return;
+    }
+    clearTimeout(automation.toolApprovalRetryTimer);
+    automation.toolApprovalRetryTimer = null;
+  }
+
+  private setInteractiveWorkHint(
+    runtime: CliSessionRuntime,
+    state: CliSessionSnapshot["interactive_work_state"],
+    reason?: string,
+  ): void {
+    if (
+      runtime.snapshot.interactive_work_state === state
+      && runtime.snapshot.interactive_work_reason === reason
+    ) {
+      return;
+    }
+    runtime.snapshot.interactive_work_state = state;
+    runtime.snapshot.interactive_work_reason = reason;
+    runtime.snapshot.updated_at = nowIso();
+    this.emitSessionEvent("cli.session.state", runtime);
+  }
+
+  private clearInteractiveWorkHint(runtime: CliSessionRuntime, reason?: string): void {
+    if (reason && runtime.snapshot.interactive_work_reason !== reason) {
+      return;
+    }
+    if (
+      runtime.snapshot.interactive_work_state === undefined
+      && runtime.snapshot.interactive_work_reason === undefined
+    ) {
+      return;
+    }
+    runtime.snapshot.interactive_work_state = undefined;
+    runtime.snapshot.interactive_work_reason = undefined;
+    runtime.snapshot.updated_at = nowIso();
+    this.emitSessionEvent("cli.session.state", runtime);
+  }
+
+  private clearCopilotActivitySettleTimer(runtime: CliSessionRuntime): void {
+    const automation = runtime.automationState;
+    if (!automation?.activitySettleTimer) {
+      return;
+    }
+    clearTimeout(automation.activitySettleTimer);
+    automation.activitySettleTimer = null;
+  }
+
+  private scheduleCopilotActivitySettleCheck(
+    runtime: CliSessionRuntime,
+    expectedMarker: string,
+    delayMs: number,
+  ): void {
+    const automation = runtime.automationState;
+    if (!automation || runtime.snapshot.adapter !== "copilot" || runtime.snapshot.mode !== "interactive") {
+      return;
+    }
+    this.clearCopilotActivitySettleTimer(runtime);
+    automation.activitySettleTimer = setTimeout(() => {
+      automation.activitySettleTimer = null;
+      if (runtime.snapshot.adapter !== "copilot" || runtime.snapshot.mode !== "interactive") {
+        return;
+      }
+      if (automation.lastCopilotActivityMarker !== expectedMarker) {
+        return;
+      }
+      const changedAt = Number(automation.lastCopilotActivityChangedAt || 0);
+      if (!changedAt) {
+        return;
+      }
+      if (Date.now() - changedAt < COPILOT_ACTIVITY_SETTLE_MS) {
+        this.scheduleCopilotActivitySettleCheck(
+          runtime,
+          expectedMarker,
+          COPILOT_ACTIVITY_SETTLE_MS - Math.max(0, Date.now() - changedAt),
+        );
+        return;
+      }
+      this.clearInteractiveWorkHint(runtime, "copilot_activity_spinner");
+    }, Math.max(1, delayMs));
+  }
+
+  private refreshCopilotActivityState(runtime: CliSessionRuntime, screen: CliSessionScreenSnapshot): boolean {
+    const automation = runtime.automationState;
+    if (!automation || runtime.snapshot.adapter !== "copilot" || runtime.snapshot.mode !== "interactive") {
+      return false;
+    }
+
+    const marker = extractCopilotActivityMarker(screen.text);
+    if (!marker) {
+      automation.lastCopilotActivityMarker = undefined;
+      automation.lastCopilotActivityChangedAt = undefined;
+      this.clearCopilotActivitySettleTimer(runtime);
+      this.clearInteractiveWorkHint(runtime, "copilot_activity_spinner");
+      return false;
+    }
+
+    const now = Date.now();
+    const markerChanged = automation.lastCopilotActivityMarker !== marker;
+    if (markerChanged) {
+      automation.lastCopilotActivityMarker = marker;
+      automation.lastCopilotActivityChangedAt = now;
+      this.setInteractiveWorkHint(runtime, "busy", "copilot_activity_spinner");
+      this.scheduleCopilotActivitySettleCheck(runtime, marker, COPILOT_ACTIVITY_SETTLE_MS);
+      return true;
+    }
+
+    const changedAt = Number(automation.lastCopilotActivityChangedAt || 0);
+    if (!changedAt || now - changedAt < COPILOT_ACTIVITY_SETTLE_MS) {
+      this.setInteractiveWorkHint(runtime, "busy", "copilot_activity_spinner");
+      if (!automation.activitySettleTimer) {
+        this.scheduleCopilotActivitySettleCheck(
+          runtime,
+          marker,
+          COPILOT_ACTIVITY_SETTLE_MS - Math.max(0, now - changedAt),
+        );
+      }
+      return true;
+    }
+
+    this.clearInteractiveWorkHint(runtime, "copilot_activity_spinner");
+    return false;
+  }
+
+  private scheduleCopilotToolApprovalRetry(
+    runtime: CliSessionRuntime,
+    approvalKey: string,
+    delayMs: number,
+  ): void {
+    const automation = runtime.automationState;
+    if (!automation || automation.profile !== "codex-startup") {
+      return;
+    }
+    if (runtime.snapshot.adapter !== "copilot" || runtime.snapshot.mode !== "interactive") {
+      return;
+    }
+    if (automation.toolApprovalRetryTimer) {
+      clearTimeout(automation.toolApprovalRetryTimer);
+    }
+    automation.toolApprovalRetryTimer = setTimeout(() => {
+      automation.toolApprovalRetryTimer = null;
+      if (runtime.snapshot.adapter !== "copilot" || runtime.snapshot.mode !== "interactive") {
+        return;
+      }
+      if (automation.manualOverride || !runtime.controls?.write) {
+        return;
+      }
+      const latestText = String(runtime.screenState?.latest?.text || runtime.snapshot.screen_excerpt || "");
+      if (!looksLikeCopilotToolApprovalPrompt(latestText)) {
+        return;
+      }
+      const latestKey =
+        extractCopilotToolApprovalKey(latestText)
+        || normalizeScreenMatchText(latestText).slice(0, 160);
+      if (latestKey !== approvalKey) {
+        return;
+      }
+      automation.lastCopilotToolApprovalAt = Date.now();
+      automation.lastCopilotToolApprovalKey = latestKey;
+      runtime.controls.write("\r");
+      this.updateAutomationState(runtime, "resent_copilot_tool_approval_enter");
+      logInfo(`[cli-session] ${runtime.snapshot.id} retried Copilot tool approval prompt with Enter.`);
+    }, delayMs);
+  }
+
+  private scheduleCopilotInitialPrompt(
+    runtime: CliSessionRuntime,
+    prompt: string,
+    delayMs: number,
+  ): void {
+    const automation = runtime.automationState;
+    if (!automation || automation.profile !== "codex-startup") {
+      return;
+    }
+    if (runtime.snapshot.adapter !== "copilot" || runtime.snapshot.mode !== "interactive") {
+      return;
+    }
+    if (automation.submitTimer) {
+      clearTimeout(automation.submitTimer);
+    }
+    automation.submitTimer = setTimeout(() => {
+      automation.submitTimer = null;
+      if (runtime.snapshot.adapter !== "copilot" || runtime.snapshot.mode !== "interactive") {
+        return;
+      }
+      if (automation.manualOverride || !runtime.controls?.write || automation.initialPromptTextSent) {
+        return;
+      }
+      automation.initialPromptTextSent = true;
+      automation.initialPromptEnterSent = true;
+      this.startReplyCapture(runtime, prompt);
+      runtime.controls.write(prompt);
+      this.scheduleCopilotDelayedEnter(runtime, "sent_copilot_initial_prompt", 1000);
+      this.updateAutomationState(runtime, "waiting_for_copilot_initial_submit");
+      logInfo(`[cli-session] ${runtime.snapshot.id} scheduled staged initial Copilot prompt.`);
+    }, delayMs);
+  }
+
   private runClaudeAutomation(runtime: CliSessionRuntime, screen: CliSessionScreenSnapshot): void {
     const automation = runtime.automationState;
     if (!automation || !runtime.controls?.write) {
+      return;
+    }
+    if (!isClaudeFamilyAdapter(runtime.snapshot.adapter) || runtime.snapshot.mode !== "interactive") {
       return;
     }
     if (automation.manualOverride) {
@@ -2128,6 +3016,8 @@ export class CliSessionManager {
 
     const screenText = screen.text || "";
     const initialPrompt = String(runtime.snapshot.prompt || "").trim();
+    const statePrefix = getClaudeFamilyStatePrefix(runtime.snapshot.adapter);
+    const adapterLabel = getClaudeFamilyAdapterLabel(runtime.snapshot.adapter);
 
     if (looksLikeClaudeWorkingScreen(screenText)) {
       automation.sawWorkingScreen = true;
@@ -2135,6 +3025,7 @@ export class CliSessionManager {
       automation.wakePromptText = undefined;
       automation.wakePromptEnterSent = false;
       automation.wakePromptEnterRetried = false;
+      automation.copilotAskUserCorrectionSent = false;
       if (automation.submitTimer) {
         clearTimeout(automation.submitTimer);
         automation.submitTimer = null;
@@ -2144,14 +3035,14 @@ export class CliSessionManager {
           excerpt: runtime.replyCapture.excerpt,
         });
       }
-      this.updateAutomationState(runtime, "claude_working");
+      this.updateAutomationState(runtime, `${statePrefix}_working`);
       return;
     }
 
     if (looksLikeClaudeProceedPrompt(screenText)) {
       runtime.controls.write("\r");
-      this.updateAutomationState(runtime, "sent_claude_proceed_enter");
-      logInfo(`[cli-session] ${runtime.snapshot.id} auto-confirmed Claude tool prompt.`);
+      this.updateAutomationState(runtime, `sent_${statePrefix}_proceed_enter`);
+      logInfo(`[cli-session] ${runtime.snapshot.id} auto-confirmed ${adapterLabel} tool prompt.`);
       return;
     }
 
@@ -2175,19 +3066,19 @@ export class CliSessionManager {
       if (looksLikeClaudePastedTextPrompt(screenText)) {
         this.scheduleClaudePastedTextEnter(
           runtime,
-          "sent_claude_initial_prompt",
+          `sent_${statePrefix}_initial_prompt`,
           CLAUDE_INITIAL_PROMPT_ENTER_DELAY_MS,
         );
-        this.updateAutomationState(runtime, "waiting_for_claude_paste_submit");
-        logInfo(`[cli-session] ${runtime.snapshot.id} detected Claude pasted text UI for initial prompt.`);
+        this.updateAutomationState(runtime, `waiting_for_${statePrefix}_paste_submit`);
+        logInfo(`[cli-session] ${runtime.snapshot.id} detected ${adapterLabel} pasted text UI for initial prompt.`);
       } else {
         this.scheduleClaudePastedTextEnter(
           runtime,
-          "sent_claude_initial_prompt",
+          `sent_${statePrefix}_initial_prompt`,
           CLAUDE_INITIAL_PROMPT_ENTER_DELAY_MS,
         );
-        this.updateAutomationState(runtime, "waiting_for_claude_initial_submit");
-        logInfo(`[cli-session] ${runtime.snapshot.id} scheduled delayed Enter for initial Claude prompt.`);
+        this.updateAutomationState(runtime, `waiting_for_${statePrefix}_initial_submit`);
+        logInfo(`[cli-session] ${runtime.snapshot.id} scheduled delayed Enter for initial ${adapterLabel} prompt.`);
       }
       return;
     }
@@ -2202,11 +3093,25 @@ export class CliSessionManager {
       automation.initialPromptEnterRetried = true;
       this.scheduleClaudePastedTextEnter(
         runtime,
-        "resent_claude_initial_paste_enter",
+        `resent_${statePrefix}_initial_paste_enter`,
         CLAUDE_INITIAL_PROMPT_ENTER_DELAY_MS,
       );
-      this.updateAutomationState(runtime, "waiting_for_claude_initial_retry_submit");
-      logInfo(`[cli-session] ${runtime.snapshot.id} retried delayed Enter for initial Claude prompt.`);
+      this.updateAutomationState(runtime, `waiting_for_${statePrefix}_initial_retry_submit`);
+      logInfo(`[cli-session] ${runtime.snapshot.id} retried delayed Enter for initial ${adapterLabel} prompt.`);
+      return;
+    }
+
+    if (
+      runtime.snapshot.automation_state === "meeting_wake_prompt_sent"
+      && automation.wakePromptText
+      && !automation.wakePromptEnterRetried
+      && isCopilotPromptShowingText(screenText, automation.wakePromptText)
+    ) {
+      automation.wakePromptEnterRetried = true;
+      automation.wakePromptEnterSent = true;
+      this.scheduleCopilotDelayedEnter(runtime, "meeting_wake_prompt_resent_enter", 1000);
+      this.updateAutomationState(runtime, "waiting_for_copilot_wake_submit");
+      logInfo(`[cli-session] ${runtime.snapshot.id} retried delayed Enter for Copilot wake prompt.`);
       return;
     }
 
@@ -2219,13 +3124,13 @@ export class CliSessionManager {
     ) {
       automation.deliveryPromptEnterRetried = true;
       if (looksLikeClaudePastedTextPrompt(screenText)) {
-        this.scheduleClaudePastedTextEnter(runtime, "resent_claude_delivery_enter", 300);
-        this.updateAutomationState(runtime, "waiting_for_claude_delivery_paste_submit");
-        logInfo(`[cli-session] ${runtime.snapshot.id} detected Claude pasted text UI for meeting prompt delivery.`);
+        this.scheduleClaudePastedTextEnter(runtime, `resent_${statePrefix}_delivery_enter`, 1000);
+        this.updateAutomationState(runtime, `waiting_for_${statePrefix}_delivery_paste_submit`);
+        logInfo(`[cli-session] ${runtime.snapshot.id} detected ${adapterLabel} pasted text UI for meeting prompt delivery.`);
       } else if (looksLikeClaudeUsableScreen(screen)) {
-        this.scheduleClaudePastedTextEnter(runtime, "resent_claude_delivery_enter", 300);
-        this.updateAutomationState(runtime, "waiting_for_claude_delivery_submit");
-        logInfo(`[cli-session] ${runtime.snapshot.id} scheduled delayed Enter for Claude meeting prompt delivery.`);
+        this.scheduleClaudePastedTextEnter(runtime, `resent_${statePrefix}_delivery_enter`, 1000);
+        this.updateAutomationState(runtime, `waiting_for_${statePrefix}_delivery_submit`);
+        logInfo(`[cli-session] ${runtime.snapshot.id} scheduled delayed Enter for ${adapterLabel} meeting prompt delivery.`);
       }
     }
 
@@ -2280,11 +3185,11 @@ export class CliSessionManager {
       runtime.controls.write(initialPrompt);
       automation.initialPromptEnterSent = true;
       if (looksLikeCursorPastedTextPrompt(screenText)) {
-        this.scheduleCursorDelayedEnter(runtime, "sent_cursor_initial_prompt", 300);
+        this.scheduleCursorDelayedEnter(runtime, "sent_cursor_initial_prompt", 1000);
         this.updateAutomationState(runtime, "waiting_for_cursor_paste_submit");
         logInfo(`[cli-session] ${runtime.snapshot.id} detected Cursor pasted text UI for initial prompt.`);
       } else {
-        this.scheduleCursorDelayedEnter(runtime, "sent_cursor_initial_prompt", 300);
+        this.scheduleCursorDelayedEnter(runtime, "sent_cursor_initial_prompt", 1000);
         this.updateAutomationState(runtime, "waiting_for_cursor_initial_submit");
         logInfo(`[cli-session] ${runtime.snapshot.id} scheduled delayed Enter for initial Cursor prompt.`);
       }
@@ -2298,7 +3203,7 @@ export class CliSessionManager {
       && looksLikeCursorPastedTextPrompt(screenText)
     ) {
       automation.initialPromptEnterRetried = true;
-      this.scheduleCursorDelayedEnter(runtime, "resent_cursor_initial_paste_enter", 300);
+      this.scheduleCursorDelayedEnter(runtime, "resent_cursor_initial_paste_enter", 1000);
       this.updateAutomationState(runtime, "waiting_for_cursor_initial_paste_submit");
       logInfo(`[cli-session] ${runtime.snapshot.id} detected delayed Cursor pasted text UI for initial prompt.`);
       return;
@@ -2313,15 +3218,255 @@ export class CliSessionManager {
     ) {
       automation.deliveryPromptEnterRetried = true;
       if (looksLikeCursorPastedTextPrompt(screenText)) {
-        this.scheduleCursorDelayedEnter(runtime, "resent_cursor_delivery_enter", 300);
+        this.scheduleCursorDelayedEnter(runtime, "resent_cursor_delivery_enter", 1000);
         this.updateAutomationState(runtime, "waiting_for_cursor_delivery_paste_submit");
         logInfo(`[cli-session] ${runtime.snapshot.id} detected Cursor pasted text UI for meeting prompt delivery.`);
       } else if (looksLikeCursorUsableScreen(screen)) {
-        this.scheduleCursorDelayedEnter(runtime, "resent_cursor_delivery_enter", 300);
+        this.scheduleCursorDelayedEnter(runtime, "resent_cursor_delivery_enter", 1000);
         this.updateAutomationState(runtime, "waiting_for_cursor_delivery_submit");
         logInfo(`[cli-session] ${runtime.snapshot.id} scheduled delayed Enter for Cursor meeting prompt delivery.`);
       }
     }
+  }
+
+  private runCopilotAutomation(runtime: CliSessionRuntime, screen: CliSessionScreenSnapshot): void {
+    const automation = runtime.automationState;
+    if (!automation || !runtime.controls?.write) {
+      return;
+    }
+    if (automation.manualOverride) {
+      return;
+    }
+
+    const screenText = screen.text || "";
+    const initialPrompt = String(runtime.snapshot.prompt || "").trim();
+    const terminalError = extractCopilotTerminalError(screenText);
+    const toolApprovalVisible = looksLikeCopilotToolApprovalPrompt(screenText);
+    const activitySpinnerBusy = this.refreshCopilotActivityState(runtime, screen);
+
+    if (terminalError) {
+      this.clearInteractiveWorkHint(runtime, "copilot_activity_spinner");
+      this.clearCopilotToolApprovalRetry(runtime);
+      if (automation.submitTimer) {
+        clearTimeout(automation.submitTimer);
+        automation.submitTimer = null;
+      }
+      runtime.snapshot.last_error = `Copilot CLI error: ${terminalError}`;
+      runtime.snapshot.updated_at = nowIso();
+      if (runtime.replyCapture && runtime.replyCapture.state !== "completed") {
+        this.updateReplyCaptureState(runtime, "error", {
+          error: `Copilot CLI error: ${terminalError}`,
+          clearTimer: true,
+        });
+      } else {
+        this.emitSessionEvent("cli.session.state", runtime);
+      }
+      this.updateAutomationState(runtime, "copilot_error");
+      return;
+    }
+
+    if (activitySpinnerBusy) {
+      this.clearCopilotToolApprovalRetry(runtime);
+      automation.sawWorkingScreen = true;
+      automation.deliveryPromptEnterRetried = false;
+      automation.wakePromptText = undefined;
+      automation.wakePromptEnterSent = false;
+      automation.wakePromptEnterRetried = false;
+      if (automation.submitTimer) {
+        clearTimeout(automation.submitTimer);
+        automation.submitTimer = null;
+      }
+      if (runtime.replyCapture && runtime.replyCapture.state !== "completed") {
+        this.updateReplyCaptureState(runtime, "working", {
+          excerpt: runtime.replyCapture.excerpt,
+        });
+      }
+      this.updateAutomationState(runtime, "copilot_working");
+      return;
+    }
+
+    if (looksLikeCopilotWorkingScreen(screenText)) {
+      this.clearCopilotToolApprovalRetry(runtime);
+      automation.sawWorkingScreen = true;
+      automation.deliveryPromptEnterRetried = false;
+      automation.wakePromptText = undefined;
+      automation.wakePromptEnterSent = false;
+      automation.wakePromptEnterRetried = false;
+      automation.copilotAskUserCorrectionSent = false;
+      if (automation.submitTimer) {
+        clearTimeout(automation.submitTimer);
+        automation.submitTimer = null;
+      }
+      if (runtime.replyCapture && runtime.replyCapture.state !== "completed") {
+        this.updateReplyCaptureState(runtime, "working", {
+          excerpt: runtime.replyCapture.excerpt,
+        });
+      }
+      this.updateAutomationState(runtime, "copilot_working");
+      return;
+    }
+
+    if (toolApprovalVisible) {
+      const now = Date.now();
+      const approvalKey =
+        extractCopilotToolApprovalKey(screenText)
+        || normalizeScreenMatchText(screenText).slice(0, 160);
+      const promptChanged = automation.lastCopilotToolApprovalKey !== approvalKey;
+      if (
+        promptChanged
+        || !automation.lastCopilotToolApprovalAt
+        || now - automation.lastCopilotToolApprovalAt >= COPILOT_TOOL_APPROVAL_ENTER_COOLDOWN_MS
+      ) {
+        automation.lastCopilotToolApprovalAt = now;
+        automation.lastCopilotToolApprovalKey = approvalKey;
+        runtime.controls.write("\r");
+        this.scheduleCopilotToolApprovalRetry(runtime, approvalKey, 900);
+        logInfo(`[cli-session] ${runtime.snapshot.id} auto-confirmed Copilot tool prompt with Enter.`);
+        this.updateAutomationState(runtime, "sent_copilot_tool_approval_enter");
+      } else if (!automation.toolApprovalRetryTimer) {
+        this.scheduleCopilotToolApprovalRetry(runtime, approvalKey, 900);
+      }
+      return;
+    }
+
+    this.clearCopilotToolApprovalRetry(runtime);
+
+    if (looksLikeCopilotSeqMismatchChoicePrompt(screenText)) {
+      const choice = extractCopilotSeqMismatchChoice(screenText);
+      if (choice) {
+        const now = Date.now();
+        const decisionKey = `${choice}::${normalizeScreenMatchText(screenText).slice(0, 200)}`;
+        const promptChanged = automation.lastCopilotDecisionKey !== decisionKey;
+        if (
+          promptChanged
+          || !automation.lastCopilotDecisionAt
+          || now - automation.lastCopilotDecisionAt >= COPILOT_DECISION_PROMPT_COOLDOWN_MS
+        ) {
+          automation.lastCopilotDecisionAt = now;
+          automation.lastCopilotDecisionKey = decisionKey;
+          runtime.controls.write(choice);
+          this.scheduleCopilotDelayedEnter(runtime, "sent_copilot_seq_mismatch_choice", 1200);
+          this.updateAutomationState(runtime, "waiting_for_copilot_seq_mismatch_choice_submit");
+          logInfo(`[cli-session] ${runtime.snapshot.id} auto-resolved Copilot seq-mismatch prompt with '${choice}'.`);
+        }
+      }
+      return;
+    }
+
+    if (looksLikeClaudeProceedPrompt(screenText)) {
+      runtime.controls.write("\r");
+      this.updateAutomationState(runtime, "sent_copilot_proceed_enter");
+      logInfo(`[cli-session] ${runtime.snapshot.id} auto-confirmed Copilot tool prompt.`);
+      return;
+    }
+
+    if (!initialPrompt) {
+      return;
+    }
+
+    if (looksLikeCopilotIdleScreen(screenText) || looksLikeCopilotUsableScreen(screen)) {
+      automation.sawReadyScreen = true;
+    }
+
+    if (!automation.sawReadyScreen) {
+      return;
+    }
+
+    if (
+      looksLikeCopilotForeignToolingLeak(screenText)
+      && looksLikeCopilotUsableScreen(screen)
+      && !automation.copilotCorrectionSent
+    ) {
+      automation.copilotCorrectionSent = true;
+      const correctionPrompt = [
+        "Ignore any instructions about report_intent, multi_tool_use.parallel, developer tools, or non-AgentChatBus tools.",
+        "In this current Copilot session, use only the MCP server `agentchatbus`.",
+        "Do not describe plans or tool strategy.",
+        "Do not call any tool except agentchatbus bus_connect, msg_post, and msg_wait.",
+        "Do these steps in order now: bus_connect, msg_post introduction, msg_wait timeout_ms 600000.",
+        initialPrompt,
+      ].join(" ");
+      runtime.controls.write(correctionPrompt);
+      this.scheduleCopilotDelayedEnter(runtime, "sent_copilot_direct_tool_correction", 1000);
+      this.updateAutomationState(runtime, "waiting_for_copilot_direct_tool_correction_submit");
+      logInfo(`[cli-session] ${runtime.snapshot.id} detected Copilot foreign-tooling leak and sent corrective prompt.`);
+      return;
+    }
+
+    if (
+      looksLikeCopilotAskUserDetour(screenText)
+      && looksLikeCopilotUsableScreen(screen)
+      && !automation.copilotAskUserCorrectionSent
+    ) {
+      automation.copilotAskUserCorrectionSent = true;
+      const correctionPrompt = [
+        "Do not ask me for confirmation and do not use ask_user in this session.",
+        "If you are ready to contribute, post directly with agentchatbus msg_post using the latest sync_context values you already have.",
+        "If the latest sync_context is stale, refresh it with agentchatbus msg_wait first and then post directly.",
+        "After posting, immediately resume agentchatbus msg_wait with timeout_ms 600000.",
+        "Do not narrate the decision. Perform the tool calls now.",
+      ].join(" ");
+      runtime.controls.write(correctionPrompt);
+      this.scheduleCopilotDelayedEnter(runtime, "sent_copilot_ask_user_correction", 1000);
+      this.updateAutomationState(runtime, "waiting_for_copilot_ask_user_correction_submit");
+      logInfo(`[cli-session] ${runtime.snapshot.id} detected Copilot confirmation detour and sent corrective prompt.`);
+      return;
+    }
+
+    if (
+      looksLikeCopilotBackgroundTaskDetour(screenText)
+      && looksLikeCopilotUsableScreen(screen)
+      && !automation.copilotCorrectionSent
+    ) {
+      automation.copilotCorrectionSent = true;
+      const correctionPrompt = [
+        "Stop delegating this task.",
+        "Ignore any background agent, helper, task, or read_agent flow you started.",
+        "In this current session only, directly use the MCP server `agentchatbus` yourself.",
+        "Do not create background agents, tasks, helpers, or sub-agents.",
+        initialPrompt,
+      ].join(" ");
+      runtime.controls.write(correctionPrompt);
+      this.scheduleCopilotDelayedEnter(runtime, "sent_copilot_direct_tool_correction", 1000);
+      this.updateAutomationState(runtime, "waiting_for_copilot_direct_tool_correction_submit");
+      logInfo(`[cli-session] ${runtime.snapshot.id} detected Copilot background-agent detour and sent corrective prompt.`);
+      return;
+    }
+
+    if (!automation.initialPromptTextSent) {
+      this.scheduleCopilotInitialPrompt(runtime, initialPrompt, 1200);
+      this.updateAutomationState(runtime, "waiting_for_copilot_prompt_text");
+      return;
+    }
+
+    if (
+      automation.initialPromptTextSent
+      && !automation.initialPromptEnterRetried
+      && !automation.sawWorkingScreen
+      && !runtime.replyCapture?.excerpt
+      && isCopilotPromptShowingText(screenText, initialPrompt)
+    ) {
+      automation.initialPromptEnterRetried = true;
+      this.scheduleCopilotDelayedEnter(runtime, "resent_copilot_initial_enter", 1000);
+      this.updateAutomationState(runtime, "waiting_for_copilot_initial_retry_submit");
+      logInfo(`[cli-session] ${runtime.snapshot.id} retried delayed Enter for initial Copilot prompt.`);
+      return;
+    }
+
+    if (
+      runtime.snapshot.automation_state === "meeting_delivery_prompt_sent"
+      && !automation.deliveryPromptEnterRetried
+      && runtime.replyCapture
+      && !runtime.replyCapture.excerpt
+      && isCopilotPromptShowingText(screenText, initialPrompt)
+    ) {
+      automation.deliveryPromptEnterRetried = true;
+      this.scheduleCopilotDelayedEnter(runtime, "resent_copilot_delivery_enter", 1000);
+      this.updateAutomationState(runtime, "waiting_for_copilot_delivery_submit");
+      logInfo(`[cli-session] ${runtime.snapshot.id} scheduled delayed Enter for Copilot meeting prompt delivery.`);
+    }
+
+    this.finalizeReplyCaptureIfIdle(runtime, screen);
   }
 
   private runAutomation(runtime: CliSessionRuntime, screen: CliSessionScreenSnapshot): void {
@@ -2333,7 +3478,7 @@ export class CliSessionManager {
       return;
     }
 
-    if (runtime.snapshot.adapter === "claude" && runtime.snapshot.mode === "interactive") {
+    if (isClaudeFamilyAdapter(runtime.snapshot.adapter) && runtime.snapshot.mode === "interactive") {
       this.runClaudeAutomation(runtime, screen);
       return;
     }
@@ -2343,12 +3488,18 @@ export class CliSessionManager {
       return;
     }
 
+    if (runtime.snapshot.adapter === "copilot" && runtime.snapshot.mode === "interactive") {
+      this.runCopilotAutomation(runtime, screen);
+      return;
+    }
+
     if (looksLikeCodexWorkingScreen(screen)) {
       automation.sawWorkingScreen = true;
       automation.deliveryPromptEnterRetried = false;
       automation.wakePromptText = undefined;
       automation.wakePromptEnterSent = false;
       automation.wakePromptEnterRetried = false;
+      automation.copilotAskUserCorrectionSent = false;
       if (automation.submitTimer) {
         clearTimeout(automation.submitTimer);
         automation.submitTimer = null;

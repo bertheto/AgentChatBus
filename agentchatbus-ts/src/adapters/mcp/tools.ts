@@ -232,9 +232,42 @@ const toolDefinitions: ToolDefinition[] = [
       }
     } 
   },
-  { name: "template_list", description: "List templates.", inputSchema: { type: "object" } },
-  { name: "template_get", description: "Get template by ID.", inputSchema: { type: "object", required: ["template_id"] } },
-  { name: "template_create", description: "Create a template.", inputSchema: { type: "object", required: ["id", "name"] } },
+  {
+    name: "template_list",
+    description: "List templates.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+      additionalProperties: false
+    }
+  },
+  {
+    name: "template_get",
+    description: "Get template by ID.",
+    inputSchema: {
+      type: "object",
+      required: ["template_id"],
+      properties: {
+        template_id: { type: "string", description: "Template ID to fetch." }
+      },
+      additionalProperties: false
+    }
+  },
+  {
+    name: "template_create",
+    description: "Create a template.",
+    inputSchema: {
+      type: "object",
+      required: ["id", "name"],
+      properties: {
+        id: { type: "string", description: "Unique template ID." },
+        name: { type: "string", description: "Human-readable template name." },
+        description: { type: "string", description: "Optional template description." },
+        system_prompt: { type: "string", description: "Optional system prompt body." },
+        metadata: { type: "object", description: "Optional template metadata." }
+      }
+    }
+  },
   { 
     name: "agent_register", 
     description: "Register an agent onto the bus. The display name is auto-generated as 'IDE (Model)' — e.g. 'Cursor (GPT-4)'. If the same IDE+Model pair is already registered, a numeric suffix is appended: 'Cursor (GPT-4) 2'. Optional `display_name` can be provided as a human-friendly alias. Use `capabilities` for simple string tags and `skills` for structured A2A-compatible skill declarations. Returns agent_id and a secret token for subsequent calls.", 
@@ -266,14 +299,141 @@ const toolDefinitions: ToolDefinition[] = [
       }
     } 
   },
-  { name: "agent_heartbeat", description: "Heartbeat an agent.", inputSchema: { type: "object", required: ["agent_id", "token"] } },
-  { name: "agent_resume", description: "Resume an agent.", inputSchema: { type: "object", required: ["agent_id", "token"] } },
-  { name: "agent_unregister", description: "Unregister an agent.", inputSchema: { type: "object", required: ["agent_id", "token"] } },
-  { name: "agent_list", description: "List agents.", inputSchema: { type: "object" } },
-  { name: "agent_update", description: "Update an agent's profile. Accepts optional display_name, description, capabilities, skills, and emoji.", inputSchema: { type: "object", required: ["agent_id", "token"], properties: { agent_id: { type: "string" }, token: { type: "string" }, display_name: { type: "string" }, description: { type: "string" }, capabilities: { type: "array", items: { type: "string" } }, skills: { type: "array" }, emoji: { type: "string", description: "Single emoji for agent avatar. Must be a valid emoji character." } } } },
-  { name: "agent_set_typing", description: "Set typing indicator.", inputSchema: { type: "object", required: ["thread_id", "agent_id", "is_typing"] } },
-  { name: "msg_react", description: "React to a message.", inputSchema: { type: "object", required: ["message_id", "agent_id", "reaction"] } },
-  { name: "msg_unreact", description: "Remove a reaction from a message.", inputSchema: { type: "object", required: ["message_id", "agent_id", "reaction"] } },
+  {
+    name: "agent_heartbeat",
+    description: "Heartbeat an agent.",
+    inputSchema: {
+      type: "object",
+      required: ["agent_id", "token"],
+      properties: {
+        agent_id: { type: "string", description: "Agent ID to heartbeat." },
+        token: { type: "string", description: "Agent token." }
+      },
+      additionalProperties: false
+    }
+  },
+  {
+    name: "agent_resume",
+    description: "Resume an agent.",
+    inputSchema: {
+      type: "object",
+      required: ["agent_id", "token"],
+      properties: {
+        agent_id: { type: "string", description: "Agent ID to resume." },
+        token: { type: "string", description: "Agent token." }
+      },
+      additionalProperties: false
+    }
+  },
+  {
+    name: "agent_unregister",
+    description: "Unregister an agent.",
+    inputSchema: {
+      type: "object",
+      required: ["agent_id", "token"],
+      properties: {
+        agent_id: { type: "string", description: "Agent ID to unregister." },
+        token: { type: "string", description: "Agent token." }
+      },
+      additionalProperties: false
+    }
+  },
+  {
+    name: "agent_list",
+    description: "List agents.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+      additionalProperties: false
+    }
+  },
+  {
+    name: "agent_update",
+    description: "Update an agent's profile. Accepts optional display_name, description, capabilities, skills, and emoji.",
+    inputSchema: {
+      type: "object",
+      required: ["agent_id", "token"],
+      properties: {
+        agent_id: { type: "string", description: "Agent ID to update." },
+        token: { type: "string", description: "Agent token." },
+        display_name: { type: "string", description: "Optional human-friendly alias shown in UI and message labels." },
+        description: { type: "string", description: "Optional short description of this agent's role." },
+        capabilities: {
+          type: "array",
+          items: { type: "string" },
+          description: "Simple capability tags for fast matching."
+        },
+        skills: {
+          type: "array",
+          description: "Structured skill declarations (A2A AgentCard compatible).",
+          items: {
+            type: "object",
+            properties: {
+              id: { type: "string", description: "Machine-readable skill identifier." },
+              name: { type: "string", description: "Human-readable skill name." },
+              description: { type: "string", description: "What this skill does." },
+              tags: {
+                type: "array",
+                items: { type: "string" },
+                description: "Additional tags for routing."
+              },
+              examples: {
+                type: "array",
+                items: { type: "string" },
+                description: "Example prompts."
+              }
+            },
+            required: ["id", "name"],
+            additionalProperties: false
+          }
+        },
+        emoji: { type: "string", description: "Single emoji for agent avatar. Must be a valid emoji character." }
+      },
+      additionalProperties: false
+    }
+  },
+  {
+    name: "agent_set_typing",
+    description: "Set typing indicator.",
+    inputSchema: {
+      type: "object",
+      required: ["thread_id", "agent_id", "is_typing"],
+      properties: {
+        thread_id: { type: "string", description: "Thread ID." },
+        agent_id: { type: "string", description: "Agent ID." },
+        is_typing: { type: "boolean", description: "Typing indicator state." }
+      },
+      additionalProperties: false
+    }
+  },
+  {
+    name: "msg_react",
+    description: "React to a message.",
+    inputSchema: {
+      type: "object",
+      required: ["message_id", "agent_id", "reaction"],
+      properties: {
+        message_id: { type: "string", description: "Message ID." },
+        agent_id: { type: "string", description: "Agent ID." },
+        reaction: { type: "string", description: "Reaction content." }
+      },
+      additionalProperties: false
+    }
+  },
+  {
+    name: "msg_unreact",
+    description: "Remove a reaction from a message.",
+    inputSchema: {
+      type: "object",
+      required: ["message_id", "agent_id", "reaction"],
+      properties: {
+        message_id: { type: "string", description: "Message ID." },
+        agent_id: { type: "string", description: "Agent ID." },
+        reaction: { type: "string", description: "Reaction content." }
+      },
+      additionalProperties: false
+    }
+  },
   { 
     name: "bus_connect", 
     description: "One-step connect: register an agent and join (or create) a thread. Returns agent identity, thread details, full message history, and sync context (current_seq, reply_token, reply_window). Clients can use that sync context directly for the first msg_post without an extra msg_wait call. If the thread does not exist, it is created automatically and the agent becomes the thread administrator.", 
@@ -311,10 +471,54 @@ const toolDefinitions: ToolDefinition[] = [
       }
     } 
   },
-  { name: "bus_get_config", description: "Get bus config.", inputSchema: { type: "object" } },
-  { name: "msg_search", description: "Search messages.", inputSchema: { type: "object", required: ["query"] } },
-  { name: "msg_edit", description: "Edit a message.", inputSchema: { type: "object", required: ["message_id", "new_content"] } },
-  { name: "msg_edit_history", description: "Get message edit history.", inputSchema: { type: "object", required: ["message_id"] } }
+  {
+    name: "bus_get_config",
+    description: "Get bus config.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+      additionalProperties: false
+    }
+  },
+  {
+    name: "msg_search",
+    description: "Search messages.",
+    inputSchema: {
+      type: "object",
+      required: ["query"],
+      properties: {
+        query: { type: "string", description: "Search query." }
+      },
+      additionalProperties: false
+    }
+  },
+  {
+    name: "msg_edit",
+    description: "Edit a message.",
+    inputSchema: {
+      type: "object",
+      required: ["message_id", "new_content"],
+      properties: {
+        message_id: { type: "string", description: "Message ID to edit." },
+        new_content: { type: "string", description: "Replacement message content." },
+        agent_id: { type: "string", description: "Agent ID performing the edit." },
+        token: { type: "string", description: "Agent token used for authentication." }
+      },
+      additionalProperties: false
+    }
+  },
+  {
+    name: "msg_edit_history",
+    description: "Get message edit history.",
+    inputSchema: {
+      type: "object",
+      required: ["message_id"],
+      properties: {
+        message_id: { type: "string", description: "Message ID." }
+      },
+      additionalProperties: false
+    }
+  }
 ];
 
 export function listTools(): ToolDefinition[] {
@@ -323,6 +527,7 @@ export function listTools(): ToolDefinition[] {
 
 type ToolCallContext = {
   sessionId?: string;
+  abortSignal?: AbortSignal;
 };
 
 const toolCallContext = new AsyncLocalStorage<ToolCallContext>();
@@ -399,6 +604,10 @@ function setConnectionAgent(agentId: string, token: string): void {
     return;
   }
   connectionAgents.set(sessionId, { agentId, token });
+}
+
+function getToolAbortSignal(): AbortSignal | undefined {
+  return toolCallContext.getStore()?.abortSignal;
 }
 
 function toPythonUtcIsoString(value: string): string {
@@ -479,7 +688,8 @@ export async function withToolCallContext<T>(
   context: ToolCallContext,
   fn: () => Promise<T>
 ): Promise<T> {
-  return await toolCallContext.run(context, fn);
+  const parent = toolCallContext.getStore() || {};
+  return await toolCallContext.run({ ...parent, ...context }, fn);
 }
 
 export async function callTool(name: string, args: Record<string, unknown>): Promise<unknown> {
@@ -686,7 +896,8 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
         agents_waiting: Object.entries(threadWaitStates).map(([agentId, ws]) => ({
           agent_id: agentId,
           entered_at: ws.entered_at,
-          timeout_ms: ws.timeout_ms
+          timeout_ms: ws.timeout_ms,
+          wait_call_id: ws.wait_call_id
         })),
         count: Object.keys(threadWaitStates).length
       };
@@ -724,7 +935,7 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
 
         // Fix #6: Exit wait state for the posting agent
         if (authorAgentId) {
-          getStore().exitWaitState(threadId, authorAgentId);
+          getStore().exitWaitState(threadId, authorAgentId, undefined, "msg_post");
         }
 
         const postPayload: Record<string, unknown> = {
@@ -1066,7 +1277,8 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
           agentId, 
           agentToken: verifiedAgent ? token : undefined,
           timeoutMs: effectiveTimeoutMs,
-          forAgent
+          forAgent,
+          abortSignal: getToolAbortSignal()
         });
         
         // Match Python dispatch.py L1279-1296: support blocks return format

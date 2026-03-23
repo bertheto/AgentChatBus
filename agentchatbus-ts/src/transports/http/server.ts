@@ -79,6 +79,29 @@ function isLoopbackRequest(request: FastifyRequest): boolean {
   return ip === "127.0.0.1" || ip === "::1" || ip === "::ffff:127.0.0.1" || ip === "localhost";
 }
 
+function createRequestAbortContext(request: FastifyRequest, reply: FastifyReply): {
+  signal: AbortSignal;
+  cleanup: () => void;
+} {
+  const controller = new AbortController();
+  const abort = () => {
+    if (!controller.signal.aborted) {
+      controller.abort();
+    }
+  };
+
+  request.raw.on("aborted", abort);
+  reply.raw.on("close", abort);
+
+  return {
+    signal: controller.signal,
+    cleanup: () => {
+      request.raw.off("aborted", abort);
+      reply.raw.off("close", abort);
+    },
+  };
+}
+
 export function createHttpServer() {
   const fastify = Fastify({ logger: false });
   // If AGENTCHATBUS_DB env is set for this process, create a dedicated store
@@ -323,6 +346,7 @@ export function createHttpServer() {
     const headerSessionId = request.headers["mcp-session-id"] as string | undefined;
 
     console.log(`[MCP] ${request.method} request: session=${headerSessionId?.slice(0, 8) || "new"}`);
+    const abortContext = createRequestAbortContext(request, reply);
 
     try {
       // Get or create transport (async - waits for server to be ready)
@@ -334,13 +358,17 @@ export function createHttpServer() {
       }
 
       // Use native Node.js request/response objects for StreamableHTTPServerTransport
-      await transport.handleRequest(request.raw, reply.raw, request.body);
+      await withToolCallContext({ sessionId, abortSignal: abortContext.signal }, () =>
+        transport.handleRequest(request.raw, reply.raw, request.body)
+      );
 
       return reply;
     } catch (error: any) {
       console.error(`[MCP] ${request.method} Error: ${error.message}`);
       reply.code(500);
       return { error: error.message };
+    } finally {
+      abortContext.cleanup();
     }
   }
 
@@ -350,6 +378,7 @@ export function createHttpServer() {
   // GET /mcp - SSE stream for the modern Streamable HTTP transport
   fastify.get("/mcp", async (request, reply) => {
     const headerSessionId = request.headers["mcp-session-id"] as string | undefined;
+    const abortContext = createRequestAbortContext(request, reply);
 
     try {
       if (!headerSessionId) {
@@ -358,13 +387,17 @@ export function createHttpServer() {
       }
 
       const { transport } = await getOrCreateTransport(headerSessionId);
-      await transport.handleRequest(request.raw, reply.raw);
+      await withToolCallContext({ sessionId: headerSessionId, abortSignal: abortContext.signal }, () =>
+        transport.handleRequest(request.raw, reply.raw)
+      );
 
       return reply;
     } catch (error: any) {
       console.error(`[MCP] GET Error: ${error.message}`);
       reply.code(500);
       return { error: error.message };
+    } finally {
+      abortContext.cleanup();
     }
   });
 
@@ -385,18 +418,24 @@ export function createHttpServer() {
   fastify.post("/mcp/sse", handleStreamableHttpRequest);
   fastify.get("/mcp/sse", async (request, reply) => {
     const headerSessionId = request.headers["mcp-session-id"] as string | undefined;
+    const abortContext = createRequestAbortContext(request, reply);
     if (!headerSessionId) {
+      abortContext.cleanup();
       reply.code(400);
       return { error: "Missing mcp-session-id header" };
     }
     try {
       const { transport } = await getOrCreateTransport(headerSessionId);
-      await transport.handleRequest(request.raw, reply.raw);
+      await withToolCallContext({ sessionId: headerSessionId, abortSignal: abortContext.signal }, () =>
+        transport.handleRequest(request.raw, reply.raw)
+      );
       return reply;
     } catch (error: any) {
       console.error(`[MCP-ALIAS] GET Error: ${error.message}`);
       reply.code(500);
       return { error: error.message };
+    } finally {
+      abortContext.cleanup();
     }
   });
   fastify.delete("/mcp/sse", async (request, reply) => {
@@ -437,14 +476,18 @@ export function createHttpServer() {
       return { error: "Missing sessionId parameter" };
     }
 
+    const abortContext = createRequestAbortContext(request, reply);
     const transport = getLegacySseTransport(sessionId);
     if (!transport) {
+      abortContext.cleanup();
       reply.code(404);
       return { error: "Session not found" };
     }
 
     try {
-      await transport.handlePostMessage(request.raw, reply.raw, request.body);
+      await withToolCallContext({ sessionId, abortSignal: abortContext.signal }, () =>
+        transport.handlePostMessage(request.raw, reply.raw, request.body)
+      );
       return reply;
     } catch (error: any) {
       console.error(`[MCP-SSE-LEGACY] POST Error: ${error.message}`);
@@ -453,6 +496,8 @@ export function createHttpServer() {
         return { error: error.message };
       }
       return reply;
+    } finally {
+      abortContext.cleanup();
     }
   };
 
@@ -462,16 +507,19 @@ export function createHttpServer() {
   // Legacy endpoint for backwards compatibility
   // Supports the full MCP method set used by Python server parity.
   const handleLegacyMcpMessages = async (_request: FastifyRequest, reply: FastifyReply) => {
+    const abortContext = createRequestAbortContext(_request, reply);
     const request = _request.body as
       | { id?: string | number | null; method?: string; params?: Record<string, unknown> }
       | undefined;
     if (!request?.method) {
+      abortContext.cleanup();
       reply.code(400);
       return { error: "INVALID_REQUEST", detail: "method is required" };
     }
 
     // Keep legacy response shape for existing tools/list and tools/call tests.
     if (request.method === "tools/list") {
+      abortContext.cleanup();
       return { result: listTools() };
     }
     if (request.method === "tools/call") {
@@ -481,7 +529,7 @@ export function createHttpServer() {
           typeof _request.headers["mcp-session-id"] === "string"
             ? _request.headers["mcp-session-id"]
             : "legacy-mcp";
-        const result = await withToolCallContext({ sessionId }, () =>
+        const result = await withToolCallContext({ sessionId, abortSignal: abortContext.signal }, () =>
           callTool(String(params?.name || ""), params?.arguments || {})
         );
         try { console.log(`[mcp-call] ${String(params?.name || "")} => ${JSON.stringify(result).slice(0, 200)}`); } catch (_) {}
@@ -490,25 +538,31 @@ export function createHttpServer() {
         try { console.error(`[mcp-call-error] ${String((error as Error).message || error)}`); } catch (_) {}
         reply.code(400);
         return { error: (error as Error).message };
+      } finally {
+        abortContext.cleanup();
       }
     }
 
     // For other MCP methods, run through unified MCP handler and expose result payload.
-    const rpc = await handleMcpRequest({
-      id: request.id ?? null,
-      method: request.method,
-      params: request.params || {},
-    });
+    try {
+      const rpc = await handleMcpRequest({
+        id: request.id ?? null,
+        method: request.method,
+        params: request.params || {},
+      });
 
-    if (rpc === null) {
-      reply.code(204);
-      return reply.send();
+      if (rpc === null) {
+        reply.code(204);
+        return reply.send();
+      }
+      if ("error" in rpc) {
+        reply.code(400);
+        return { error: (rpc as { error: { message?: string } }).error?.message || "MCP_ERROR", detail: rpc };
+      }
+      return { result: (rpc as { result?: unknown }).result };
+    } finally {
+      abortContext.cleanup();
     }
-    if ("error" in rpc) {
-      reply.code(400);
-      return { error: (rpc as { error: { message?: string } }).error?.message || "MCP_ERROR", detail: rpc };
-    }
-    return { result: (rpc as { result?: unknown }).result };
   };
 
   fastify.post("/mcp/messages/", handleLegacyMcpMessages);
@@ -518,12 +572,13 @@ export function createHttpServer() {
   fastify.post("/api/mcp/tool/:toolName", async (request, reply) => {
     const params = request.params as { toolName: string };
     const body = request.body as Record<string, unknown> | undefined;
+    const abortContext = createRequestAbortContext(request, reply);
     try {
       const sessionId =
         typeof request.headers["mcp-session-id"] === "string"
           ? request.headers["mcp-session-id"]
           : "api-mcp-tool";
-      const result = await withToolCallContext({ sessionId }, () =>
+      const result = await withToolCallContext({ sessionId, abortSignal: abortContext.signal }, () =>
         callTool(params.toolName, body || {})
       );
       // All tools should return a blocks-style MCP payload for consistency
@@ -562,6 +617,8 @@ export function createHttpServer() {
     } catch (error) {
       reply.code(400);
       return { error: (error as Error).message };
+    } finally {
+      abortContext.cleanup();
     }
   });
 
@@ -718,6 +775,7 @@ export function createHttpServer() {
             participantRole: prepared.participantRole,
             initialInstruction: promptSeed,
             serverUrl,
+            adapter: String(body.adapter || "cursor").trim(),
           }).prompt;
           launchEnv = buildCliMcpLaunchEnv({
             threadId: params.threadId,
@@ -970,6 +1028,7 @@ export function createHttpServer() {
                 participantRole: prepared.participantRole,
                 initialInstruction: existingSession.initial_instruction,
                 serverUrl,
+                adapter: existingSession.adapter,
               }).prompt
             : prepared.prompt;
         if (existingSession.meeting_transport === "agent_mcp") {

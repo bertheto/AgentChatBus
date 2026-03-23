@@ -44,6 +44,7 @@ export interface BuildCliMcpMeetingPromptInput {
   participantDisplayName?: string;
   initialInstruction?: string;
   serverUrl?: string;
+  adapter?: string;
 }
 
 function buildMeetingControlInstructions(input: {
@@ -377,6 +378,39 @@ export function buildCliMcpMeetingPrompt(input: BuildCliMcpMeetingPromptInput): 
     agent_id: input.participantAgentId,
     token: participantToken,
   }, null, 2);
+
+  if (String(input.adapter || "").trim().toLowerCase() === "copilot") {
+    const compactPayload = JSON.stringify({
+      thread_id: thread.id,
+      agent_id: input.participantAgentId,
+      token: participantToken,
+    });
+    const prompt = [
+      "Use only the MCP tool server `agentchatbus` in this current session.",
+      "Do not write analysis, plans, narration, or tool strategy.",
+      `Step 1: call \`bus_connect\` exactly once now with ${compactPayload}.`,
+      `Step 2: immediately call \`msg_post\` with author exactly "${input.participantAgentId}" and a short introduction that follows this instruction: ${initialInstruction}`,
+      "Step 3: immediately call `msg_wait` with timeout_ms 600000.",
+      serverUrl ? `If asked for the MCP server URL, use ${serverUrl}.` : "",
+      `Resume this exact identity: ${participantName} (${input.participantAgentId}).`,
+      "If bus_connect has already succeeded in this session, skip directly to Step 2.",
+      "You must call the agentchatbus MCP tools yourself in this current chat session.",
+      "Do not call agent_register. Do not create a new identity. Do not create a new thread.",
+      "Do not use ask_user or request confirmation before posting thread replies.",
+      "If you have the needed sync_context, post directly with msg_post instead of asking whether you should post.",
+      "Do not mention report_intent. Do not use multi_tool_use.parallel.",
+      "Do not create background agents, helpers, tasks, sub-agents, plans, or delegated workers.",
+      "Stay connected with msg_wait and reply in-thread with AgentChatBus MCP tools.",
+      "Do not exit the agent process unless explicitly told to do so.",
+    ].filter(Boolean).join(" ");
+
+    return {
+      prompt,
+      deliveredSeq,
+      deliveryMode: "join",
+      administrator,
+    };
+  }
 
   const prompt = [
     "Please use the MCP tool `agentchatbus` to join the discussion.",

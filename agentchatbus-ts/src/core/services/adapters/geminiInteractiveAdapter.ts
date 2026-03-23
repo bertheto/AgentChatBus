@@ -69,8 +69,6 @@ export class GeminiInteractiveAdapter implements CliSessionAdapter {
     const commandParts = [
       `& ${toPowerShellSingleQuoted(this.geminiCommand)}`,
       "--no-alt-screen",
-      "-C",
-      toPowerShellSingleQuoted(input.workspace),
     ];
 
     return await runInteractivePtyInChild({

@@ -1,0 +1,456 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { CliMeetingOrchestrator } from "../../src/core/services/cliMeetingOrchestrator.js";
+import type { CliSessionSnapshot } from "../../src/core/services/cliSessionManager.js";
+import type { CliSessionManager } from "../../src/core/services/cliSessionManager.js";
+import { MemoryStore } from "../../src/core/services/memoryStore.js";
+
+function makeInteractiveSession(
+  overrides: Partial<CliSessionSnapshot>,
+): CliSessionSnapshot {
+  return {
+    id: overrides.id || "session",
+    thread_id: overrides.thread_id || "thread",
+    adapter: overrides.adapter || "copilot",
+    mode: "interactive",
+    state: overrides.state || "running",
+    prompt: overrides.prompt || "",
+    initial_instruction: overrides.initial_instruction,
+    workspace: overrides.workspace || "C:\\workspace",
+    requested_by_agent_id: overrides.requested_by_agent_id || "human-owner",
+    participant_agent_id: overrides.participant_agent_id,
+    participant_display_name: overrides.participant_display_name,
+    participant_role: overrides.participant_role || "participant",
+    meeting_transport: overrides.meeting_transport || "agent_mcp",
+    created_at: overrides.created_at || "2026-03-23T12:00:00.000Z",
+    updated_at: overrides.updated_at || "2026-03-23T12:00:00.000Z",
+    run_count: overrides.run_count || 1,
+    supports_input: overrides.supports_input ?? true,
+    supports_restart: overrides.supports_restart ?? true,
+    supports_resize: overrides.supports_resize ?? true,
+    pid: overrides.pid,
+    last_error: overrides.last_error,
+    last_result: overrides.last_result,
+    raw_result: overrides.raw_result ?? null,
+    external_session_id: overrides.external_session_id,
+    external_request_id: overrides.external_request_id,
+    exit_code: overrides.exit_code,
+    stdout_excerpt: overrides.stdout_excerpt,
+    stderr_excerpt: overrides.stderr_excerpt,
+    output_cursor: overrides.output_cursor || 0,
+    cols: overrides.cols || 120,
+    rows: overrides.rows || 30,
+    shell: overrides.shell || "powershell",
+    screen_excerpt: overrides.screen_excerpt || "Describe a task to get started\n❯ ",
+    screen_cursor_x: overrides.screen_cursor_x,
+    screen_cursor_y: overrides.screen_cursor_y,
+    screen_buffer: overrides.screen_buffer || "normal",
+    automation_state: overrides.automation_state,
+    reply_capture_state: overrides.reply_capture_state,
+    reply_capture_excerpt: overrides.reply_capture_excerpt,
+    reply_capture_error: overrides.reply_capture_error,
+    context_delivery_mode: overrides.context_delivery_mode || "join",
+    last_delivered_seq: overrides.last_delivered_seq || 0,
+    last_acknowledged_seq: overrides.last_acknowledged_seq,
+    last_posted_seq: overrides.last_posted_seq,
+    meeting_post_state: overrides.meeting_post_state || "pending",
+    meeting_post_error: overrides.meeting_post_error,
+    last_posted_message_id: overrides.last_posted_message_id,
+  };
+}
+
+class FakeCliSessionManager {
+  readonly wakeCalls: Array<{ sessionId: string; prompt: string }> = [];
+  private readonly sessions = new Map<string, CliSessionSnapshot>();
+
+  constructor(initialSessions: CliSessionSnapshot[]) {
+    for (const session of initialSessions) {
+      this.sessions.set(session.id, { ...session });
+    }
+  }
+
+  listSessionsForThread(threadId: string): CliSessionSnapshot[] {
+    return Array.from(this.sessions.values())
+      .filter((session) => session.thread_id === threadId)
+      .map((session) => ({ ...session }));
+  }
+
+  getSession(sessionId: string): CliSessionSnapshot | null {
+    const session = this.sessions.get(sessionId);
+    return session ? { ...session } : null;
+  }
+
+  clearWakePromptState(): CliSessionSnapshot | null {
+    return null;
+  }
+
+  async restartSession(): Promise<CliSessionSnapshot | null> {
+    return null;
+  }
+
+  updateMeetingState(sessionId: string, patch: Record<string, unknown>): CliSessionSnapshot | null {
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      return null;
+    }
+    const next = { ...session, ...patch } as CliSessionSnapshot;
+    this.sessions.set(sessionId, next);
+    return { ...next };
+  }
+
+  async deliverWakePrompt(
+    sessionId: string,
+    prompt: string,
+  ): Promise<{ ok: boolean; session?: CliSessionSnapshot; error?: string }> {
+    this.wakeCalls.push({ sessionId, prompt });
+    const session = this.getSession(sessionId);
+    return { ok: true, session: session || undefined };
+  }
+
+  async deliverPrompt(): Promise<{ ok: boolean; session?: CliSessionSnapshot; error?: string }> {
+    return { ok: true };
+  }
+}
+
+describe("CliMeetingOrchestrator agent_mcp wake handling", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("does not wake an agent_mcp session while the MCP backend still reports an active msg_wait", async () => {
+    const store = new MemoryStore(":memory:");
+    const agentA = store.registerAgent({ ide: "Copilot", model: "interactive", display_name: "Copilot A" });
+    const agentB = store.registerAgent({ ide: "Copilot", model: "interactive", display_name: "Copilot B" });
+    const { thread } = store.createThread("copilot-stale-wait", undefined, undefined, {
+      creatorAdminId: agentA.id,
+      creatorAdminName: agentA.display_name,
+    });
+
+    const fakeManager = new FakeCliSessionManager([
+      makeInteractiveSession({
+        id: "session-a",
+        thread_id: thread.id,
+        participant_agent_id: agentA.id,
+        participant_display_name: agentA.display_name,
+        participant_role: "administrator",
+        last_delivered_seq: 0,
+        screen_excerpt: "Describe a task to get started\n❯ ",
+      }),
+      makeInteractiveSession({
+        id: "session-b",
+        thread_id: thread.id,
+        participant_agent_id: agentB.id,
+        participant_display_name: agentB.display_name,
+        participant_role: "participant",
+        last_delivered_seq: 0,
+        screen_excerpt: "Describe a task to get started\n❯ ",
+      }),
+    ]);
+
+    const orchestrator = new CliMeetingOrchestrator(
+      store,
+      fakeManager as unknown as CliSessionManager,
+    );
+
+    (store as any).enterWaitState(thread.id, agentA.id, 600_000);
+
+    await (orchestrator as any).maybeDeliverIncrementalContext(
+      fakeManager.getSession("session-a"),
+      1,
+    );
+
+    expect(store.getAgentWaitStatus(thread.id, agentA.id).is_waiting).toBe(true);
+    expect(fakeManager.wakeCalls).toHaveLength(0);
+    expect((orchestrator as any).pendingDeliverySeqBySession.get("session-a")).toBe(1);
+
+    orchestrator.close();
+  });
+
+  it("keeps retrying pending delivery after msg_wait drops and wakes copilot once the wait truly ends", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-23T12:00:00.000Z"));
+
+    const store = new MemoryStore(":memory:");
+    const agentA = store.registerAgent({ ide: "Copilot", model: "interactive", display_name: "Copilot A" });
+    const { thread } = store.createThread("copilot-drop-tail-retry", undefined, undefined, {
+      creatorAdminId: agentA.id,
+      creatorAdminName: agentA.display_name,
+    });
+
+    const fakeManager = new FakeCliSessionManager([
+      makeInteractiveSession({
+        id: "session-a",
+        thread_id: thread.id,
+        participant_agent_id: agentA.id,
+        participant_display_name: agentA.display_name,
+        participant_role: "administrator",
+        last_delivered_seq: 0,
+        screen_excerpt: "Thinking (Esc to cancel)",
+      }),
+    ]);
+
+    const orchestrator = new CliMeetingOrchestrator(
+      store,
+      fakeManager as unknown as CliSessionManager,
+    );
+
+    const waitCallId = (store as any).enterWaitState(thread.id, agentA.id, 600_000);
+
+    await (orchestrator as any).maybeDeliverIncrementalContext(
+      fakeManager.getSession("session-a"),
+      1,
+    );
+
+    expect(fakeManager.wakeCalls).toHaveLength(0);
+    expect((orchestrator as any).pendingDeliverySeqBySession.get("session-a")).toBe(1);
+
+    store.exitWaitState(thread.id, agentA.id, waitCallId, "client_abort");
+    fakeManager.updateMeetingState("session-a", {
+      screen_excerpt: "Describe a task to get started\n❯ ",
+      automation_state: undefined,
+      reply_capture_state: undefined,
+    });
+
+    await vi.advanceTimersByTimeAsync(1_500);
+
+    expect(store.getAgentWaitStatus(thread.id, agentA.id).is_waiting).toBe(false);
+    expect(fakeManager.wakeCalls).toHaveLength(1);
+    expect(fakeManager.wakeCalls[0]?.prompt).toContain("Please use msg_wait");
+
+    orchestrator.close();
+  });
+
+  it("treats a fresh msg_wait message-return exit as busy and avoids waking too early", async () => {
+    const store = new MemoryStore(":memory:");
+    const agentA = store.registerAgent({ ide: "Copilot", model: "interactive", display_name: "Copilot A" });
+    const { thread } = store.createThread("copilot-message-exit-grace", undefined, undefined, {
+      creatorAdminId: agentA.id,
+      creatorAdminName: agentA.display_name,
+    });
+
+    const fakeManager = new FakeCliSessionManager([
+      makeInteractiveSession({
+        id: "session-a",
+        thread_id: thread.id,
+        participant_agent_id: agentA.id,
+        participant_display_name: agentA.display_name,
+        participant_role: "administrator",
+        last_delivered_seq: 0,
+        screen_excerpt: "Describe a task to get started\n❯ ",
+      }),
+    ]);
+
+    const orchestrator = new CliMeetingOrchestrator(
+      store,
+      fakeManager as unknown as CliSessionManager,
+    );
+
+    const waitCallId = (store as any).enterWaitState(thread.id, agentA.id, 600_000);
+    store.exitWaitState(thread.id, agentA.id, waitCallId, "message");
+
+    await (orchestrator as any).maybeDeliverIncrementalContext(
+      fakeManager.getSession("session-a"),
+      1,
+    );
+
+    expect(fakeManager.wakeCalls).toHaveLength(0);
+
+    orchestrator.close();
+  });
+
+  it("wakes an agent_mcp session again once the MCP backend reports that msg_wait ended", async () => {
+    const store = new MemoryStore(":memory:");
+    const agentA = store.registerAgent({ ide: "Copilot", model: "interactive", display_name: "Copilot A" });
+    const { thread } = store.createThread("copilot-ended-wait", undefined, undefined, {
+      creatorAdminId: agentA.id,
+      creatorAdminName: agentA.display_name,
+    });
+
+    const fakeManager = new FakeCliSessionManager([
+      makeInteractiveSession({
+        id: "session-a",
+        thread_id: thread.id,
+        participant_agent_id: agentA.id,
+        participant_display_name: agentA.display_name,
+        participant_role: "administrator",
+        last_delivered_seq: 0,
+        screen_excerpt: "Describe a task to get started\n❯ ",
+      }),
+    ]);
+
+    const orchestrator = new CliMeetingOrchestrator(
+      store,
+      fakeManager as unknown as CliSessionManager,
+    );
+
+    const waitCallId = (store as any).enterWaitState(thread.id, agentA.id, 600_000);
+    store.exitWaitState(thread.id, agentA.id, waitCallId, "client_abort");
+
+    await (orchestrator as any).maybeDeliverIncrementalContext(
+      fakeManager.getSession("session-a"),
+      1,
+    );
+
+    expect(store.getAgentWaitStatus(thread.id, agentA.id).is_waiting).toBe(false);
+    expect(fakeManager.wakeCalls).toHaveLength(1);
+    expect(fakeManager.wakeCalls[0]?.sessionId).toBe("session-a");
+    expect(fakeManager.wakeCalls[0]?.prompt).toContain("Please use msg_wait");
+
+    orchestrator.close();
+  });
+
+  it("retries a suppressed wake after the cooldown expires", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-23T12:00:00.000Z"));
+
+    const store = new MemoryStore(":memory:");
+    const agentA = store.registerAgent({ ide: "Copilot", model: "interactive", display_name: "Copilot A" });
+    const { thread } = store.createThread("copilot-wake-cooldown", undefined, undefined, {
+      creatorAdminId: agentA.id,
+      creatorAdminName: agentA.display_name,
+    });
+
+    const fakeManager = new FakeCliSessionManager([
+      makeInteractiveSession({
+        id: "session-a",
+        thread_id: thread.id,
+        participant_agent_id: agentA.id,
+        participant_display_name: agentA.display_name,
+        participant_role: "administrator",
+        last_delivered_seq: 0,
+        screen_excerpt: "Describe a task to get started\n❯ ",
+      }),
+    ]);
+
+    const orchestrator = new CliMeetingOrchestrator(
+      store,
+      fakeManager as unknown as CliSessionManager,
+    );
+
+    (orchestrator as any).lastWakePromptBySession.set("session-a", {
+      seq: 1,
+      sentAt: Date.now(),
+    });
+
+    await (orchestrator as any).maybeDeliverIncrementalContext(
+      fakeManager.getSession("session-a"),
+      2,
+    );
+
+    expect(fakeManager.wakeCalls).toHaveLength(0);
+
+    await vi.advanceTimersByTimeAsync(29_000);
+    expect(fakeManager.wakeCalls).toHaveLength(0);
+
+    await vi.advanceTimersByTimeAsync(1_100);
+    expect(fakeManager.wakeCalls).toHaveLength(1);
+    expect(fakeManager.wakeCalls[0]?.prompt).toContain("prefer to use msg_post");
+
+    orchestrator.close();
+  });
+
+  it("marks an agent_mcp session as delivered once its participant posts in the thread", async () => {
+    const store = new MemoryStore(":memory:");
+    const agentA = store.registerAgent({ ide: "Copilot", model: "interactive", display_name: "Copilot A" });
+    const agentB = store.registerAgent({ ide: "Copilot", model: "interactive", display_name: "Copilot B" });
+    const { thread } = store.createThread("copilot-delivery-ack", undefined, undefined, {
+      creatorAdminId: agentA.id,
+      creatorAdminName: agentA.display_name,
+    });
+
+    const fakeManager = new FakeCliSessionManager([
+      makeInteractiveSession({
+        id: "session-a",
+        thread_id: thread.id,
+        participant_agent_id: agentA.id,
+        participant_display_name: agentA.display_name,
+        participant_role: "administrator",
+        last_delivered_seq: 0,
+        last_acknowledged_seq: 0,
+        meeting_post_state: "pending",
+      }),
+      makeInteractiveSession({
+        id: "session-b",
+        thread_id: thread.id,
+        participant_agent_id: agentB.id,
+        participant_display_name: agentB.display_name,
+        participant_role: "participant",
+        last_delivered_seq: 0,
+        last_acknowledged_seq: 0,
+        meeting_post_state: "pending",
+      }),
+    ]);
+
+    const orchestrator = new CliMeetingOrchestrator(
+      store,
+      fakeManager as unknown as CliSessionManager,
+    );
+
+    store.postMessage({
+      threadId: thread.id,
+      author: "Hank",
+      content: "Please answer.",
+      role: "user",
+    });
+
+    store.postMessage({
+      threadId: thread.id,
+      author: agentA.id,
+      content: "I can take this one.",
+      role: "assistant",
+    });
+
+    await Promise.resolve();
+
+    const updatedAuthorSession = fakeManager.getSession("session-a");
+    const untouchedPeerSession = fakeManager.getSession("session-b");
+
+    expect(updatedAuthorSession?.last_delivered_seq).toBe(1);
+    expect(updatedAuthorSession?.last_acknowledged_seq).toBe(1);
+    expect(updatedAuthorSession?.meeting_post_state).toBe("posted");
+    expect(updatedAuthorSession?.last_posted_seq).toBe(2);
+    expect(updatedAuthorSession?.last_posted_message_id).toBeTruthy();
+    expect(untouchedPeerSession?.last_delivered_seq).toBe(0);
+
+    orchestrator.close();
+  });
+
+  it("does not wake an agent_mcp session again when the visible screen already shows a newer current_seq", async () => {
+    const store = new MemoryStore(":memory:");
+    const agentA = store.registerAgent({ ide: "Copilot", model: "interactive", display_name: "Copilot A" });
+    const { thread } = store.createThread("copilot-screen-seq-watermark", undefined, undefined, {
+      creatorAdminId: agentA.id,
+      creatorAdminName: agentA.display_name,
+    });
+
+    const fakeManager = new FakeCliSessionManager([
+      makeInteractiveSession({
+        id: "session-a",
+        thread_id: thread.id,
+        participant_agent_id: agentA.id,
+        participant_display_name: agentA.display_name,
+        participant_role: "administrator",
+        last_delivered_seq: 1,
+        last_acknowledged_seq: 1,
+        screen_excerpt: [
+          "Listening with msg_wait (current_seq=5).",
+          "",
+          "❯ Type @ to mention files",
+        ].join("\n"),
+      }),
+    ]);
+
+    const orchestrator = new CliMeetingOrchestrator(
+      store,
+      fakeManager as unknown as CliSessionManager,
+    );
+
+    await (orchestrator as any).maybeDeliverIncrementalContext(
+      fakeManager.getSession("session-a"),
+      5,
+    );
+
+    expect(fakeManager.wakeCalls).toHaveLength(0);
+
+    orchestrator.close();
+  });
+});

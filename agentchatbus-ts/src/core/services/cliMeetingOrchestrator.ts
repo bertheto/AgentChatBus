@@ -7,11 +7,25 @@ import {
   type CliMeetingDeliveryMode,
   type CliMeetingParticipantRole,
 } from "./cliMeetingContextBuilder.js";
-import type { CliSessionManager, CliSessionSnapshot } from "./cliSessionManager.js";
+import {
+  extractObservedAgentCurrentSeq,
+  type CliSessionManager,
+  type CliSessionSnapshot,
+} from "./cliSessionManager.js";
+import {
+  extractInteractiveWorkingStatus,
+  looksLikeConversationalWorkingScreen,
+  normalizeInteractiveScreenText,
+} from "./cliInteractiveHeuristics.js";
 import type { MemoryStore } from "./memoryStore.js";
 
 const PARTICIPANT_HEARTBEAT_INTERVAL_MS = 10_000;
 const MCP_WAKE_PROMPT_COOLDOWN_MS = 30_000;
+const MCP_COPILOT_WAKE_PROMPT_COOLDOWN_MS = 4_000;
+const MCP_MESSAGE_EXIT_BUSY_GRACE_MS = 4_000;
+const MCP_PENDING_DELIVERY_RETRY_MS = 4_000;
+const MCP_COPILOT_MESSAGE_EXIT_BUSY_GRACE_MS = 2_500;
+const MCP_COPILOT_PENDING_DELIVERY_RETRY_MS = 1_250;
 const ONLINE_SESSION_STATES = new Set(["created", "starting", "running"]);
 const RESTARTABLE_SESSION_STATES = new Set(["completed", "failed", "stopped"]);
 const RELAY_BLOCKED_STATES = new Set(["stale", "error"]);
@@ -25,10 +39,7 @@ function usesLegacyPtyRelay(session: CliSessionSnapshot): boolean {
 }
 
 function normalizeScreenText(value: string | undefined): string {
-  return String(value || "")
-    .replace(/\r/g, "\n")
-    .replace(/\u00a0/g, " ")
-    .toLowerCase();
+  return normalizeInteractiveScreenText(value);
 }
 
 function hasCodexPromptInScreen(screenExcerpt: string | undefined): boolean {
@@ -53,14 +64,31 @@ function looksLikeClaudeIdleScreen(screenExcerpt: string | undefined): boolean {
 }
 
 function looksLikeClaudeWorkingScreen(screenExcerpt: string | undefined): boolean {
+  return looksLikeConversationalWorkingScreen(screenExcerpt);
+}
+
+function looksLikeCopilotWorkingScreen(screenExcerpt: string | undefined): boolean {
+  return looksLikeConversationalWorkingScreen(screenExcerpt);
+}
+
+function hasCopilotPromptInScreen(screenExcerpt: string | undefined): boolean {
+  return String(screenExcerpt || "")
+    .split("\n")
+    .some((line) => /^\s*❯\s/.test(line));
+}
+
+function looksLikeCopilotIdleScreen(screenExcerpt: string | undefined): boolean {
   const normalized = normalizeScreenText(screenExcerpt);
   if (!normalized) {
     return false;
   }
   return (
-    normalized.includes("thinking")
-    || normalized.includes("working")
-    || normalized.includes("processing")
+    normalized.includes("type to mention files")
+    || normalized.includes("describe a task to get started")
+    || (
+      normalized.includes("shift tab switch mode")
+      && hasCopilotPromptInScreen(screenExcerpt)
+    )
   );
 }
 
@@ -69,7 +97,13 @@ function looksLikeCodexIdleScreen(screenExcerpt: string | undefined): boolean {
   if (!normalized) {
     return false;
   }
-  if (normalized.includes("working") && normalized.includes("esc to interrupt")) {
+  if (extractInteractiveWorkingStatus(screenExcerpt)) {
+    return false;
+  }
+  if (
+    (normalized.includes("working") && normalized.includes("esc to interrupt"))
+    || (normalized.includes("thinking") && normalized.includes("esc to cancel"))
+  ) {
     return false;
   }
   if (normalized.includes("use /skills to list available skills")) {
@@ -78,22 +112,26 @@ function looksLikeCodexIdleScreen(screenExcerpt: string | undefined): boolean {
   return hasCodexPromptInScreen(screenExcerpt);
 }
 
-function extractInteractiveWorkingStatus(screenExcerpt: string | undefined): string | undefined {
-  const lines = String(screenExcerpt || "")
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean);
-  for (const line of lines) {
-    const normalizedLine = line.replace(/^[•·●◦]\s*/, "");
-    const match = /^working\s*\((\d+s)(?:\s*[•·]\s*esc to interrupt)?\)$/i.exec(normalizedLine);
-    if (match?.[1]) {
-      return `Working... (${match[1]})`;
-    }
-    if (/^working\b/i.test(normalizedLine)) {
-      return "Working...";
-    }
-  }
-  return undefined;
+function usesClaudeFamilyInteractiveAdapter(session: CliSessionSnapshot): boolean {
+  return session.adapter === "claude" || session.adapter === "cursor" || session.adapter === "gemini";
+}
+
+function getPendingDeliveryRetryDelayMs(session: CliSessionSnapshot): number {
+  return session.adapter === "copilot"
+    ? MCP_COPILOT_PENDING_DELIVERY_RETRY_MS
+    : MCP_PENDING_DELIVERY_RETRY_MS;
+}
+
+function getWakePromptCooldownMs(session: CliSessionSnapshot): number {
+  return session.adapter === "copilot"
+    ? MCP_COPILOT_WAKE_PROMPT_COOLDOWN_MS
+    : MCP_WAKE_PROMPT_COOLDOWN_MS;
+}
+
+function getMessageExitBusyGraceMs(session: CliSessionSnapshot): number {
+  return session.adapter === "copilot"
+    ? MCP_COPILOT_MESSAGE_EXIT_BUSY_GRACE_MS
+    : MCP_MESSAGE_EXIT_BUSY_GRACE_MS;
 }
 
 function isInteractivePlaceholderContent(content: string | undefined): boolean {
@@ -162,6 +200,15 @@ function getDesiredRelayContent(session: CliSessionSnapshot): string | undefined
     return extractInteractiveWorkingStatus(session.screen_excerpt) || "Working...";
   }
   return undefined;
+}
+
+function getObservedDeliveredSeq(session: CliSessionSnapshot): number {
+  const snapshotDeliveredSeq = Number(session.last_delivered_seq) || 0;
+  const observedCurrentSeq = extractObservedAgentCurrentSeq(session.screen_excerpt);
+  if (!Number.isFinite(observedCurrentSeq) || Number(observedCurrentSeq) <= 0) {
+    return snapshotDeliveredSeq;
+  }
+  return Math.max(snapshotDeliveredSeq, Number(observedCurrentSeq));
 }
 
 function normalizeMergeText(value: string | undefined): string {
@@ -363,6 +410,7 @@ export class CliMeetingOrchestrator {
   private readonly lastWakePromptBySession = new Map<string, WakePromptRecord>();
   private readonly participantRoutingStates = new Map<string, MeetingRoutingState>();
   private readonly heartbeatTimers = new Map<string, NodeJS.Timeout>();
+  private readonly wakeRetryTimers = new Map<string, NodeJS.Timeout>();
   private readonly unsubscribe: () => void;
 
   constructor(
@@ -383,6 +431,10 @@ export class CliMeetingOrchestrator {
       clearInterval(timer);
     }
     this.heartbeatTimers.clear();
+    for (const timer of this.wakeRetryTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.wakeRetryTimers.clear();
   }
 
   private isThreadClosedForCoordination(threadId: string): boolean {
@@ -396,6 +448,7 @@ export class CliMeetingOrchestrator {
     for (const session of sessions) {
       this.pendingDeliverySeqBySession.delete(session.id);
       this.lastWakePromptBySession.delete(session.id);
+      this.clearWakeRetry(session.id);
       this.cliSessionManager.clearWakePromptState(session.id);
     }
 
@@ -546,6 +599,19 @@ export class CliMeetingOrchestrator {
       : this.store.getThreadCurrentSeq(threadId);
     for (const session of sessions) {
       if (session.participant_agent_id && session.participant_agent_id === payload?.author_id) {
+        const acknowledgedSeq = Math.max(0, targetSeq - 1);
+        const nextDeliveredSeq = Math.max(getObservedDeliveredSeq(session), acknowledgedSeq);
+        const nextAcknowledgedSeq = Math.max(Number(session.last_acknowledged_seq) || 0, acknowledgedSeq);
+        this.cliSessionManager.updateMeetingState(session.id, {
+          last_delivered_seq: nextDeliveredSeq,
+          last_acknowledged_seq: nextAcknowledgedSeq,
+          meeting_post_state: "posted",
+          meeting_post_error: "",
+          last_posted_seq: targetSeq,
+          last_posted_message_id: typeof (payload as { id?: unknown })?.id === "string"
+            ? String((payload as { id?: string }).id)
+            : session.last_posted_message_id,
+        });
         continue;
       }
       await this.maybeDeliverIncrementalContext(session, targetSeq);
@@ -609,9 +675,107 @@ export class CliMeetingOrchestrator {
     this.heartbeatTimers.delete(sessionId);
   }
 
+  private clearWakeRetry(sessionId: string): void {
+    const timer = this.wakeRetryTimers.get(sessionId);
+    if (!timer) {
+      return;
+    }
+    clearTimeout(timer);
+    this.wakeRetryTimers.delete(sessionId);
+  }
+
+  private sessionShowsIdlePrompt(session: CliSessionSnapshot): boolean {
+    if (session.mode !== "interactive") {
+      return false;
+    }
+    if (usesClaudeFamilyInteractiveAdapter(session)) {
+      return looksLikeClaudeIdleScreen(session.screen_excerpt);
+    }
+    if (session.adapter === "copilot") {
+      return looksLikeCopilotIdleScreen(session.screen_excerpt);
+    }
+    return looksLikeCodexIdleScreen(session.screen_excerpt);
+  }
+
+  private getParticipantWaitStatus(session: CliSessionSnapshot): ReturnType<MemoryStore["getAgentWaitStatus"]> {
+    const participantAgentId = String(session.participant_agent_id || "").trim();
+    if (!participantAgentId || usesLegacyPtyRelay(session)) {
+      return {
+        is_waiting: false,
+        status: "idle",
+      };
+    }
+    return this.store.getAgentWaitStatus(session.thread_id, participantAgentId);
+  }
+
+  private shouldTrustParticipantWaitState(session: CliSessionSnapshot): boolean {
+    return this.getParticipantWaitStatus(session).is_waiting;
+  }
+
+  private scheduleWakeRetry(sessionId: string, targetSeq: number, delayMs: number): void {
+    const existing = this.wakeRetryTimers.get(sessionId);
+    if (existing) {
+      return;
+    }
+
+    const latestSession = this.cliSessionManager.getSession(sessionId);
+    const cooldownMs = latestSession ? getWakePromptCooldownMs(latestSession) : MCP_WAKE_PROMPT_COOLDOWN_MS;
+    const boundedDelay = Math.max(1, Math.min(delayMs, cooldownMs));
+    const timer = setTimeout(() => {
+      this.wakeRetryTimers.delete(sessionId);
+      const latestSession = this.cliSessionManager.getSession(sessionId);
+      if (!latestSession) {
+        return;
+      }
+      const pendingSeq = this.pendingDeliverySeqBySession.get(sessionId) || 0;
+      const retryTargetSeq = Math.max(targetSeq, pendingSeq);
+      void this.maybeDeliverIncrementalContext(latestSession, retryTargetSeq).catch((error: unknown) => {
+        const detail = error instanceof Error ? (error.stack || error.message) : String(error);
+        logError(`[cli-meeting] delayed wake retry failed for session ${sessionId}: ${detail}`);
+      });
+    }, boundedDelay);
+    this.wakeRetryTimers.set(sessionId, timer);
+  }
+
   private getSessionWorkState(session: CliSessionSnapshot): "busy" | "idle" | "unavailable" {
     if (!ONLINE_SESSION_STATES.has(session.state)) {
       return "unavailable";
+    }
+
+    const isAgentMcpSession = !usesLegacyPtyRelay(session);
+    const waitStatus = isAgentMcpSession ? this.getParticipantWaitStatus(session) : null;
+    const isActivelyWaitingInMsgWait = Boolean(waitStatus?.is_waiting);
+
+    if (isActivelyWaitingInMsgWait) {
+      return "busy";
+    }
+
+    if (session.interactive_work_state === "busy") {
+      return "busy";
+    }
+
+    if (
+      isAgentMcpSession
+      && waitStatus
+      && waitStatus.last_exit_reason === "message"
+      && waitStatus.last_exited_at
+    ) {
+      const exitedAtMs = Date.parse(waitStatus.last_exited_at);
+      if (Number.isFinite(exitedAtMs) && Date.now() - exitedAtMs < getMessageExitBusyGraceMs(session)) {
+        return "busy";
+      }
+    }
+
+    if (isAgentMcpSession && session.mode === "interactive") {
+      if (usesClaudeFamilyInteractiveAdapter(session) && looksLikeClaudeIdleScreen(session.screen_excerpt)) {
+        return "idle";
+      }
+      if (session.adapter === "copilot" && looksLikeCopilotIdleScreen(session.screen_excerpt)) {
+        return "idle";
+      }
+      if (looksLikeCodexIdleScreen(session.screen_excerpt)) {
+        return "idle";
+      }
     }
 
     if (String(session.meeting_post_state || "") === "posting") {
@@ -620,15 +784,35 @@ export class CliMeetingOrchestrator {
     if (DELIVERY_BUSY_REPLY_STATES.has(String(session.reply_capture_state || ""))) {
       return "busy";
     }
-    if (["codex_working", "claude_working", "cursor_working"].includes(String(session.automation_state || ""))) {
+    if (
+      [
+        "codex_working",
+        "claude_working",
+        "cursor_working",
+        "gemini_working",
+        "copilot_working",
+      ].includes(String(session.automation_state || ""))
+    ) {
       return "busy";
     }
 
-    if (session.adapter === "claude" && session.mode === "interactive") {
+    if (usesClaudeFamilyInteractiveAdapter(session) && session.mode === "interactive") {
       if (looksLikeClaudeWorkingScreen(session.screen_excerpt)) {
         return "busy";
       }
       if (looksLikeClaudeIdleScreen(session.screen_excerpt)) {
+        return "idle";
+      }
+      if (["completed", "timeout", "error"].includes(String(session.reply_capture_state || ""))) {
+        return "idle";
+      }
+    }
+
+    if (session.adapter === "copilot" && session.mode === "interactive") {
+      if (looksLikeCopilotWorkingScreen(session.screen_excerpt)) {
+        return "busy";
+      }
+      if (looksLikeCopilotIdleScreen(session.screen_excerpt)) {
         return "idle";
       }
       if (["completed", "timeout", "error"].includes(String(session.reply_capture_state || ""))) {
@@ -744,6 +928,7 @@ export class CliMeetingOrchestrator {
     if (this.isThreadClosedForCoordination(session.thread_id)) {
       this.pendingDeliverySeqBySession.delete(session.id);
       this.lastWakePromptBySession.delete(session.id);
+      this.clearWakeRetry(session.id);
       this.cliSessionManager.clearWakePromptState(session.id);
       return;
     }
@@ -753,7 +938,8 @@ export class CliMeetingOrchestrator {
     if (session.mode !== "interactive") {
       return;
     }
-    const deliveredSeq = Number(session.last_delivered_seq) || 0;
+    const deliveredSeq = getObservedDeliveredSeq(session);
+    const acknowledgedSeq = Number(session.last_acknowledged_seq) || 0;
     const pendingSeq = this.pendingDeliverySeqBySession.get(session.id) || 0;
     const latestSeq = Number.isFinite(Number(requestedTargetSeq))
       ? Number(requestedTargetSeq)
@@ -761,30 +947,39 @@ export class CliMeetingOrchestrator {
         pendingSeq,
         this.store.getThreadCurrentSeq(session.thread_id),
       );
+    const targetSeq = Math.max(latestSeq, pendingSeq);
     if (
       this.isMultiParticipantThread(session.thread_id)
       && this.getParticipantRoutingState(session.thread_id, session.participant_agent_id) !== "online"
     ) {
       this.pendingDeliverySeqBySession.set(
         session.id,
-        Math.max(pendingSeq, latestSeq),
+        targetSeq,
       );
       return;
     }
-    if (Number.isFinite(Number(requestedTargetSeq))) {
-      if (latestSeq <= deliveredSeq) {
-        return;
+    if (targetSeq <= acknowledgedSeq) {
+      if (pendingSeq > 0 && pendingSeq <= acknowledgedSeq) {
+        this.pendingDeliverySeqBySession.delete(session.id);
+        this.clearWakeRetry(session.id);
       }
-    } else if (latestSeq <= Math.max(deliveredSeq, pendingSeq)) {
       return;
     }
 
-    if (!usesLegacyPtyRelay(session) && this.isParticipantActivelyWaiting(session.thread_id, session.participant_agent_id)) {
-      // When the participant is actively blocked in msg_wait, the bus itself will
-      // deliver the new message. Do not queue a redundant wake-up or restart.
-      this.pendingDeliverySeqBySession.delete(session.id);
-      this.lastWakePromptBySession.delete(session.id);
-      this.cliSessionManager.clearWakePromptState(session.id);
+    if (!usesLegacyPtyRelay(session) && this.shouldTrustParticipantWaitState(session)) {
+      // Keep a pending watermark even while msg_wait is active.
+      // Some weaker CLI agents can let msg_wait return and then drop the delivered context
+      // before they visibly advance to the new seq. Retaining the pending target allows
+      // us to re-wake the session if the wait ends without a real acknowledgement.
+      this.pendingDeliverySeqBySession.set(
+        session.id,
+        targetSeq,
+      );
+      this.scheduleWakeRetry(
+        session.id,
+        targetSeq,
+        getPendingDeliveryRetryDelayMs(session),
+      );
       return;
     }
 
@@ -798,6 +993,7 @@ export class CliMeetingOrchestrator {
           const restarted = await this.cliSessionManager.restartSession(session.id);
           if (restarted) {
             this.pendingDeliverySeqBySession.delete(session.id);
+            this.clearWakeRetry(session.id);
             logInfo(
               `[cli-meeting] restarted agent_mcp session ${session.id} to resume thread ${session.thread_id}`,
             );
@@ -807,7 +1003,7 @@ export class CliMeetingOrchestrator {
           const detail = error instanceof Error ? error.message : String(error);
           this.pendingDeliverySeqBySession.set(
             session.id,
-            Math.max(pendingSeq, latestSeq),
+            targetSeq,
           );
           logInfo(
             `[cli-meeting] delayed restart for session ${session.id}; session is not restart-ready yet (${detail})`,
@@ -817,27 +1013,54 @@ export class CliMeetingOrchestrator {
       }
       this.pendingDeliverySeqBySession.set(
         session.id,
-        Math.max(pendingSeq, latestSeq),
+        targetSeq,
       );
       return;
     }
     if (workState !== "idle") {
       this.pendingDeliverySeqBySession.set(
         session.id,
-        Math.max(pendingSeq, latestSeq),
+        targetSeq,
       );
+      if (!usesLegacyPtyRelay(session) && workState === "busy") {
+        this.scheduleWakeRetry(
+          session.id,
+          targetSeq,
+          getPendingDeliveryRetryDelayMs(session),
+        );
+      }
       return;
     }
 
     if (!usesLegacyPtyRelay(session)) {
+      const latestSession = this.cliSessionManager.getSession(session.id) || session;
+      if (this.shouldTrustParticipantWaitState(latestSession)) {
+        this.pendingDeliverySeqBySession.set(
+          session.id,
+          targetSeq,
+        );
+        this.scheduleWakeRetry(
+          session.id,
+          targetSeq,
+          getPendingDeliveryRetryDelayMs(latestSession),
+        );
+        return;
+      }
+
       const wakeRecord = this.lastWakePromptBySession.get(session.id);
       // Use monotonic time comparison to avoid issues with system clock adjustments
       const now = Date.now();
       const timeSinceLastWake = wakeRecord ? (now - wakeRecord.sentAt) : Number.MAX_SAFE_INTEGER;
-      if (timeSinceLastWake < MCP_WAKE_PROMPT_COOLDOWN_MS && timeSinceLastWake >= 0) {
+      const wakePromptCooldownMs = getWakePromptCooldownMs(session);
+      if (timeSinceLastWake < wakePromptCooldownMs && timeSinceLastWake >= 0) {
         this.pendingDeliverySeqBySession.set(
           session.id,
-          Math.max(pendingSeq, latestSeq),
+          targetSeq,
+        );
+        this.scheduleWakeRetry(
+          session.id,
+          targetSeq,
+          wakePromptCooldownMs - timeSinceLastWake,
         );
         return;
       }
@@ -860,7 +1083,15 @@ export class CliMeetingOrchestrator {
         seq: latestSeq,
         sentAt: Date.now(),
       });
-      this.pendingDeliverySeqBySession.delete(session.id);
+      // Keep the pending target until the agent actually advances/acknowledges it.
+      // Some interactive CLIs can visually accept pasted wake text but fail to submit
+      // or consume it; retaining the watermark lets the orchestrator retry automatically.
+      this.pendingDeliverySeqBySession.set(session.id, targetSeq);
+      this.scheduleWakeRetry(
+        session.id,
+        targetSeq,
+        getPendingDeliveryRetryDelayMs(session),
+      );
       logInfo(
         `[cli-meeting] delivered msg_wait wake prompt for thread ${session.thread_id} to session ${session.id}`,
       );
@@ -879,6 +1110,7 @@ export class CliMeetingOrchestrator {
 
     if (envelope.deliveredSeq <= deliveredSeq) {
       this.pendingDeliverySeqBySession.delete(session.id);
+      this.clearWakeRetry(session.id);
       return;
     }
 
@@ -895,14 +1127,10 @@ export class CliMeetingOrchestrator {
     }
 
     this.pendingDeliverySeqBySession.delete(session.id);
+    this.clearWakeRetry(session.id);
     logInfo(
       `[cli-meeting] delivered incremental context through seq ${envelope.deliveredSeq} to session ${session.id}`,
     );
-  }
-
-  private isParticipantActivelyWaiting(threadId: string, participantAgentId: string): boolean {
-    const waitStates = this.store.getThreadWaitStates(threadId);
-    return Boolean(waitStates[participantAgentId]);
   }
 
   private async flushPendingDelivery(session: CliSessionSnapshot): Promise<void> {

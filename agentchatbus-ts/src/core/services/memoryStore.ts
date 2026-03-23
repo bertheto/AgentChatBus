@@ -110,15 +110,20 @@ class AsyncEvent {
    * @param timeoutMs 超时时间（毫秒）
    * @returns true 表示事件被设置唤醒；false 表示超时
    */
-  async wait(timeoutMs: number): Promise<boolean> {
+  async wait(timeoutMs: number, signal?: AbortSignal): Promise<"event" | "timeout" | "aborted"> {
     // 如果事件已经设置，立即返回（Python 语义关键点）
     if (this._isSet) {
-      return true;
+      return "event";
     }
 
-    return new Promise<boolean>((resolve) => {
+    if (signal?.aborted) {
+      return "aborted";
+    }
+
+    return new Promise<"event" | "timeout" | "aborted">((resolve) => {
       let settled = false;
       let timer: ReturnType<typeof setTimeout> | undefined;
+      let abortHandler: (() => void) | undefined;
 
       // 将 wrapped resolve 加入等待队列
       // 当 set() 被调用时，会执行 resolve(true)
@@ -130,13 +135,34 @@ class AsyncEvent {
         if (timer) {
           clearTimeout(timer);
         }
+        if (abortHandler) {
+          signal?.removeEventListener("abort", abortHandler);
+        }
         const index = this._waiters.indexOf(wrappedResolve);
         if (index !== -1) {
           this._waiters.splice(index, 1);
         }
-        resolve(true);
+        resolve("event");
       };
       this._waiters.push(wrappedResolve);
+
+      if (signal) {
+        abortHandler = () => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          if (timer) {
+            clearTimeout(timer);
+          }
+          const index = this._waiters.indexOf(wrappedResolve);
+          if (index !== -1) {
+            this._waiters.splice(index, 1);
+          }
+          resolve("aborted");
+        };
+        signal.addEventListener("abort", abortHandler, { once: true });
+      }
 
       // 设置超时定时器
       timer = setTimeout(() => {
@@ -144,12 +170,15 @@ class AsyncEvent {
           return;
         }
         settled = true;
+        if (abortHandler) {
+          signal?.removeEventListener("abort", abortHandler);
+        }
         // 超时时从等待队列中移除该等待者
         const index = this._waiters.indexOf(wrappedResolve);
         if (index !== -1) {
           this._waiters.splice(index, 1);
         }
-        resolve(false);
+        resolve("timeout");
       }, timeoutMs);
     });
   }
@@ -192,6 +221,27 @@ type WaitStateRecord = {
   agentId: string;
   enteredAt: string;
   timeoutMs: number;
+  waitCallId?: string;
+};
+
+type WaitExitReason =
+  | "message"
+  | "fast_return"
+  | "timeout"
+  | "client_abort"
+  | "msg_post"
+  | "manual_clear"
+  | "expired";
+
+type WaitLifecycleSnapshot = {
+  threadId: string;
+  agentId: string;
+  status: "waiting" | "completed" | "canceled" | "cleared";
+  waitCallId?: string;
+  enteredAt?: string;
+  timeoutMs?: number;
+  exitReason?: WaitExitReason;
+  exitedAt?: string;
 };
 
 const NON_EXPIRING_TOKEN_TS = Date.parse("9999-12-31T23:59:59Z");
@@ -270,6 +320,7 @@ export class MemoryStore {
     creator_assignment_time?: string;
   }>();
   private readonly messageEditHistory = new Map<string, Array<{ version: number; old_content: string; edited_by: string; created_at: string }>>();
+  private readonly waitLifecycle = new Map<string, WaitLifecycleSnapshot>();
   private ideOwnerInstanceId: string | null = null;
   // Per-thread AsyncEvent registry for event-driven msg_wait wake-ups (matching Python _thread_events)
   // When msg_post succeeds, the corresponding event is set so that all waiters wake up immediately.
@@ -483,6 +534,7 @@ export class MemoryStore {
     this.ideSessions.clear();
     this.threadSettings.clear();
     this.messageEditHistory.clear();
+    this.waitLifecycle.clear();
     this._threadEvents.clear();
     this.ideOwnerInstanceId = null;
     this.ideHadOwnerOnce = false;
@@ -1213,6 +1265,11 @@ export class MemoryStore {
     this.threadMessages.delete(threadId);
     this.threadParticipants.delete(threadId);
     this.threadWaitStates.delete(threadId);
+    for (const key of this.waitLifecycle.keys()) {
+      if (key.startsWith(`${threadId}:`)) {
+        this.waitLifecycle.delete(key);
+      }
+    }
     this.threadSettings.delete(threadId);
     if (deleted) {
       this.appendLog(`thread deleted: ${threadId}`);
@@ -1386,6 +1443,7 @@ export class MemoryStore {
     agentToken?: string;
     timeoutMs?: number;
     forAgent?: string;
+    abortSignal?: AbortSignal;
   }): Promise<{
     messages: MessageRecord[];
     current_seq: number;
@@ -1426,8 +1484,9 @@ export class MemoryStore {
     }
 
     this.pruneExpiredWaitStates(input.threadId);
+    const waitCallId = verifiedAgentId ? randomUUID() : undefined;
     if (verifiedAgentId && verifiedAgentToken) {
-      this.enterWaitState(input.threadId, verifiedAgentId, input.timeoutMs || 300_000);
+      this.enterWaitState(input.threadId, verifiedAgentId, input.timeoutMs || 300_000, waitCallId);
       this.recordMsgWaitActivity(verifiedAgentId, verifiedAgentToken);
     }
 
@@ -1440,8 +1499,14 @@ export class MemoryStore {
     let localAfterSeq = input.afterSeq;
     let messages: MessageRecord[] = [];
     let fastReturn = false;
+    let waitExitReason: WaitExitReason | undefined;
 
     while (true) {
+      if (input.abortSignal?.aborted) {
+        waitExitReason = "client_abort";
+        break;
+      }
+
       const allMessages = this.getMessages(input.threadId, localAfterSeq, false, undefined, 100);
 
       if (input.forAgent && allMessages.length > 0) {
@@ -1450,8 +1515,8 @@ export class MemoryStore {
           return meta?.handoff_target === input.forAgent;
         });
         if (filtered.length > 0) {
+          waitExitReason = "message";
           if (verifiedAgentId) {
-            this.exitWaitState(input.threadId, verifiedAgentId);
             this.markAgentMessageReceived(verifiedAgentId);
           }
           messages = filtered;
@@ -1459,8 +1524,8 @@ export class MemoryStore {
         }
         localAfterSeq = Math.max(localAfterSeq, ...allMessages.map((message) => message.seq));
       } else if (allMessages.length > 0) {
+        waitExitReason = "message";
         if (verifiedAgentId) {
-          this.exitWaitState(input.threadId, verifiedAgentId);
           this.markAgentMessageReceived(verifiedAgentId);
         }
         messages = allMessages;
@@ -1468,9 +1533,7 @@ export class MemoryStore {
       }
 
       if (wantsSyncOnly) {
-        if (verifiedAgentId) {
-          this.exitWaitState(input.threadId, verifiedAgentId);
-        }
+        waitExitReason = "fast_return";
         fastReturn = true;
         break;
       }
@@ -1485,21 +1548,32 @@ export class MemoryStore {
 
       const elapsed = now - startTime;
       if (elapsed >= timeout) {
-        if (verifiedAgentId) {
-          this.exitWaitState(input.threadId, verifiedAgentId);
-        }
+        waitExitReason = "timeout";
         break;
       }
 
       const remainingTimeout = Math.min(1000, timeout - elapsed);
       const event = this._getThreadEvent(input.threadId);
       try {
-        await event.wait(remainingTimeout);
+        const waitResult = await event.wait(remainingTimeout, input.abortSignal);
+        if (waitResult === "aborted") {
+          waitExitReason = "client_abort";
+          break;
+        }
       } finally {
         // Match Python: clear after waiting so we do not drop a wake-up
         // that happens just before the waiter starts listening.
         event.clear();
       }
+    }
+
+    if (verifiedAgentId) {
+      this.exitWaitState(
+        input.threadId,
+        verifiedAgentId,
+        waitCallId,
+        waitExitReason || "manual_clear"
+      );
     }
 
     if (verifiedAgentId && refreshRequest) {
@@ -2369,6 +2443,25 @@ export class MemoryStore {
     }
     agent.is_online = false;
     this.agents.delete(agentId);
+    const exitedAt = new Date().toISOString();
+    for (const [threadId, waits] of this.threadWaitStates.entries()) {
+      const active = waits.get(agentId);
+      if (!active) {
+        continue;
+      }
+      waits.delete(agentId);
+      this.setWaitLifecycle({
+        threadId,
+        agentId,
+        status: "cleared",
+        waitCallId: active.waitCallId,
+        enteredAt: active.enteredAt,
+        timeoutMs: active.timeoutMs,
+        exitReason: "manual_clear",
+        exitedAt,
+      });
+      this.replaceThreadWaitStates(threadId);
+    }
     this.appendLog(`agent unregistered: ${agentId}`);
     eventBus.emit({ type: "agent.updated", payload: { id: agentId, is_online: false } });
     this.persistenceDb.prepare("DELETE FROM agents WHERE id = ?").run(agentId);
@@ -2459,14 +2552,15 @@ export class MemoryStore {
       }));
   }
 
-  getThreadWaitStatesGrouped(): Record<string, Record<string, { entered_at: string; timeout_ms: number }>> {
-    const grouped: Record<string, Record<string, { entered_at: string; timeout_ms: number }>> = {};
+  getThreadWaitStatesGrouped(): Record<string, Record<string, { entered_at: string; timeout_ms: number; wait_call_id?: string }>> {
+    const grouped: Record<string, Record<string, { entered_at: string; timeout_ms: number; wait_call_id?: string }>> = {};
     for (const [threadId, waits] of this.threadWaitStates.entries()) {
-      const threadGroup: Record<string, { entered_at: string; timeout_ms: number }> = {};
+      const threadGroup: Record<string, { entered_at: string; timeout_ms: number; wait_call_id?: string }> = {};
       for (const [agentId, wait] of waits.entries()) {
         threadGroup[agentId] = {
           entered_at: wait.enteredAt,
           timeout_ms: wait.timeoutMs,
+          wait_call_id: wait.waitCallId,
         };
       }
       grouped[threadId] = threadGroup;
@@ -2474,7 +2568,7 @@ export class MemoryStore {
     return grouped;
   }
 
-  getThreadWaitStates(threadId: string): Record<string, { entered_at: string; timeout_ms: number }> {
+  getThreadWaitStates(threadId: string): Record<string, { entered_at: string; timeout_ms: number; wait_call_id?: string }> {
     this.pruneExpiredWaitStates(threadId);
     const waits = this.threadWaitStates.get(threadId);
     if (!waits || waits.size === 0) {
@@ -2487,6 +2581,7 @@ export class MemoryStore {
         {
           entered_at: wait.enteredAt,
           timeout_ms: wait.timeoutMs,
+          wait_call_id: wait.waitCallId,
         },
       ])
     );
@@ -3207,31 +3302,128 @@ export class MemoryStore {
     this.persistState();
   }
 
-  private enterWaitState(threadId: string, agentId: string, timeoutMs: number): void {
+  private waitLifecycleKey(threadId: string, agentId: string): string {
+    return `${threadId}:${agentId}`;
+  }
+
+  private setWaitLifecycle(snapshot: WaitLifecycleSnapshot): void {
+    this.waitLifecycle.set(this.waitLifecycleKey(snapshot.threadId, snapshot.agentId), snapshot);
+  }
+
+  getAgentWaitStatus(threadId: string, agentId: string): {
+    is_waiting: boolean;
+    status: "waiting" | "completed" | "canceled" | "cleared" | "idle";
+    wait_call_id?: string;
+    entered_at?: string;
+    timeout_ms?: number;
+    last_exit_reason?: WaitExitReason;
+    last_exited_at?: string;
+  } {
+    this.pruneExpiredWaitStates(threadId);
+    const active = this.threadWaitStates.get(threadId)?.get(agentId);
+    if (active) {
+      return {
+        is_waiting: true,
+        status: "waiting",
+        wait_call_id: active.waitCallId,
+        entered_at: active.enteredAt,
+        timeout_ms: active.timeoutMs,
+      };
+    }
+
+    const lifecycle = this.waitLifecycle.get(this.waitLifecycleKey(threadId, agentId));
+    if (!lifecycle) {
+      return {
+        is_waiting: false,
+        status: "idle",
+      };
+    }
+
+    return {
+      is_waiting: false,
+      status: lifecycle.status,
+      wait_call_id: lifecycle.waitCallId,
+      entered_at: lifecycle.enteredAt,
+      timeout_ms: lifecycle.timeoutMs,
+      last_exit_reason: lifecycle.exitReason,
+      last_exited_at: lifecycle.exitedAt,
+    };
+  }
+
+  private enterWaitState(threadId: string, agentId: string, timeoutMs: number, waitCallId?: string): string {
+    const effectiveWaitCallId = waitCallId || randomUUID();
     const waits = this.threadWaitStates.get(threadId) || new Map<string, WaitStateRecord>();
     waits.set(agentId, {
       agentId,
       enteredAt: new Date().toISOString(),
-      timeoutMs
+      timeoutMs,
+      waitCallId: effectiveWaitCallId,
     });
     this.threadWaitStates.set(threadId, waits);
+    this.setWaitLifecycle({
+      threadId,
+      agentId,
+      status: "waiting",
+      waitCallId: effectiveWaitCallId,
+      enteredAt: waits.get(agentId)?.enteredAt,
+      timeoutMs,
+    });
     this.replaceThreadWaitStates(threadId);
     this.persistState();
+    return effectiveWaitCallId;
   }
 
   private clearWaitStates(threadId: string): void {
+    const waits = this.threadWaitStates.get(threadId);
+    if (waits) {
+      const exitedAt = new Date().toISOString();
+      for (const wait of waits.values()) {
+        this.setWaitLifecycle({
+          threadId,
+          agentId: wait.agentId,
+          status: "cleared",
+          waitCallId: wait.waitCallId,
+          enteredAt: wait.enteredAt,
+          timeoutMs: wait.timeoutMs,
+          exitReason: "manual_clear",
+          exitedAt,
+        });
+      }
+    }
     this.threadWaitStates.set(threadId, new Map());
     this.replaceThreadWaitStates(threadId);
     this.persistState();
   }
 
-  exitWaitState(threadId: string, agentId: string): void {
+  exitWaitState(
+    threadId: string,
+    agentId: string,
+    waitCallId?: string,
+    exitReason: WaitExitReason = "manual_clear"
+  ): boolean {
     const waits = this.threadWaitStates.get(threadId);
-    if (waits) {
-      waits.delete(agentId);
-      this.replaceThreadWaitStates(threadId);
-      this.persistState();
+    const active = waits?.get(agentId);
+    if (!active) {
+      return false;
     }
+    if (waitCallId && active.waitCallId && active.waitCallId !== waitCallId) {
+      return false;
+    }
+
+    waits?.delete(agentId);
+    this.setWaitLifecycle({
+      threadId,
+      agentId,
+      status: exitReason === "client_abort" ? "canceled" : "completed",
+      waitCallId: active.waitCallId,
+      enteredAt: active.enteredAt,
+      timeoutMs: active.timeoutMs,
+      exitReason,
+      exitedAt: new Date().toISOString(),
+    });
+    this.replaceThreadWaitStates(threadId);
+    this.persistState();
+    return true;
   }
 
   getWaitingAgentsForThread(threadId: string): AgentRecord[] {
@@ -3262,6 +3454,16 @@ export class MemoryStore {
     for (const [agentId, wait] of waits.entries()) {
       const entered = Date.parse(wait.enteredAt);
       if (Number.isFinite(entered) && entered + wait.timeoutMs <= now) {
+        this.setWaitLifecycle({
+          threadId,
+          agentId,
+          status: "completed",
+          waitCallId: wait.waitCallId,
+          enteredAt: wait.enteredAt,
+          timeoutMs: wait.timeoutMs,
+          exitReason: "expired",
+          exitedAt: new Date(now).toISOString(),
+        });
         waits.delete(agentId);
         changed = true;
       }
