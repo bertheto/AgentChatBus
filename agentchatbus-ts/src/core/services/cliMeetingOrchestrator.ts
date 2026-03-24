@@ -593,7 +593,7 @@ export class CliMeetingOrchestrator {
 
     const sessions = this.cliSessionManager.listSessionsForThread(threadId)
       .filter((session) => Boolean(session.participant_agent_id))
-      .filter((session) => session.mode === "interactive");
+      .filter((session) => session.mode === "interactive" || !usesLegacyPtyRelay(session));
     const targetSeq = Number.isFinite(Number(payload?.seq))
       ? Number(payload?.seq)
       : this.store.getThreadCurrentSeq(threadId);
@@ -935,7 +935,7 @@ export class CliMeetingOrchestrator {
     if (!session.participant_agent_id) {
       return;
     }
-    if (session.mode !== "interactive") {
+    if (session.mode !== "interactive" && usesLegacyPtyRelay(session)) {
       return;
     }
     const deliveredSeq = getObservedDeliveredSeq(session);
@@ -1159,7 +1159,6 @@ export class CliMeetingOrchestrator {
     }
 
     const sessions = this.cliSessionManager.listSessionsForThread(threadId)
-      .filter((session) => session.mode === "interactive")
       .filter((session) => !usesLegacyPtyRelay(session))
       .filter((session) => Boolean(session.participant_agent_id));
     if (sessions.some((session) => session.participant_agent_id === authorId)) {

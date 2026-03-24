@@ -58,8 +58,25 @@ function makeInteractiveSession(
   };
 }
 
+function makeHeadlessSession(
+  overrides: Partial<CliSessionSnapshot>,
+): CliSessionSnapshot {
+  return {
+    ...makeInteractiveSession(overrides),
+    adapter: overrides.adapter || "codex",
+    mode: "headless",
+    supports_input: overrides.supports_input ?? false,
+    supports_resize: overrides.supports_resize ?? false,
+    cols: undefined,
+    rows: undefined,
+    screen_excerpt: overrides.screen_excerpt,
+    shell: overrides.shell,
+  };
+}
+
 class FakeCliSessionManager {
   readonly wakeCalls: Array<{ sessionId: string; prompt: string }> = [];
+  readonly restartCalls: string[] = [];
   private readonly sessions = new Map<string, CliSessionSnapshot>();
 
   constructor(initialSessions: CliSessionSnapshot[]) {
@@ -83,8 +100,20 @@ class FakeCliSessionManager {
     return null;
   }
 
-  async restartSession(): Promise<CliSessionSnapshot | null> {
-    return null;
+  async restartSession(sessionId: string): Promise<CliSessionSnapshot | null> {
+    this.restartCalls.push(sessionId);
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      return null;
+    }
+    const next = {
+      ...session,
+      state: "running",
+      run_count: (session.run_count || 0) + 1,
+      updated_at: "2026-03-23T12:00:01.000Z",
+    } as CliSessionSnapshot;
+    this.sessions.set(sessionId, next);
+    return { ...next };
   }
 
   updateMeetingState(sessionId: string, patch: Record<string, unknown>): CliSessionSnapshot | null {
@@ -450,6 +479,49 @@ describe("CliMeetingOrchestrator agent_mcp wake handling", () => {
     );
 
     expect(fakeManager.wakeCalls).toHaveLength(0);
+
+    orchestrator.close();
+  });
+
+  it("restarts a headless codex agent_mcp session when a new thread message arrives", async () => {
+    const store = new MemoryStore(":memory:");
+    const agentA = store.registerAgent({ ide: "Codex", model: "Headless CLI", display_name: "Codex A" });
+    const { thread } = store.createThread("codex-headless-restart", undefined, undefined, {
+      creatorAdminId: agentA.id,
+      creatorAdminName: agentA.display_name,
+    });
+
+    const fakeManager = new FakeCliSessionManager([
+      makeHeadlessSession({
+        id: "session-a",
+        thread_id: thread.id,
+        participant_agent_id: agentA.id,
+        participant_display_name: agentA.display_name,
+        participant_role: "administrator",
+        state: "completed",
+        last_delivered_seq: 0,
+        last_acknowledged_seq: 0,
+        external_session_id: "019d1d3a-611f-7e91-b1f1-b5a9d8079942",
+      }),
+    ]);
+
+    const orchestrator = new CliMeetingOrchestrator(
+      store,
+      fakeManager as unknown as CliSessionManager,
+    );
+
+    store.postMessage({
+      threadId: thread.id,
+      author: "Hank",
+      content: "Please pick this up in MCP mode.",
+      role: "user",
+    });
+
+    await Promise.resolve();
+
+    expect(fakeManager.restartCalls).toEqual(["session-a"]);
+    expect(fakeManager.wakeCalls).toHaveLength(0);
+    expect(fakeManager.getSession("session-a")?.state).toBe("running");
 
     orchestrator.close();
   });

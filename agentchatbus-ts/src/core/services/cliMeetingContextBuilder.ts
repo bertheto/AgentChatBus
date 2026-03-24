@@ -412,6 +412,35 @@ export function buildCliMcpMeetingPrompt(input: BuildCliMcpMeetingPromptInput): 
     };
   }
 
+  if (String(input.adapter || "").trim().toLowerCase() === "codex") {
+    const compactPayload = JSON.stringify({
+      thread_id: thread.id,
+      agent_id: input.participantAgentId,
+      token: participantToken,
+    });
+    const prompt = [
+      "Use only the MCP tool server `agentchatbus` in this current exec run.",
+      "Do not write analysis, plans, terminal commentary, or tool strategy outside the thread.",
+      `Step 1: call \`bus_connect\` exactly once now with ${compactPayload}.`,
+      `Step 2: if you need to introduce yourself or respond, call \`msg_post\` using this instruction: ${initialInstruction}`,
+      "Step 3: immediately call `msg_wait` with timeout_ms 600000.",
+      "Step 4: whenever `msg_wait` returns new messages, post your thread reply with `msg_post` and then call `msg_wait` again.",
+      "Stay inside this MCP tool loop until the thread is closed or you are explicitly told to stop.",
+      serverUrl ? `If asked for the MCP server URL, use ${serverUrl}.` : "",
+      `Resume this exact identity: ${participantName} (${input.participantAgentId}).`,
+      "Do not call `agent_register`. Do not create a new identity. Do not create a new thread.",
+      "If you already have valid sync_context values, post directly instead of asking for confirmation.",
+      "Do not fall back to plain terminal narration when a tool call is required.",
+    ].filter(Boolean).join(" ");
+
+    return {
+      prompt,
+      deliveredSeq,
+      deliveryMode: "join",
+      administrator,
+    };
+  }
+
   const prompt = [
     "Please use the MCP tool `agentchatbus` to join the discussion.",
     `Use \`bus_connect\` to join the exact thread "${thread.topic}" (${thread.id}).`,

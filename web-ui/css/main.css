@@ -1050,9 +1050,46 @@ body[data-theme="light"] .thread-item .ti-waiting-agents {
   color: var(--text-2);
 }
 
+.cli-session-card__external-id {
+  min-width: 0;
+  font-size: 11px;
+  line-height: 1.4;
+  color: #94a3b8;
+  cursor: help;
+}
+
+.cli-session-card__status {
+  min-width: 0;
+  font-size: 11px;
+  line-height: 1.45;
+  color: #cbd5e1;
+}
+
+.cli-session-card__status[data-tone="active"] {
+  color: #bae6fd;
+}
+
+.cli-session-card__status[data-tone="ready"] {
+  color: #bbf7d0;
+}
+
+.cli-session-card__status[data-tone="pending"] {
+  color: #fde68a;
+}
+
+.cli-session-card__status[data-tone="warn"] {
+  color: #fecaca;
+}
+
+.cli-session-card__status[data-tone="error"] {
+  color: #fca5a5;
+}
+
 .cli-session-card__actions {
   display: inline-flex;
   align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 8px;
   flex-shrink: 0;
 }
@@ -1117,6 +1154,29 @@ body[data-theme="light"] .thread-item .ti-waiting-agents {
   padding: 8px 10px;
 }
 
+.cli-session-terminal__transcript {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: auto;
+  padding: 12px 14px;
+  box-sizing: border-box;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  color: #dbeafe;
+}
+
+.cli-session-terminal__transcript--error {
+  color: #fecaca;
+}
+
+.cli-session-terminal__transcript--muted {
+  color: rgba(191, 219, 254, .72);
+}
+
 .cli-session-terminal .xterm {
   height: 100%;
 }
@@ -1145,6 +1205,18 @@ body[data-theme="light"] .cli-session-terminal__shell {
   border-color: rgba(56, 189, 248, .2);
 }
 
+body[data-theme="light"] .cli-session-terminal__transcript {
+  color: #0f172a;
+}
+
+body[data-theme="light"] .cli-session-terminal__transcript--error {
+  color: #b91c1c;
+}
+
+body[data-theme="light"] .cli-session-terminal__transcript--muted {
+  color: #64748b;
+}
+
 body[data-theme="light"] .cli-session-strip__count {
   background: rgba(148, 163, 184, .12);
   border-color: rgba(148, 163, 184, .22);
@@ -1164,6 +1236,31 @@ body[data-theme="light"] .cli-session-card__avatar {
   background: linear-gradient(135deg, rgba(219, 234, 254, .98), rgba(191, 219, 254, .92));
   border-color: rgba(147, 197, 253, .56);
   color: #1d4ed8;
+}
+
+body[data-theme="light"] .cli-session-card__status {
+  color: #475569;
+}
+
+body[data-theme="light"] .cli-session-card__external-id {
+  color: #64748b;
+}
+
+body[data-theme="light"] .cli-session-card__status[data-tone="active"] {
+  color: #0369a1;
+}
+
+body[data-theme="light"] .cli-session-card__status[data-tone="ready"] {
+  color: #15803d;
+}
+
+body[data-theme="light"] .cli-session-card__status[data-tone="pending"] {
+  color: #a16207;
+}
+
+body[data-theme="light"] .cli-session-card__status[data-tone="warn"],
+body[data-theme="light"] .cli-session-card__status[data-tone="error"] {
+  color: #b91c1c;
 }
 
 body[data-theme="light"] .cli-session-card__danger {

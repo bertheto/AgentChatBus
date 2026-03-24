@@ -3,8 +3,8 @@ import xtermHeadless from "@xterm/headless";
 import { getConfig } from "../config/registry.js";
 import { eventBus } from "../../shared/eventBus.js";
 import { logError, logInfo } from "../../shared/logger.js";
-import { CursorHeadlessAdapter } from "./adapters/cursorHeadlessAdapter.js";
-import { CursorInteractiveAdapter } from "./adapters/cursorInteractiveAdapter.js";
+import { CURSOR_SESSION_ID_ENV_VAR, CursorHeadlessAdapter } from "./adapters/cursorHeadlessAdapter.js";
+import { CODEX_THREAD_ID_ENV_VAR, CodexHeadlessAdapter } from "./adapters/codexHeadlessAdapter.js";
 import { CodexInteractiveAdapter } from "./adapters/codexInteractiveAdapter.js";
 import { ClaudeInteractiveAdapter } from "./adapters/claudeInteractiveAdapter.js";
 import { GeminiInteractiveAdapter } from "./adapters/geminiInteractiveAdapter.js";
@@ -1361,7 +1361,7 @@ export class CliSessionManager {
 
   constructor(adapters: CliSessionAdapter[] = [
     new CursorHeadlessAdapter(),
-    new CursorInteractiveAdapter(),
+    new CodexHeadlessAdapter(),
     new CodexInteractiveAdapter(),
     new ClaudeInteractiveAdapter(),
     new GeminiInteractiveAdapter(),
@@ -1375,7 +1375,10 @@ export class CliSessionManager {
   createSession(input: CreateCliSessionInput): CliSessionSnapshot {
     const prompt = String(input.prompt || "");
     const adapterId = String(input.adapter || "").trim() as CliSessionAdapterId;
-    const mode = (String(input.mode || "headless").trim() || "headless") as CliSessionMode;
+    const requestedMode = (String(input.mode || "headless").trim() || "headless") as CliSessionMode;
+    const mode = (adapterId === "cursor" && requestedMode === "interactive"
+      ? "headless"
+      : requestedMode) as CliSessionMode;
     const adapter = this.adapters.get(this.adapterKey(adapterId, mode));
     if (!adapter) {
       throw new Error(`Unsupported CLI adapter '${adapterId}' in mode '${mode}'`);
@@ -1943,6 +1946,25 @@ export class CliSessionManager {
       runtime.snapshot.stdout_excerpt = clipText(result.stdout);
       runtime.snapshot.stderr_excerpt = clipText(result.stderr);
       runtime.snapshot.updated_at = nowIso();
+      if (
+        runtime.snapshot.adapter === "codex"
+        && runtime.snapshot.mode === "headless"
+        && result.externalSessionId
+      ) {
+        runtime.launchEnv = {
+          ...runtime.launchEnv,
+          [CODEX_THREAD_ID_ENV_VAR]: result.externalSessionId,
+        };
+      } else if (
+        runtime.snapshot.adapter === "cursor"
+        && runtime.snapshot.mode === "headless"
+        && result.externalSessionId
+      ) {
+        runtime.launchEnv = {
+          ...runtime.launchEnv,
+          [CURSOR_SESSION_ID_ENV_VAR]: result.externalSessionId,
+        };
+      }
 
       if (runtime.stopRequested) {
         runtime.snapshot.state = "stopped";

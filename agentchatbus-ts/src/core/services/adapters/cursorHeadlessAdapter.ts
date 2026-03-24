@@ -1,11 +1,13 @@
-import { spawn, execFileSync } from "node:child_process";
-import type { ChildProcessWithoutNullStreams } from "node:child_process";
-import { dirname } from "node:path";
+import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
+import { dirname } from "node:path";
+import spawn from "cross-spawn";
 import { getConfig } from "../../config/registry.js";
 import type { CliSessionAdapter, CliAdapterRunInput, CliAdapterRunHooks, CliAdapterRunResult } from "./types.js";
 import { WINDOWS_POWERSHELL } from "./constants.js";
 import { normalizeWorkspacePath } from "./utils.js";
+
+export const CURSOR_SESSION_ID_ENV_VAR = "AGENTCHATBUS_CURSOR_SESSION_ID";
 
 type CursorCommandRequest = {
   command: string;
@@ -32,28 +34,102 @@ interface CursorCommandExecutor {
 }
 
 export function parseCursorHeadlessResult(stdout: string): CursorResultEnvelope {
-  const rawText = String(stdout || "").trim();
-  if (!rawText) {
+  const lines = String(stdout || "")
+    .split(/\r?\n/g)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (!lines.length) {
     return {
       rawResult: null,
       resultText: "",
     };
   }
 
-  try {
-    const parsed = JSON.parse(rawText) as Record<string, unknown>;
-    return {
-      rawResult: parsed,
-      resultText: typeof parsed.result === "string" ? parsed.result : rawText,
-      sessionId: typeof parsed.session_id === "string" ? parsed.session_id : undefined,
-      requestId: typeof parsed.request_id === "string" ? parsed.request_id : undefined,
-    };
-  } catch {
+  let sessionId: string | undefined;
+  let requestId: string | undefined;
+  let lastAssistantText: string | undefined;
+  const errors: string[] = [];
+  let eventCount = 0;
+  let ignoredLineCount = 0;
+
+  for (const line of lines) {
+    try {
+      const parsed = JSON.parse(line) as Record<string, unknown>;
+      eventCount += 1;
+
+      if (!sessionId) {
+        const sessionIdCandidate = [
+          parsed.session_id,
+          parsed.chat_id,
+          parsed.conversation_id,
+          parsed.sessionId,
+          parsed.chatId,
+        ].find((value) => typeof value === "string");
+        if (typeof sessionIdCandidate === "string" && sessionIdCandidate.trim()) {
+          sessionId = sessionIdCandidate.trim();
+        }
+      }
+
+      if (!requestId) {
+        const requestIdCandidate = [parsed.request_id, parsed.requestId].find(
+          (value) => typeof value === "string",
+        );
+        if (typeof requestIdCandidate === "string" && requestIdCandidate.trim()) {
+          requestId = requestIdCandidate.trim();
+        }
+      }
+
+      const eventType = String(parsed.type || "").trim().toLowerCase();
+      if (
+        typeof parsed.result === "string"
+        && parsed.result.trim()
+        && (eventType === "result" || eventType === "final")
+      ) {
+        lastAssistantText = parsed.result;
+        continue;
+      }
+
+      if (
+        typeof parsed.text === "string"
+        && parsed.text.trim()
+        && (eventType.includes("assistant") || eventType.includes("message") || eventType === "result")
+      ) {
+        lastAssistantText = parsed.text;
+        continue;
+      }
+
+      if (typeof parsed.message === "string" && parsed.message.trim()) {
+        if (eventType.includes("error")) {
+          errors.push(parsed.message);
+        } else if (eventType === "result" && !lastAssistantText) {
+          lastAssistantText = parsed.message;
+        }
+      }
+    } catch {
+      ignoredLineCount += 1;
+    }
+  }
+
+  if (!eventCount) {
     return {
       rawResult: null,
-      resultText: rawText,
+      resultText: lines.join("\n"),
     };
   }
+
+  return {
+    rawResult: {
+      session_id: sessionId || null,
+      request_id: requestId || null,
+      event_count: eventCount,
+      last_assistant_text: lastAssistantText || null,
+      errors,
+      ignored_line_count: ignoredLineCount,
+    },
+    resultText: lastAssistantText || "",
+    sessionId,
+    requestId,
+  };
 }
 
 function resolveCursorAgentCommand(): string {
@@ -62,36 +138,42 @@ function resolveCursorAgentCommand(): string {
     return configured;
   }
   if (process.platform === "win32") {
-    try {
-      const output = execFileSync("where.exe", ["cursor-agent"], {
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "ignore"],
-      });
-      const firstMatch = String(output || "")
-        .split(/\r?\n/)
-        .map((value) => value.trim())
-        .find(Boolean);
-      if (firstMatch) {
-        const ps1Match = firstMatch.replace(/\.cmd$/i, ".ps1");
-        if (ps1Match !== firstMatch && existsSync(ps1Match)) {
-          return ps1Match;
+    for (const candidate of ["agent", "cursor-agent"]) {
+      try {
+        const output = execFileSync("where.exe", [candidate], {
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "ignore"],
+        });
+        const firstMatch = String(output || "")
+          .split(/\r?\n/)
+          .map((value) => value.trim())
+          .find(Boolean);
+        if (firstMatch) {
+          const ps1Match = firstMatch.replace(/\.cmd$/i, ".ps1");
+          if (ps1Match !== firstMatch && existsSync(ps1Match)) {
+            return ps1Match;
+          }
+          return firstMatch;
         }
-        return firstMatch;
+      } catch {
+        // Try the next candidate on PATH.
       }
-    } catch {
-      // Fall back to PATH lookup below.
     }
   }
-  return "cursor-agent";
+  return "agent";
 }
 
 class CursorHeadlessExecutor implements CursorCommandExecutor {
   async run(request: CursorCommandRequest, hooks: CliAdapterRunHooks): Promise<CursorCommandExecutionResult> {
     return await new Promise<CursorCommandExecutionResult>((resolve, reject) => {
+      const resumeSessionId = String(request.env?.[CURSOR_SESSION_ID_ENV_VAR] || "").trim();
       const cursorArgs = [
+        "--force",
+        "--approve-mcps",
+        ...(resumeSessionId ? ["--resume", resumeSessionId] : []),
         "-p",
         "--output-format",
-        "json",
+        "stream-json",
         "-f",
         "--trust",
         "--workspace",
@@ -100,13 +182,11 @@ class CursorHeadlessExecutor implements CursorCommandExecutor {
       ];
       const isWindows = process.platform === "win32";
       const isPowerShellShim = isWindows && /\.ps1$/i.test(request.command);
-      const command = isWindows
-        ? (isPowerShellShim ? WINDOWS_POWERSHELL : "cmd.exe")
-        : request.command;
+      const command = isWindows && isPowerShellShim ? WINDOWS_POWERSHELL : request.command;
       const args = isWindows
         ? (isPowerShellShim
           ? ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", request.command, ...cursorArgs]
-          : ["/d", "/s", "/c", "cursor-agent", ...cursorArgs])
+          : cursorArgs)
         : cursorArgs;
       const env = { ...process.env, ...(request as { env?: Record<string, string> }).env };
       if (isWindows) {
@@ -118,7 +198,7 @@ class CursorHeadlessExecutor implements CursorCommandExecutor {
         }
       }
 
-      let child: ChildProcessWithoutNullStreams;
+      let child: ReturnType<typeof spawn>;
       try {
         child = spawn(command, args, {
           cwd: request.workspace,
@@ -234,13 +314,14 @@ export class CursorHeadlessAdapter implements CliSessionAdapter {
       throw new Error(`Cursor headless launch failed via '${this.command}': ${detail}`);
     }
     const parsed = parseCursorHeadlessResult(execution.stdout);
+    const persistedSessionId = String(input.env?.[CURSOR_SESSION_ID_ENV_VAR] || "").trim() || undefined;
     return {
       exitCode: execution.exitCode,
       stdout: execution.stdout,
       stderr: execution.stderr,
       resultText: parsed.resultText,
       rawResult: parsed.rawResult,
-      externalSessionId: parsed.sessionId,
+      externalSessionId: parsed.sessionId || persistedSessionId,
       externalRequestId: parsed.requestId,
     };
   }

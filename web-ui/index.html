@@ -943,7 +943,8 @@ Note: Thread name is the topic label. Thread ID is the unique identifier.`;
       const btn = document.getElementById('btn-close-thread-bar');
       if (!btn) return;
       const hasThread = Boolean(activeThreadId);
-      const isClosed = activeThreadStatus === 'closed' || activeThreadStatus === 'archived';
+      const isClosed = activeThreadStatus === 'archived';
+      window.__acbActiveThreadStatus = activeThreadStatus;
       btn.disabled = !hasThread || isClosed;
       btn.textContent = activeThreadStatus === 'closed' ? 'Thread Closed' : 'Close Thread';
     }
@@ -1031,7 +1032,7 @@ Note: Thread name is the topic label. Thread ID is the unique identifier.`;
           }
           const composeEl = document.getElementById('compose');
           if (composeEl) {
-            composeEl.classList.toggle('visible', Boolean(activeThreadId) && activeThreadStatus !== 'closed' && activeThreadStatus !== 'archived');
+            composeEl.classList.toggle('visible', Boolean(activeThreadId) && activeThreadStatus !== 'archived');
           }
           updateCloseThreadButton();
         },
@@ -1165,15 +1166,17 @@ Note: Thread name is the topic label. Thread ID is the unique identifier.`;
       });
       if (result?.ok && threadId && threadId === activeThreadId) {
         activeThreadStatus = 'closed';
-        document.getElementById('compose').classList.remove('visible');
+        document.getElementById('compose').classList.add('visible');
         updateCloseThreadButton();
-        if (window.AcbCliSessions) window.AcbCliSessions.renderThread(threadId);
+        if (window.AcbCliSessions) {
+          await window.AcbCliSessions.refreshThread(threadId, api);
+        }
       }
       return result;
     }
 
     async function closeActiveThreadFromStatusBar() {
-      if (!activeThreadId || activeThreadStatus === 'closed' || activeThreadStatus === 'archived') {
+      if (!activeThreadId || activeThreadStatus === 'archived') {
         return null;
       }
       return closeThread(activeThreadId);
@@ -1283,6 +1286,7 @@ Note: Thread name is the topic label. Thread ID is the unique identifier.`;
       }
       activeThreadId = null;
       activeThreadStatus = 'discuss';
+      window.__acbActiveThreadStatus = activeThreadStatus;
       lastSeq = 0;
       activeThreadLastSeenMs.clear();
       window.currentThreadId = null;
@@ -1858,6 +1862,7 @@ Note: Thread name is the topic label. Thread ID is the unique identifier.`;
     async function sendMessage() {
       return window.AcbChat.sendMessage({
         getActiveThreadId: () => activeThreadId,
+        getLastSeq: () => lastSeq,
         getThreadSyncContext,
         setThreadSyncContext: (threadId, syncContext) => {
           if (!threadId) return;

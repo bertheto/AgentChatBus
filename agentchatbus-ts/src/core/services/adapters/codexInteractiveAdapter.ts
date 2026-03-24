@@ -1,3 +1,6 @@
+import { execFileSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import { extname } from "node:path";
 import { getConfig } from "../../config/registry.js";
 import { logInfo } from "../../../shared/logger.js";
 import type { CliSessionAdapter, CliAdapterRunInput, CliAdapterRunHooks, CliAdapterRunResult } from "./types.js";
@@ -10,9 +13,57 @@ import {
 } from "./utils.js";
 import { runInteractivePtyInChild } from "./interactivePtyChildBridge.js";
 
-function resolveCodexCommand(): string {
+export function resolveCodexCommand(): string {
   const configured = String(getConfig().codexCommand || "").trim();
-  return configured || "codex";
+  if (configured) {
+    return configured;
+  }
+  if (process.platform === "win32") {
+    try {
+      const output = execFileSync("where.exe", ["codex"], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+      const matches = String(output || "")
+        .split(/\r?\n/)
+        .map((value) => value.trim())
+        .filter(Boolean);
+      for (const match of matches) {
+        const extension = extname(match).toLowerCase();
+        const variants = extension === ".ps1"
+          ? [
+              match,
+              match.replace(/\.ps1$/i, ".exe"),
+              match.replace(/\.ps1$/i, ".cmd"),
+            ]
+          : extension === ".cmd"
+            ? [
+                match.replace(/\.cmd$/i, ".ps1"),
+                match.replace(/\.cmd$/i, ".exe"),
+                match,
+              ]
+            : extension === ".exe"
+              ? [
+                  match.replace(/\.exe$/i, ".ps1"),
+                  match,
+                  match.replace(/\.exe$/i, ".cmd"),
+                ]
+              : [
+                  `${match}.ps1`,
+                  `${match}.exe`,
+                  `${match}.cmd`,
+                  match,
+                ];
+        const existing = variants.find((candidate) => existsSync(candidate));
+        if (existing) {
+          return existing;
+        }
+      }
+    } catch {
+      // Fall back to PATH lookup below.
+    }
+  }
+  return "codex";
 }
 
 function shouldUseConpty(): boolean {
@@ -41,7 +92,7 @@ export class CodexInteractiveAdapter implements CliSessionAdapter {
 
   constructor(
     private readonly shellCommand = WINDOWS_POWERSHELL,
-    private readonly codexCommand = resolveCodexCommand(),
+    private readonly codexCommand?: string,
   ) {}
 
   async run(input: CliAdapterRunInput, hooks: CliAdapterRunHooks): Promise<CliAdapterRunResult> {
@@ -66,8 +117,9 @@ export class CodexInteractiveAdapter implements CliSessionAdapter {
     hooks: CliAdapterRunHooks,
     useConpty: boolean,
   ): Promise<CliAdapterRunResult> {
+    const codexCommand = this.codexCommand || resolveCodexCommand();
     const commandParts = [
-      `& ${toPowerShellSingleQuoted(this.codexCommand)}`,
+      `& ${toPowerShellSingleQuoted(codexCommand)}`,
       "--no-alt-screen",
       "-C",
       toPowerShellSingleQuoted(input.workspace),

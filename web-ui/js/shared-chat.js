@@ -73,7 +73,7 @@
 
     document.getElementById("thread-header").style.display = "flex";
     document.getElementById("thread-title").textContent = topic;
-    document.getElementById("compose").classList.toggle("visible", status !== "closed" && status !== "archived");
+    document.getElementById("compose").classList.toggle("visible", status !== "archived");
 
     const box = document.getElementById("messages");
     box.innerHTML = "";
@@ -152,6 +152,7 @@
 
   async function sendMessage({
     getActiveThreadId,
+    getLastSeq,
     getThreadSyncContext,
     setThreadSyncContext,
     updateOnlinePresence,
@@ -234,6 +235,10 @@
       message && typeof message.id === "string" && typeof message.seq === "number" && typeof message.content === "string";
 
     let sync = getThreadSyncContext ? getThreadSyncContext(activeThreadId) : null;
+    const knownLastSeq = typeof getLastSeq === "function" ? Number(getLastSeq()) || 0 : 0;
+    if (isValidSyncContext(sync) && Number(sync.current_seq) < knownLastSeq) {
+      sync = null;
+    }
     if (!isValidSyncContext(sync)) {
       sync = await loadFreshSyncContext();
     }

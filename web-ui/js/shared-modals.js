@@ -248,7 +248,7 @@
     const displayNameEl = document.getElementById(`${prefix}-display-name`);
     const instructionEl = document.getElementById(`${prefix}-instruction`);
     if (adapterEl) adapterEl.value = "claude";
-    if (modeEl) modeEl.value = "interactive";
+    if (modeEl) modeEl.value = getThreadLaunchModeForAdapter("claude");
     if (displayNameEl) displayNameEl.value = "";
     if (instructionEl) instructionEl.value = "";
   }
@@ -308,7 +308,9 @@
 
   function readAgentLaunchConfig(prefix) {
     const adapter = String(document.getElementById(`${prefix}-adapter`)?.value || "codex").trim();
-    const mode = String(document.getElementById(`${prefix}-mode`)?.value || "interactive").trim();
+    const defaultMode = getThreadLaunchModeForAdapter(adapter);
+    const requestedMode = String(document.getElementById(`${prefix}-mode`)?.value || defaultMode).trim() || defaultMode;
+    const mode = adapter === "cursor" ? "headless" : requestedMode;
     const displayName = String(document.getElementById(`${prefix}-display-name`)?.value || "").trim();
     const initialInstruction = String(document.getElementById(`${prefix}-instruction`)?.value || "").trim();
     return {
@@ -329,6 +331,11 @@
                          config.adapter === "gemini" ? "Gemini" :
                          config.adapter === "copilot" ? "Copilot" : "Codex";
     return adapterLabel;
+  }
+
+  function getThreadLaunchModeForAdapter(adapter) {
+    const normalized = String(adapter || "").trim().toLowerCase();
+    return normalized === "codex" || normalized === "cursor" ? "headless" : "interactive";
   }
 
   function getThreadLaunchUsedEmojis(excludeAgentId = "") {
@@ -384,7 +391,7 @@
       id: `thread-agent-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       adapter,
       emoji,
-      mode: "interactive",
+      mode: getThreadLaunchModeForAdapter(adapter),
       meetingTransport: "agent_mcp",
       displayName: "",
       initialInstruction: "",
@@ -401,8 +408,9 @@
     return _threadLaunchAgents.map((agent) => ({
       adapter: agent.adapter || "claude",
       emoji: String(agent.emoji || "").trim() || pickRandomThreadLaunchEmoji(agent.id),
-      mode: "interactive",
-      meetingTransport: "agent_mcp",
+      mode: String(agent.mode || getThreadLaunchModeForAdapter(agent.adapter || "claude")).trim()
+        || getThreadLaunchModeForAdapter(agent.adapter || "claude"),
+      meetingTransport: agent.meetingTransport || "agent_mcp",
       displayName: "",
       initialInstruction: String(agent.initialInstruction || "").trim(),
     }));
@@ -803,6 +811,8 @@
     _selectedThreadLaunchAgentId = agentId;
     if (field === "adapter") {
       agent.adapter = String(element.value || "claude").trim() || "claude";
+      agent.mode = getThreadLaunchModeForAdapter(agent.adapter);
+      agent.meetingTransport = "agent_mcp";
       if (_threadLaunchAgents[0]?.id === agentId) {
         syncThreadLaunchGlobalInstructionField();
       }

@@ -222,7 +222,8 @@
       message: `
         <strong>Closing a thread stops automatic coordination.</strong><br><br>
         AgentChatBus will stop automatically waking offline CLI agents for this thread and stop relaying new discussion turns through the CLI meeting coordinator.<br><br>
-        Existing messages are preserved. This action does not delete the thread.
+        Any running CLI sessions attached to this thread will also be stopped.<br><br>
+        Existing messages are preserved, and human participants can still keep chatting after closure. This action does not delete the thread.
       `,
       confirmText: 'Continue',
       confirmClass: 'btn-destructive',
@@ -249,6 +250,29 @@
       method: "POST",
       body: JSON.stringify({ summary: summary || null }),
     });
+    try {
+      const uiAgent = window.AcbUiAgent && typeof window.AcbUiAgent.ensureUiAgent === "function"
+        ? await window.AcbUiAgent.ensureUiAgent()
+        : null;
+      const sessionsResult = await api(`/api/threads/${threadId}/cli-sessions`);
+      const sessions = Array.isArray(sessionsResult?.sessions) ? sessionsResult.sessions : [];
+      const runningSessions = sessions.filter(
+        (session) => String(session?.state || "").trim().toLowerCase() === "running",
+      );
+      await Promise.allSettled(
+        runningSessions.map((session) =>
+          api(`/api/cli-sessions/${session.id}/stop`, {
+            method: "POST",
+            headers: uiAgent?.token ? { "X-Agent-Token": uiAgent.token } : undefined,
+            body: uiAgent?.agent_id
+              ? JSON.stringify({ requested_by_agent_id: uiAgent.agent_id })
+              : undefined,
+          }),
+        ),
+      );
+    } catch (error) {
+      console.warn("[closeThread] Failed to stop one or more CLI sessions:", error);
+    }
     await refreshThreads();
     return result;
   }
