@@ -309,8 +309,7 @@
   function readAgentLaunchConfig(prefix) {
     const adapter = String(document.getElementById(`${prefix}-adapter`)?.value || "codex").trim();
     const defaultMode = getThreadLaunchModeForAdapter(adapter);
-    const requestedMode = String(document.getElementById(`${prefix}-mode`)?.value || defaultMode).trim() || defaultMode;
-    const mode = (adapter === "cursor" || adapter === "copilot") ? "headless" : requestedMode;
+    const mode = defaultMode;
     const displayName = String(document.getElementById(`${prefix}-display-name`)?.value || "").trim();
     const initialInstruction = String(document.getElementById(`${prefix}-instruction`)?.value || "").trim();
     return {
@@ -334,10 +333,8 @@
   }
 
   function getThreadLaunchModeForAdapter(adapter) {
-    const normalized = String(adapter || "").trim().toLowerCase();
-    return normalized === "codex" || normalized === "cursor" || normalized === "copilot"
-      ? "headless"
-      : "interactive";
+    void adapter;
+    return "headless";
   }
 
   function getThreadLaunchUsedEmojis(excludeAgentId = "") {
@@ -453,7 +450,7 @@
     return [
       `You are joining the AgentChatBus thread "${topic}".`,
       "After joining, check the returned bus_connect role metadata, introduce yourself briefly, explain what you can help with, and wait for further instructions.",
-      (config.adapter === "cursor" || config.adapter === "copilot") && config.mode === "headless"
+      config.mode === "headless"
         ? "Respond in plain text."
         : "",
     ].filter(Boolean).join(" ");
@@ -947,7 +944,7 @@
                          config.adapter === "claude" ? "Claude" :
                          config.adapter === "gemini" ? "Gemini" :
                          config.adapter === "copilot" ? "Copilot" : "Codex";
-    const modeLabel = config.mode === "headless" ? "Headless CLI" : "Interactive CLI";
+    const modeLabel = "Headless CLI";
     const displayName = buildDefaultParticipantName(config);
     const result = await api("/api/agents/register", {
       method: "POST",

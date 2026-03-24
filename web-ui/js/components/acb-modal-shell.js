@@ -257,8 +257,7 @@
                     <div class="settings-field">
                       <label for="agent-modal-mode">Mode</label>
                       <select id="agent-modal-mode">
-                        <option value="interactive">Interactive</option>
-                        <option value="headless">Headless</option>
+                        <option value="headless">Headless JSON Resume</option>
                       </select>
                     </div>
                     <div class="settings-field" style="grid-column:1 / -1;">

@@ -8,7 +8,6 @@ import { getConfig } from "../../config/registry.js";
 import type { CliSessionAdapter, CliAdapterRunInput, CliAdapterRunHooks, CliAdapterRunResult } from "./types.js";
 import { WINDOWS_POWERSHELL } from "./constants.js";
 import { normalizeWorkspacePath } from "./utils.js";
-import { resolveCodexCommand } from "./codexInteractiveAdapter.js";
 
 export const CODEX_THREAD_ID_ENV_VAR = "AGENTCHATBUS_CODEX_THREAD_ID";
 
@@ -112,6 +111,41 @@ function resolveCodexHeadlessCommand(): string {
     }
   }
   return resolved;
+}
+
+function resolveCodexCommand(): string {
+  const configured = String(getConfig().codexCommand || "").trim();
+  if (configured) {
+    return configured;
+  }
+  if (process.platform === "win32") {
+    try {
+      const output = execFileSync("where.exe", ["codex"], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+      const matches = String(output || "")
+        .split(/\r?\n/)
+        .map((value) => value.trim())
+        .filter(Boolean);
+      for (const match of matches) {
+        const candidates = /\.ps1$/i.test(match)
+          ? [match, match.replace(/\.ps1$/i, ".exe"), match.replace(/\.ps1$/i, ".cmd")]
+          : /\.cmd$/i.test(match)
+            ? [match.replace(/\.cmd$/i, ".exe"), match, match.replace(/\.cmd$/i, ".ps1")]
+            : /\.exe$/i.test(match)
+              ? [match, match.replace(/\.exe$/i, ".cmd"), match.replace(/\.exe$/i, ".ps1")]
+              : [`${match}.exe`, `${match}.cmd`, `${match}.ps1`, match];
+        const existing = candidates.find((candidate) => existsSync(candidate));
+        if (existing) {
+          return existing;
+        }
+      }
+    } catch {
+      // Fall back to PATH lookup below.
+    }
+  }
+  return "codex";
 }
 
 function isObjectRecord(value: unknown): value is Record<string, unknown> {

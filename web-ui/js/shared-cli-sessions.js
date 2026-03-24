@@ -76,14 +76,17 @@
     if (session?.adapter === "codex" && session?.mode === "headless") {
       return participantLabel ? `${participantLabel} · Codex JSON resume` : "Codex JSON resume";
     }
-    if (session?.adapter === "codex" && session?.mode === "interactive") {
-      return participantLabel ? `${participantLabel} · Codex PTY` : "Codex PTY";
-    }
     if (session?.adapter === "cursor" && session?.mode === "headless") {
       return participantLabel ? `${participantLabel} · Cursor JSON resume` : "Cursor JSON resume";
     }
     if (session?.adapter === "copilot" && session?.mode === "headless") {
       return participantLabel ? `${participantLabel} · Copilot JSON resume` : "Copilot JSON resume";
+    }
+    if (session?.adapter === "claude" && session?.mode === "headless") {
+      return participantLabel ? `${participantLabel} · Claude JSON resume` : "Claude JSON resume";
+    }
+    if (session?.adapter === "gemini" && session?.mode === "headless") {
+      return participantLabel ? `${participantLabel} · Gemini JSON resume` : "Gemini JSON resume";
     }
     const base = `${String(session?.adapter || "cli")} ${String(session?.mode || "session")}`;
     return participantLabel ? `${participantLabel} · ${base}` : base;
@@ -1215,7 +1218,7 @@
     return getSelectedSession(threadId);
   }
 
-  async function startCodexInteractive(api) {
+  async function startHeadlessCodexSession(api) {
     const threadId = getActiveThreadId();
     if (!threadId) {
       return null;
@@ -1508,12 +1511,12 @@
     kickAgentById,
     confirmAndStopSession,
     confirmAndKickAgent,
-    startCodexInteractive: () => startCodexInteractive(window.AcbApi.api),
+    startHeadlessCodexSession: () => startHeadlessCodexSession(window.AcbApi.api),
     restartSelected: () => restartSelected(window.AcbApi.api),
     stopSelected: () => stopSelected(window.AcbApi.api),
     restartLatest: () => restartSelected(window.AcbApi.api),
     stopLatest: () => stopSelected(window.AcbApi.api),
   };
 
-  window.launchCodexPtySession = () => startCodexInteractive(window.AcbApi.api);
+  window.launchHeadlessCodexSession = () => startHeadlessCodexSession(window.AcbApi.api);
 })();

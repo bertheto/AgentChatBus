@@ -6,9 +6,8 @@ import { logError, logInfo } from "../../shared/logger.js";
 import { CURSOR_SESSION_ID_ENV_VAR, CursorHeadlessAdapter } from "./adapters/cursorHeadlessAdapter.js";
 import { CODEX_THREAD_ID_ENV_VAR, CodexHeadlessAdapter } from "./adapters/codexHeadlessAdapter.js";
 import { COPILOT_SESSION_ID_ENV_VAR, CopilotHeadlessAdapter } from "./adapters/copilotHeadlessAdapter.js";
-import { CodexInteractiveAdapter } from "./adapters/codexInteractiveAdapter.js";
-import { ClaudeInteractiveAdapter } from "./adapters/claudeInteractiveAdapter.js";
-import { GeminiInteractiveAdapter } from "./adapters/geminiInteractiveAdapter.js";
+import { CLAUDE_SESSION_ID_ENV_VAR, ClaudeHeadlessAdapter } from "./adapters/claudeHeadlessAdapter.js";
+import { GEMINI_SESSION_ID_ENV_VAR, GeminiHeadlessAdapter } from "./adapters/geminiHeadlessAdapter.js";
 import { isCodexWorkingLine, looksLikeConversationalWorkingScreen } from "./cliInteractiveHeuristics.js";
 
 type HeadlessTerminalInstance = import("@xterm/headless").Terminal;
@@ -1362,10 +1361,9 @@ export class CliSessionManager {
   constructor(adapters: CliSessionAdapter[] = [
     new CursorHeadlessAdapter(),
     new CodexHeadlessAdapter(),
-    new CodexInteractiveAdapter(),
     new CopilotHeadlessAdapter(),
-    new ClaudeInteractiveAdapter(),
-    new GeminiInteractiveAdapter(),
+    new ClaudeHeadlessAdapter(),
+    new GeminiHeadlessAdapter(),
   ]) {
     for (const adapter of adapters) {
       this.adapters.set(this.adapterKey(adapter.adapterId, adapter.mode), adapter);
@@ -1376,9 +1374,9 @@ export class CliSessionManager {
     const prompt = String(input.prompt || "");
     const adapterId = String(input.adapter || "").trim() as CliSessionAdapterId;
     const requestedMode = (String(input.mode || "headless").trim() || "headless") as CliSessionMode;
-    const mode = ((adapterId === "cursor" || adapterId === "copilot") && requestedMode === "interactive"
+    const mode = requestedMode === "interactive"
       ? "headless"
-      : requestedMode) as CliSessionMode;
+      : requestedMode as CliSessionMode;
     const adapter = this.adapters.get(this.adapterKey(adapterId, mode));
     if (!adapter) {
       throw new Error(`Unsupported CLI adapter '${adapterId}' in mode '${mode}'`);
@@ -1972,6 +1970,24 @@ export class CliSessionManager {
         runtime.launchEnv = {
           ...runtime.launchEnv,
           [COPILOT_SESSION_ID_ENV_VAR]: result.externalSessionId,
+        };
+      } else if (
+        runtime.snapshot.adapter === "claude"
+        && runtime.snapshot.mode === "headless"
+        && result.externalSessionId
+      ) {
+        runtime.launchEnv = {
+          ...runtime.launchEnv,
+          [CLAUDE_SESSION_ID_ENV_VAR]: result.externalSessionId,
+        };
+      } else if (
+        runtime.snapshot.adapter === "gemini"
+        && runtime.snapshot.mode === "headless"
+        && result.externalSessionId
+      ) {
+        runtime.launchEnv = {
+          ...runtime.launchEnv,
+          [GEMINI_SESSION_ID_ENV_VAR]: result.externalSessionId,
         };
       }
 
