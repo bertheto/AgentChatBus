@@ -21,6 +21,7 @@
         avatarEmoji,
         label,
         state,
+        stateText,
         isAdministrator,
         offlineDisplay,
         isLongOffline,
@@ -34,6 +35,7 @@
 
       const esc = typeof escapeHtml === "function" ? escapeHtml : (v) => String(v ?? "");
       const stateLower = String(state ?? "").trim().toLowerCase();
+      const resolvedStateText = String(stateText ?? state ?? "").trim();
 
       const isDarkTheme = document.body.getAttribute('data-theme') !== 'light';
       const styles = window.AcbUtils ? window.AcbUtils.getEmojiStyledBackground(avatarEmoji, isDarkTheme) : { bg: 'transparent', border: 'transparent' };
@@ -61,7 +63,7 @@
       }
 
       // Normal card: 48x48 avatar on left, 24x48 status panel on right
-      const isOffline = stateLower === "offline";
+      const isOffline = stateLower === "offline" || stateLower === "disconnected";
       const transportIcon = isOffline
         ? `<span class="asi-transport-emoji">❔</span>`
         : isStdio
@@ -70,11 +72,11 @@
 
       this.innerHTML = `
         <div class="asi-avatar-wrap">
-          <div class="asi-avatar" style="background:${avatarBg}; border: 1px solid ${avatarBorder};" data-tooltip="${esc(tooltipText || state)}">${avatarEmoji}</div>
+          <div class="asi-avatar" style="background:${avatarBg}; border: 1px solid ${avatarBorder};" data-tooltip="${esc(tooltipText || resolvedStateText || state)}">${avatarEmoji}</div>
           ${isAdministrator ? '<span class="asi-admin-badge" aria-label="Administrator">👑</span>' : ''}
         </div>
         <div class="asi-status-panel">
-          <div class="asi-status-box" data-tooltip="${esc(state || 'unknown')}">${stateEmoji}</div>
+          <div class="asi-status-box" data-tooltip="${esc(resolvedStateText || state || 'unknown')}">${stateEmoji}</div>
           <div class="asi-transport-box" data-tooltip="${isOffline ? 'Connection unknown' : isStdio ? 'Stdio connection' : 'SSE connection'}">${transportIcon}</div>
         </div>
       `;

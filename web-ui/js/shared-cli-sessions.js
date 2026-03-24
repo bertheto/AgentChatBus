@@ -5,6 +5,7 @@
   const terminalInstances = new Map();
   const headlessOutputStateBySession = new Map();
   const threadAgentsByThread = new Map();
+  const autoScrollPreferencesBySession = new Map();
   const ACTIVE_SESSION_STATES = new Set(["created", "starting", "running"]);
   const DELIVERY_BUSY_REPLY_STATES = new Set(["waiting_for_reply", "working", "streaming"]);
   const DELIVERY_BUSY_AUTOMATION_STATES = new Set([
@@ -14,6 +15,30 @@
     "gemini_working",
     "copilot_working",
   ]);
+  const KNOWN_TOOL_NAMES = [
+    "bus_connect",
+    "msg_wait",
+    "msg_post",
+    "msg_get",
+    "msg_list",
+    "msg_edit",
+    "msg_react",
+    "msg_unreact",
+    "thread_create",
+    "thread_get",
+    "thread_list",
+    "thread_close",
+    "thread_archive",
+    "thread_unarchive",
+    "thread_set_state",
+    "thread_settings_get",
+    "thread_settings_update",
+    "agent_register",
+    "agent_update",
+    "agent_resume",
+    "agent_heartbeat",
+    "agent_list",
+  ];
 
   function escapeHtml(value) {
     return String(value ?? "")
@@ -94,25 +119,22 @@
 
   function hasBusConnectedParticipant(session) {
     const participantAgent = getParticipantAgent(session);
-    const participantActivity = String(participantAgent?.last_activity || "").trim().toLowerCase();
-    return (
-      participantActivity === "bus_connect"
-      || participantActivity === "msg_wait"
-      || participantActivity === "msg_received"
-      || participantActivity === "msg_post"
+    return Boolean(
+      window.AcbAgentStatus?.hasBusConnectedParticipant?.({
+        agent: participantAgent,
+        session,
+      }),
     );
   }
 
   function sessionAvatar(session) {
-    if (!hasBusConnectedParticipant(session)) {
-      return "❓";
-    }
-    const resolvedEmoji = String(session?.participant_emoji || "").trim();
-    if (resolvedEmoji) {
-      return resolvedEmoji;
-    }
-    const candidate = sessionDisplayName(session).replace(/[^A-Za-z0-9]/g, "");
-    return String(candidate.charAt(0) || String(session?.adapter || "A").charAt(0) || "A").toUpperCase();
+    const participantAgent = getParticipantAgent(session);
+    const unifiedStatus = window.AcbAgentStatus?.deriveUnifiedStatus?.({
+      agent: participantAgent,
+      session,
+      threadStatus: getActiveThreadLifecycleStatus(),
+    });
+    return unifiedStatus?.avatarEmoji || "❓";
   }
 
   function resolvedRole(session) {
@@ -182,6 +204,22 @@
 
   function getParticipantSessionsForThread(threadId) {
     return getSessionsForThread(threadId).filter((session) => Boolean(session?.participant_agent_id));
+  }
+
+  function getSessionForAgent(threadId, agentId) {
+    const resolvedThreadId = String(threadId || "").trim();
+    const resolvedAgentId = String(agentId || "").trim();
+    if (!resolvedThreadId || !resolvedAgentId) {
+      return null;
+    }
+
+    const candidates = getSessionsForThread(resolvedThreadId).filter((session) => {
+      return String(session?.participant_agent_id || "").trim() === resolvedAgentId;
+    });
+    if (!candidates.length) {
+      return null;
+    }
+    return choosePreferredSession(candidates) || candidates[0] || null;
   }
 
   function isSessionDeliveryBusy(session) {
@@ -327,6 +365,9 @@
     ensureSelectedSession(session.thread_id);
     if (session.thread_id === getActiveThreadId()) {
       renderThread(session.thread_id);
+      if (window.AcbAgents?.rerenderStatusBar) {
+        void window.AcbAgents.rerenderStatusBar();
+      }
     }
   }
 
@@ -370,6 +411,7 @@
 
   function teardownHeadlessOutputState(sessionId) {
     headlessOutputStateBySession.delete(sessionId);
+    autoScrollPreferencesBySession.delete(sessionId);
   }
 
   function teardownAllTerminals() {
@@ -468,6 +510,48 @@
       .trim();
   }
 
+  function getAutoScrollPreference(sessionId, panelType) {
+    const existing = autoScrollPreferencesBySession.get(sessionId) || {};
+    return existing[panelType] !== false;
+  }
+
+  function setAutoScrollPreference(sessionId, panelType, enabled) {
+    const existing = autoScrollPreferencesBySession.get(sessionId) || {};
+    existing[panelType] = enabled !== false;
+    autoScrollPreferencesBySession.set(sessionId, existing);
+  }
+
+  function scrollLogBodyToBottom(hostEl, sessionId, panelType) {
+    if (!hostEl || !getAutoScrollPreference(sessionId, panelType)) {
+      return;
+    }
+
+    const scrollTarget = hostEl.matches?.(".cli-session-log__body")
+      ? hostEl
+      : hostEl.querySelector?.(".cli-session-log__body") || hostEl;
+
+    const applyScroll = () => {
+      scrollTarget.scrollTop = Math.max(0, scrollTarget.scrollHeight - scrollTarget.clientHeight);
+    };
+
+    applyScroll();
+    window.requestAnimationFrame(applyScroll);
+  }
+
+  function highlightToolNamesInHtml(escapedText) {
+    let html = String(escapedText || "");
+    KNOWN_TOOL_NAMES.forEach((toolName) => {
+      const pattern = new RegExp(`(^|[^A-Za-z0-9_])(${toolName})(?=$|[^A-Za-z0-9_])`, "g");
+      html = html.replace(pattern, (_, prefix, match) => `${prefix}<span class="cli-session-log__tool">${match}</span>`);
+    });
+    return html;
+  }
+
+  function formatLogHtml(text) {
+    const escaped = escapeHtml(String(text || ""));
+    return highlightToolNamesInHtml(escaped).replace(/\n/g, "<br>");
+  }
+
   function joinDistinctLogSections(values) {
     const seen = new Set();
     const sections = [];
@@ -519,16 +603,17 @@
       return;
     }
     hostEl.innerHTML = "";
-    const transcriptEl = document.createElement("pre");
-    transcriptEl.className = "cli-session-terminal__transcript";
+    const transcriptEl = document.createElement("div");
+    transcriptEl.className = "cli-session-terminal__transcript cli-session-log__body";
     if (String(session?.state || "") === "failed") {
       transcriptEl.classList.add("cli-session-terminal__transcript--error");
     }
     if (!normalizeSessionLogText(text)) {
       transcriptEl.classList.add("cli-session-terminal__transcript--muted");
     }
-    transcriptEl.textContent = text;
+    transcriptEl.innerHTML = formatLogHtml(text);
     hostEl.appendChild(transcriptEl);
+    scrollLogBodyToBottom(hostEl, session.id, "terminal");
   }
 
   async function mountHeadlessOutputForSessionCard(session, hostEl) {
@@ -625,15 +710,8 @@
   }
 
   function getSessionStatusText(session) {
-    const state = stateLabel(session.state);
-    const replyCapture = String(session?.reply_capture_state || "").trim();
-    if (replyCapture === "working" || replyCapture === "streaming" || replyCapture === "waiting_for_reply") {
-      return "Working";
-    }
-    if (String(session?.meeting_post_state || "").trim() === "posting") {
-      return "Posting";
-    }
-    return state;
+    const state = stateLabel(session?.state);
+    return state === "Unknown" ? "Disconnected" : state;
   }
 
   function buildSessionMeta(session) {
@@ -674,6 +752,14 @@
     return entries
       .map((entry) => `${formatToolEventTime(entry?.at)} received ${String(entry?.stream || "stream").trim()}`)
       .join(" · ");
+  }
+
+  function buildActivityLogHtml(session) {
+    return [
+      `<div class="cli-session-log__line">${formatLogHtml(renderTimingSummary(session))}</div>`,
+      `<div class="cli-session-log__line">${formatLogHtml(renderToolEventSummary(session))}</div>`,
+      `<div class="cli-session-log__line">${formatLogHtml(renderStreamEventSummary(session))}</div>`,
+    ].join("");
   }
 
   function renderTimingSummary(session) {
@@ -790,144 +876,19 @@
 
   function getSessionStatusInfo(session) {
     const participantAgent = getParticipantAgent(session);
-    const sessionThreadId = String(session?.thread_id || "").trim();
-    const activeThreadId = String(getActiveThreadId() || "").trim();
-    const activeThreadStatus = getActiveThreadLifecycleStatus();
-    const state = String(session?.state || "").trim().toLowerCase();
-    const meetingTransport = String(session?.meeting_transport || "").trim().toLowerCase();
-    const replyCapture = String(session?.reply_capture_state || "").trim().toLowerCase();
-    const meetingPost = String(session?.meeting_post_state || "").trim().toLowerCase();
-    const automationState = String(session?.automation_state || "").trim().toLowerCase();
-    const participantActivity = String(participantAgent?.last_activity || "").trim().toLowerCase();
-    const participantOnline = participantAgent?.is_online;
-    const participantConnected = hasBusConnectedParticipant(session);
-    const lastDeliveredSeq = Number(session?.last_delivered_seq) || 0;
-    const lastAcknowledgedSeq = Number(session?.last_acknowledged_seq) || 0;
-    const hasHeadlessOutput = Number(session?.output_cursor) > 0;
-    const threadClosed = Boolean(
-      sessionThreadId
-      && activeThreadId
-      && sessionThreadId === activeThreadId
-      && activeThreadStatus === "closed",
-    );
-
-    if (state === "failed") {
+    const unifiedStatus = window.AcbAgentStatus?.deriveUnifiedStatus?.({
+      agent: participantAgent,
+      session,
+      threadStatus: getActiveThreadLifecycleStatus(),
+    });
+    if (unifiedStatus) {
       return {
-        headline: "Launch Failed",
-        detail: "Disconnected. The CLI process failed before it could keep listening.",
-        tone: "error",
+        headline: unifiedStatus.primaryLabel,
+        detail: unifiedStatus.detail,
+        tone: unifiedStatus.tone,
+        statusText: unifiedStatus.statusText,
+        secondaryLabels: unifiedStatus.secondaryLabels,
       };
-    }
-    if (state === "stopped") {
-      return {
-        headline: "Disconnected",
-        detail: "CLI stopped. You can relaunch or resume this session later.",
-        tone: "warn",
-      };
-    }
-    if (state === "completed") {
-      return {
-        headline: "Disconnected",
-        detail: meetingTransport === "agent_mcp"
-          ? "Session ended and is no longer waiting in msg_wait. You can resume it later."
-          : "One-shot run completed. Start a new session to reconnect.",
-        tone: "warn",
-      };
-    }
-    if (threadClosed) {
-      return {
-        headline: "Disconnected",
-        detail: "Thread closed. Automatic coordination stopped; reconnect manually if needed.",
-        tone: "warn",
-      };
-    }
-    if (state === "created" || state === "starting") {
-      return {
-        headline: "Connecting",
-        detail: "Starting the CLI process and preparing the session.",
-        tone: "pending",
-      };
-    }
-    if (participantOnline === false) {
-      return {
-        headline: "Disconnected",
-        detail: "Agent offline. It is not listening now, but can be resumed later.",
-        tone: "warn",
-      };
-    }
-    if (meetingPost === "posting" || participantActivity === "msg_post") {
-      return {
-        headline: participantConnected ? "Connected" : "Connecting",
-        detail: participantConnected
-          ? "Posting a reply to the thread now."
-          : "CLI process is running, but bus_connect has not completed yet.",
-        tone: participantConnected ? "active" : "pending",
-      };
-    }
-    if (
-      replyCapture === "working"
-      || replyCapture === "streaming"
-      || replyCapture === "waiting_for_reply"
-      || String(session?.interactive_work_state || "").trim().toLowerCase() === "busy"
-      || DELIVERY_BUSY_AUTOMATION_STATES.has(automationState)
-    ) {
-      return {
-        headline: participantConnected ? "Connected" : "Connecting",
-        detail: participantConnected
-          ? "Working on a reply right now."
-          : "CLI process is running startup instructions and has not completed bus_connect yet.",
-        tone: participantConnected ? "active" : "pending",
-      };
-    }
-    if (participantActivity === "msg_wait") {
-      return {
-        headline: "Connected",
-        detail: "Waiting in msg_wait for new messages.",
-        tone: "ready",
-      };
-    }
-    if (meetingTransport === "agent_mcp" && participantOnline === true) {
-      if (
-        participantConnected
-        && (
-        state === "running"
-        && hasHeadlessOutput
-        && meetingPost !== "posting"
-        && lastAcknowledgedSeq >= lastDeliveredSeq
-        )
-      ) {
-        return {
-          headline: "Connected",
-          detail: "Waiting in msg_wait for new messages.",
-          tone: "ready",
-        };
-      }
-      if (
-        participantActivity === "registered"
-        || participantActivity === "resume"
-        || participantActivity === "heartbeat"
-        || participantActivity === "cli_session_running"
-      ) {
-        return {
-          headline: "Connecting",
-          detail: "CLI process is running, but bus_connect has not completed yet.",
-          tone: "pending",
-        };
-      }
-      if (!participantConnected && Number(session?.output_cursor) > 0) {
-        return {
-          headline: "Connecting",
-          detail: "CLI produced output, but bus_connect has not completed yet.",
-          tone: "pending",
-        };
-      }
-      if (participantConnected && Number(session?.output_cursor) > 0) {
-        return {
-          headline: "Connected",
-          detail: "MCP session is active, but the wait state is not confirmed yet.",
-          tone: "pending",
-        };
-      }
     }
 
     return {
@@ -936,6 +897,8 @@
         ? "Session process is running."
         : "Session is idle.",
       tone: isActiveSession(session) ? "pending" : "neutral",
+      statusText: getSessionStatusText(session),
+      secondaryLabels: [],
     };
   }
 
@@ -963,12 +926,49 @@
         </div>
       </div>
       <div class="cli-session-card__body">
-        <div class="cli-session-card__activity" data-role="activity"></div>
-        <div class="cli-session-terminal__shell cli-session-terminal__shell--card" data-role="terminal-shell">
-          <div class="cli-session-terminal cli-session-terminal--card" data-role="terminal"></div>
-        </div>
+        <section class="cli-session-log-panel cli-session-log-panel--activity">
+          <div class="cli-session-log-panel__header">
+            <div class="cli-session-log-panel__title">Activity Log</div>
+            <label class="cli-session-log-panel__autoscroll">
+              <input type="checkbox" data-role="activity-autoscroll" checked />
+              <span>Auto-scroll</span>
+            </label>
+          </div>
+          <div class="cli-session-card__activity cli-session-log__body" data-role="activity"></div>
+        </section>
+        <section class="cli-session-log-panel cli-session-log-panel--terminal">
+          <div class="cli-session-log-panel__header">
+            <div class="cli-session-log-panel__title">CLI Output</div>
+            <label class="cli-session-log-panel__autoscroll">
+              <input type="checkbox" data-role="terminal-autoscroll" checked />
+              <span>Auto-scroll</span>
+            </label>
+          </div>
+          <div class="cli-session-terminal__shell cli-session-terminal__shell--card" data-role="terminal-shell">
+            <div class="cli-session-terminal cli-session-terminal--card" data-role="terminal"></div>
+          </div>
+        </section>
       </div>
     `;
+
+    const activityAutoscrollEl = card.querySelector('[data-role="activity-autoscroll"]');
+    const terminalAutoscrollEl = card.querySelector('[data-role="terminal-autoscroll"]');
+    if (activityAutoscrollEl) {
+      activityAutoscrollEl.checked = getAutoScrollPreference(session.id, "activity");
+      activityAutoscrollEl.addEventListener("change", () => {
+        setAutoScrollPreference(session.id, "activity", activityAutoscrollEl.checked);
+        const activityEl = card.querySelector('[data-role="activity"]');
+        scrollLogBodyToBottom(activityEl, session.id, "activity");
+      });
+    }
+    if (terminalAutoscrollEl) {
+      terminalAutoscrollEl.checked = getAutoScrollPreference(session.id, "terminal");
+      terminalAutoscrollEl.addEventListener("change", () => {
+        setAutoScrollPreference(session.id, "terminal", terminalAutoscrollEl.checked);
+        const terminalEl = card.querySelector('[data-role="terminal"]');
+        scrollLogBodyToBottom(terminalEl, session.id, "terminal");
+      });
+    }
 
     const stopBtn = card.querySelector('[data-role="stop"]');
     const kickBtn = card.querySelector('[data-role="kick"]');
@@ -1000,6 +1000,15 @@
     const terminalShellEl = card.querySelector('[data-role="terminal-shell"]');
     const stopBtn = card.querySelector('[data-role="stop"]');
     const kickBtn = card.querySelector('[data-role="kick"]');
+    const activityAutoscrollEl = card.querySelector('[data-role="activity-autoscroll"]');
+    const terminalAutoscrollEl = card.querySelector('[data-role="terminal-autoscroll"]');
+
+    if (activityAutoscrollEl) {
+      activityAutoscrollEl.checked = getAutoScrollPreference(session.id, "activity");
+    }
+    if (terminalAutoscrollEl) {
+      terminalAutoscrollEl.checked = getAutoScrollPreference(session.id, "terminal");
+    }
 
     if (avatarEl) {
       avatarEl.textContent = sessionAvatar(session);
@@ -1028,15 +1037,16 @@
     }
     if (statusEl) {
       const statusInfo = getSessionStatusInfo(session);
-      statusEl.textContent = `${statusInfo.headline} · ${statusInfo.detail}`;
+      statusEl.textContent = `${statusInfo.statusText} · ${statusInfo.detail}`;
       statusEl.dataset.tone = statusInfo.tone;
     }
     if (activityEl) {
       const timingSummary = renderTimingSummary(session);
       const toolSummary = renderToolEventSummary(session);
       const streamSummary = renderStreamEventSummary(session);
-      activityEl.textContent = `${timingSummary}\n${toolSummary}\n${streamSummary}`;
+      activityEl.innerHTML = buildActivityLogHtml(session);
       activityEl.title = `${timingSummary}\n${toolSummary}\n${streamSummary}`;
+      scrollLogBodyToBottom(activityEl, session.id, "activity");
     }
 
     const isRunning = String(session?.state || "").trim().toLowerCase() === "running";
@@ -1167,6 +1177,9 @@
     replaceThreadAgents(threadId, Array.isArray(threadAgents) ? threadAgents : []);
     replaceSessionsForThread(threadId, sessions);
     renderThread(threadId);
+    if (window.AcbAgents?.rerenderStatusBar) {
+      await window.AcbAgents.rerenderStatusBar();
+    }
 
     if (window.AcbChat && typeof window.AcbChat.refreshThreadAdmin === "function") {
       await window.AcbChat.refreshThreadAdmin(threadId, api);
@@ -1368,6 +1381,7 @@
     renderThread,
     handleSseEvent,
     getDeliverySummaryForSeq,
+    getSessionForAgent,
     selectSession,
     selectSessionFromElement,
     toggleTerminalVisibility,

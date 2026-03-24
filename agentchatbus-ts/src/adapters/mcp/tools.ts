@@ -541,6 +541,36 @@ export function listTools(): ToolDefinition[] {
   return toolDefinitions;
 }
 
+// Ensure all array-typed schemas include an `items` field so downstream
+// validators (e.g. MCP/LM integrations) don't reject the tool definitions.
+// This mutates the in-memory schemas at module load time.
+function ensureArrayItems(schema: unknown): void {
+  if (!schema || typeof schema !== "object") return;
+  const obj = schema as Record<string, unknown>;
+
+  if (obj.type === "array" && !Object.prototype.hasOwnProperty.call(obj, "items")) {
+    // Allow any item shape when not specified explicitly.
+    (obj as any).items = {};
+  }
+
+  for (const k of Object.keys(obj)) {
+    const v = obj[k];
+    if (Array.isArray(v)) {
+      for (const el of v) ensureArrayItems(el);
+    } else if (v && typeof v === "object") {
+      ensureArrayItems(v);
+    }
+  }
+}
+
+for (const t of toolDefinitions) {
+  try {
+    ensureArrayItems(t.inputSchema);
+  } catch {
+    // Non-fatal: best-effort normalization
+  }
+}
+
 type ToolCallContext = {
   sessionId?: string;
   abortSignal?: AbortSignal;

@@ -94,6 +94,7 @@
   const MAX_THREAD_LAUNCH_AGENTS = 4;
   const THREAD_LAUNCH_ADAPTER_STORAGE_KEY = "acb.threadLaunchAdapters.v1";
   const THREAD_LAUNCH_MODEL_CACHE_KEY = "acb.threadLaunchModels.v1";
+  const THREAD_LAUNCH_SELECTIONS_STORAGE_KEY = "acb.threadLaunchSelections.v1";
   // Keep this list aligned with agentchatbus-ts/src/main.ts and src/main.py so
   // the launch picker matches the server-side deterministic emoji pool.
   const THREAD_LAUNCH_EMOJI_OPTIONS = [
@@ -324,6 +325,12 @@
   }
 
   function readThreadLaunchAdapterPreferences() {
+    const selectionPreferences = readThreadLaunchSelectionPreferences();
+    if (selectionPreferences.length > 0) {
+      return selectionPreferences
+        .map((entry) => String(entry?.adapter || "").trim().toLowerCase())
+        .filter((value) => value === "codex" || value === "cursor" || value === "claude" || value === "gemini" || value === "copilot");
+    }
     try {
       const raw = globalThis.localStorage?.getItem(THREAD_LAUNCH_ADAPTER_STORAGE_KEY);
       if (!raw) {
@@ -336,6 +343,31 @@
       return parsed
         .map((value) => String(value || "").trim().toLowerCase())
         .filter((value) => value === "codex" || value === "cursor" || value === "claude" || value === "gemini" || value === "copilot");
+    } catch {
+      return [];
+    }
+  }
+
+  function readThreadLaunchSelectionPreferences() {
+    try {
+      const raw = globalThis.localStorage?.getItem(THREAD_LAUNCH_SELECTIONS_STORAGE_KEY);
+      if (!raw) {
+        return [];
+      }
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) {
+        return [];
+      }
+      return parsed
+        .map((entry) => {
+          const adapter = String(entry?.adapter || "").trim().toLowerCase();
+          const model = String(entry?.model || "").trim();
+          if (!(adapter === "codex" || adapter === "cursor" || adapter === "claude" || adapter === "gemini" || adapter === "copilot")) {
+            return null;
+          }
+          return { adapter, model };
+        })
+        .filter((entry) => Boolean(entry));
     } catch {
       return [];
     }
@@ -355,6 +387,21 @@
     }
   }
 
+  function writeThreadLaunchSelectionPreferences() {
+    try {
+      const selections = _threadLaunchAgents.map((agent) => ({
+        adapter: String(agent?.adapter || "").trim().toLowerCase() || "claude",
+        model: String(agent?.model || "").trim(),
+      }));
+      globalThis.localStorage?.setItem(
+        THREAD_LAUNCH_SELECTIONS_STORAGE_KEY,
+        JSON.stringify(selections),
+      );
+    } catch {
+      // Ignore storage failures and keep the modal usable.
+    }
+  }
+
   function getPreferredThreadLaunchAdapter(slotIndex, fallback = "claude") {
     const normalizedFallback = String(fallback || "claude").trim().toLowerCase();
     const preferences = readThreadLaunchAdapterPreferences();
@@ -366,6 +413,20 @@
       return normalizedFallback;
     }
     return "claude";
+  }
+
+  function getPreferredThreadLaunchModel(slotIndex) {
+    const preferences = readThreadLaunchSelectionPreferences();
+    return String(preferences[slotIndex]?.model || "").trim();
+  }
+
+  function getRequiredThreadLaunchModel(adapter, model) {
+    const normalizedAdapter = String(adapter || "").trim().toLowerCase();
+    const normalizedModel = String(model || "").trim();
+    if (normalizedAdapter === "cursor") {
+      return normalizedModel || "auto";
+    }
+    return normalizedModel;
   }
 
   async function _loadTemplates(api) {
@@ -586,6 +647,10 @@
       slotIndex,
       requestedAdapter || "claude",
     );
+    const preferredModel = getRequiredThreadLaunchModel(
+      adapter,
+      String(overrides.model || "").trim() || getPreferredThreadLaunchModel(slotIndex),
+    );
     const requestedEmoji = String(overrides.emoji || "").trim();
     const fallbackEmoji = pickRandomThreadLaunchEmoji();
     const emoji = THREAD_LAUNCH_EMOJI_OPTIONS.includes(requestedEmoji)
@@ -594,7 +659,7 @@
     return {
       id: `thread-agent-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       adapter,
-      model: String(overrides.model || "").trim(),
+      model: preferredModel,
       emoji,
       mode: getThreadLaunchModeForAdapter(adapter),
       meetingTransport: "agent_mcp",
@@ -936,10 +1001,11 @@
               <div class="thread-launch-model-row">
                 <input
                   type="text"
-                  value="${_escapeHtml(String(agent.model || ""))}"
+                  value="${_escapeHtml(getRequiredThreadLaunchModel(agent.adapter, agent.model))}"
                   data-agent-id="${_escapeHtml(agent.id)}"
                   data-field="model"
                   placeholder="Leave blank for adapter default, or type any model"
+                  ${agent.adapter === "cursor" ? "" : "required"}
                   onclick="event.stopPropagation(); window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')"
                   onpointerdown="event.stopPropagation(); window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')"
                   onfocus="event.stopPropagation(); window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')"
@@ -995,6 +1061,7 @@
       addBtn.disabled = _threadLaunchAgents.length >= MAX_THREAD_LAUNCH_AGENTS;
     }
     writeThreadLaunchAdapterPreferences();
+    writeThreadLaunchSelectionPreferences();
     syncModelDiscoveryUi();
     syncThreadLaunchPromptPreview();
     syncThreadLaunchUi();
@@ -1056,9 +1123,15 @@
     }
     _selectedThreadLaunchAgentId = agentId;
     if (field === "adapter") {
+      const previousAdapter = agent.adapter;
       agent.adapter = String(element.value || "claude").trim() || "claude";
       agent.mode = getThreadLaunchModeForAdapter(agent.adapter);
       agent.meetingTransport = "agent_mcp";
+      if (agent.adapter === "cursor") {
+        agent.model = getRequiredThreadLaunchModel(agent.adapter, agent.model);
+      } else if (previousAdapter === "cursor" && String(agent.model || "").trim() === "auto") {
+        agent.model = "";
+      }
       if (_threadLaunchAgents[0]?.id === agentId) {
         syncThreadLaunchGlobalInstructionField();
       }
@@ -1076,14 +1149,14 @@
       return;
     }
     if (field === "model") {
-      agent.model = String(element.value || "").trim();
+      agent.model = getRequiredThreadLaunchModel(agent.adapter, element.value);
       syncThreadLaunchPromptPreview();
       return;
     }
     if (field === "modelSuggestion") {
       const suggestedModel = String(element.value || "").trim();
       if (suggestedModel) {
-        agent.model = suggestedModel;
+        agent.model = getRequiredThreadLaunchModel(agent.adapter, suggestedModel);
       }
       renderThreadLaunchAgents();
       return;
@@ -1298,6 +1371,13 @@
     const topicInput = document.getElementById("modal-topic");
     const topic = topicInput.value.trim();
     if (!topic) return;
+
+    const modelInputs = Array.from(document.querySelectorAll('[data-field="model"]'));
+    for (const input of modelInputs) {
+      if (input instanceof HTMLInputElement && !input.reportValidity()) {
+        return;
+      }
+    }
 
     const templateSel = document.getElementById("modal-template");
     const template = templateSel ? templateSel.value || null : null;

@@ -698,9 +698,10 @@
       const tooltipHtml = `
         <div style="padding:8px 12px;min-width:260px;">
           <div style="font-size:12px;color:var(--text-2);margin-bottom:6px;">Status Legend:</div>
-          <div class="state-item"><span class="state-emoji">🟢</span> <strong>Active:</strong> Activity within 30s</div>
-          <div class="state-item"><span class="state-emoji">⏳</span> <strong>Waiting:</strong> Agent is online and currently in msg_wait</div>
-          <div class="state-item"><span class="state-emoji">⚫</span> <strong>Offline:</strong> No recent activity</div>
+          <div class="state-item"><span class="state-emoji">🚀</span> <strong>Starting:</strong> CLI is launching and bus_connect is not ready yet</div>
+          <div class="state-item"><span class="state-emoji">🟡</span> <strong>Connecting:</strong> CLI is running, but bus_connect has not completed yet</div>
+          <div class="state-item"><span class="state-emoji">🟢</span> <strong>Connected:</strong> Agent reached the bus and can show tags like msg_wait or Thinking</div>
+          <div class="state-item"><span class="state-emoji">⚫</span> <strong>Disconnected:</strong> CLI stopped, failed, completed, or the thread is closed</div>
         </div>
       `;
 
@@ -836,13 +837,23 @@ Note: Thread name is the topic label. Thread ID is the unique identifier.`;
       const resumeButtonStyle = activeThreadId ? '' : 'style="opacity:0.5;cursor:not-allowed;"';
 
       // Build status footer
-      const state = getAgentState(agent);
-      const stateEmoji = getStateEmoji(state);
-      const offlineTime = getOfflineTime(agent);
+      const session = activeThreadId && window.AcbCliSessions && agentId
+        ? window.AcbCliSessions.getSessionForAgent?.(activeThreadId, agentId) || null
+        : null;
+      const unifiedStatus = window.AcbAgentStatus?.deriveUnifiedStatus?.({
+        agent,
+        session,
+        threadStatus: activeThreadStatus || '',
+      });
+      const state = unifiedStatus?.statusText || getAgentState(agent);
+      const primaryState = unifiedStatus?.primaryLabel || getAgentState(agent);
+      const stateEmoji = unifiedStatus?.stateEmoji || getStateEmoji(primaryState);
+      const offlineTime = getOfflineTime(agent, { session, threadStatus: activeThreadStatus || '' });
       const offlineStr = offlineTime ? ` — last seen ${offlineTime}` : '';
       const isStdio = isStdioAgent ? isStdioAgent(agent) : false;
-      const transportEmoji = state.toLowerCase() === 'offline' ? '❔' : (isStdio ? '✡️' : '🌟');
-      const transportLabel = state.toLowerCase() === 'offline' ? 'unknown' : (isStdio ? 'stdio' : 'SSE');
+      const isDisconnected = String(primaryState).toLowerCase() === 'disconnected' || String(primaryState).toLowerCase() === 'offline';
+      const transportEmoji = isDisconnected ? '❔' : (isStdio ? '✡️' : '🌟');
+      const transportLabel = isDisconnected ? 'unknown' : (isStdio ? 'stdio' : 'SSE');
       const currentAdminId = String(window.__acbActiveThreadAdmin?.admin_id || '').trim();
       const roleLabel = activeThreadId && currentAdminId
         ? (currentAdminId === agentId ? 'administrator' : 'participant')
@@ -1916,16 +1927,16 @@ Note: Thread name is the topic label. Thread ID is the unique identifier.`;
       return window.AcbUtils.escapeHtml(t);
     }
 
-    function getAgentState(agent) {
-      return window.AcbAgentStatus.getAgentState(agent);
+    function getAgentState(agent, options) {
+      return window.AcbAgentStatus.getAgentState(agent, options);
     }
 
-    function getOfflineTime(agent) {
-      return window.AcbAgentStatus.getOfflineTime(agent);
+    function getOfflineTime(agent, options) {
+      return window.AcbAgentStatus.getOfflineTime(agent, options);
     }
 
-    function isOfflineMoreThanHour(agent) {
-      return window.AcbAgentStatus.isOfflineMoreThanHour(agent);
+    function isOfflineMoreThanHour(agent, options) {
+      return window.AcbAgentStatus.isOfflineMoreThanHour(agent, options);
     }
 
     function getCompressedOfflineChar(offlineTimeStr) {
@@ -1941,8 +1952,8 @@ Note: Thread name is the topic label. Thread ID is the unique identifier.`;
           return window.AcbAgentStatus.isStdioAgent(agent);
         }
 
-        function getTooltipText(agent, state, offlineDisplay) {
-          return window.AcbAgentStatus.getTooltipText(agent, state, offlineDisplay);
+        function getTooltipText(agent, state, offlineDisplay, options) {
+          return window.AcbAgentStatus.getTooltipText(agent, state, offlineDisplay, options);
     }
 
     // ==============================================================================================
