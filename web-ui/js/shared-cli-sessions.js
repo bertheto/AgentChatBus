@@ -666,6 +666,16 @@
       .join(" · ");
   }
 
+  function renderStreamEventSummary(session) {
+    const entries = Array.isArray(session?.recent_stream_events) ? session.recent_stream_events : [];
+    if (!entries.length) {
+      return "No stream input received yet.";
+    }
+    return entries
+      .map((entry) => `${formatToolEventTime(entry?.at)} received ${String(entry?.stream || "stream").trim()}`)
+      .join(" · ");
+  }
+
   function renderTimingSummary(session) {
     const parts = [];
     parts.push(`Requested ${formatToolEventTime(session?.created_at)}`);
@@ -1024,8 +1034,9 @@
     if (activityEl) {
       const timingSummary = renderTimingSummary(session);
       const toolSummary = renderToolEventSummary(session);
-      activityEl.textContent = `${timingSummary}\n${toolSummary}`;
-      activityEl.title = `${timingSummary}\n${toolSummary}`;
+      const streamSummary = renderStreamEventSummary(session);
+      activityEl.textContent = `${timingSummary}\n${toolSummary}\n${streamSummary}`;
+      activityEl.title = `${timingSummary}\n${toolSummary}\n${streamSummary}`;
     }
 
     const isRunning = String(session?.state || "").trim().toLowerCase() === "running";

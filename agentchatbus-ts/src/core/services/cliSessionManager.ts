@@ -84,6 +84,10 @@ export interface CliSessionSnapshot {
     at: string;
     tool_name: string;
   }>;
+  recent_stream_events?: Array<{
+    at: string;
+    stream: CliSessionStream;
+  }>;
 }
 
 export interface CliSessionOutputEntry {
@@ -1979,6 +1983,7 @@ export class CliSessionManager {
     runtime.snapshot.connected_at = undefined;
     runtime.snapshot.last_tool_call_at = undefined;
     runtime.snapshot.recent_tool_events = [];
+    runtime.snapshot.recent_stream_events = [];
     runtime.snapshot.updated_at = nowIso();
     this.emitSessionEvent("cli.session.started", runtime);
 
@@ -2150,6 +2155,7 @@ export class CliSessionManager {
     runtime.snapshot.output_cursor = entry.seq;
     runtime.snapshot.first_output_at = runtime.snapshot.first_output_at || entry.created_at;
     runtime.snapshot.last_output_at = entry.created_at;
+    this.pushRecentStreamEvent(runtime, stream, entry.created_at);
     runtime.output.push(entry);
     // Use more efficient array truncation to avoid memory fragmentation
     const MAX_OUTPUT_ENTRIES = 5000;
@@ -2245,6 +2251,18 @@ export class CliSessionManager {
       runtime.snapshot.connected_at = nowIsoValue;
     }
     return true;
+  }
+
+  private pushRecentStreamEvent(
+    runtime: CliSessionRuntime,
+    stream: CliSessionStream,
+    at: string,
+  ): void {
+    const entries = Array.isArray(runtime.snapshot.recent_stream_events)
+      ? [...runtime.snapshot.recent_stream_events]
+      : [];
+    entries.push({ at, stream });
+    runtime.snapshot.recent_stream_events = entries.slice(-80);
   }
 
   private recordObservedToolCall(
@@ -3899,6 +3917,9 @@ export class CliSessionManager {
       recent_tool_events: Array.isArray(snapshot.recent_tool_events)
         ? snapshot.recent_tool_events.map((entry) => ({ ...entry }))
         : snapshot.recent_tool_events,
+      recent_stream_events: Array.isArray(snapshot.recent_stream_events)
+        ? snapshot.recent_stream_events.map((entry) => ({ ...entry }))
+        : snapshot.recent_stream_events,
     };
   }
 
