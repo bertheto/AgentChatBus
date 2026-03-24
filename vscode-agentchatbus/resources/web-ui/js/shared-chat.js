@@ -1,4 +1,12 @@
 (function () {
+  function setActiveThreadAdminCache(admin) {
+    try {
+      window.__acbActiveThreadAdmin = admin && typeof admin === "object" ? { ...admin } : null;
+    } catch {
+      // Ignore cache write failures and keep UI functional.
+    }
+  }
+
   function setThreadAdminLabel(admin) {
     const adminEl = document.getElementById("thread-admin-label");
     if (!adminEl) return;
@@ -19,14 +27,17 @@
 
   async function refreshThreadAdmin(threadId, api) {
     if (!threadId) {
+      setActiveThreadAdminCache(null);
       setThreadAdminLabel(null);
       return null;
     }
     try {
       const admin = await api(`/api/threads/${threadId}/admin`);
+      setActiveThreadAdminCache(admin);
       setThreadAdminLabel(admin);
       return admin;
     } catch {
+      setActiveThreadAdminCache(null);
       setThreadAdminLabel(null);
       return null;
     }
@@ -62,7 +73,7 @@
 
     document.getElementById("thread-header").style.display = "flex";
     document.getElementById("thread-title").textContent = topic;
-    document.getElementById("compose").classList.add("visible");
+    document.getElementById("compose").classList.toggle("visible", status !== "archived");
 
     const box = document.getElementById("messages");
     box.innerHTML = "";
@@ -141,6 +152,7 @@
 
   async function sendMessage({
     getActiveThreadId,
+    getLastSeq,
     getThreadSyncContext,
     setThreadSyncContext,
     updateOnlinePresence,
@@ -223,6 +235,10 @@
       message && typeof message.id === "string" && typeof message.seq === "number" && typeof message.content === "string";
 
     let sync = getThreadSyncContext ? getThreadSyncContext(activeThreadId) : null;
+    const knownLastSeq = typeof getLastSeq === "function" ? Number(getLastSeq()) || 0 : 0;
+    if (isValidSyncContext(sync) && Number(sync.current_seq) < knownLastSeq) {
+      sync = null;
+    }
     if (!isValidSyncContext(sync)) {
       sync = await loadFreshSyncContext();
     }
@@ -275,72 +291,13 @@
     }
   }
 
-  function summarizeNames(values) {
-    const names = Array.isArray(values) ? values.filter(Boolean) : [];
-    if (!names.length) {
-      return "";
-    }
-    if (names.length <= 2) {
-      return names.join(", ");
-    }
-    return `${names.slice(0, 2).join(", ")} +${names.length - 2}`;
-  }
-
-  function updateHumanDeliveryStateForRow(row, threadId) {
-    if (!row || row.getAttribute("data-is-human") !== "1") {
-      return;
-    }
-
-    const seq = Number(row.getAttribute("data-seq") || 0);
-    const deliveryMetaEl = row.querySelector(".msg-human-delivery");
-    const summary = window.AcbCliSessions?.getDeliverySummaryForSeq?.(seq, threadId);
-    if (!summary || !summary.participantCount) {
-      if (deliveryMetaEl) {
-        deliveryMetaEl.remove();
-      }
-      return;
-    }
-
-    const waitingLabel = summarizeNames(summary.waiting);
-    const deliveredLabel = summarizeNames(summary.delivered);
-    const chips = [];
-    if (summary.waiting.length) {
-      chips.push(
-        `<span class="msg-human-delivery__chip msg-human-delivery__chip--waiting" title="Waiting for: ${waitingLabel}">Waiting for ${waitingLabel}</span>`,
-      );
-    }
-    if (summary.delivered.length) {
-      chips.push(
-        `<span class="msg-human-delivery__chip msg-human-delivery__chip--delivered" title="Delivered to: ${deliveredLabel}">Delivered to ${deliveredLabel}</span>`,
-      );
-    }
-    if (!chips.length) {
-      if (deliveryMetaEl) {
-        deliveryMetaEl.remove();
-      }
-      return;
-    }
-
-    let target = deliveryMetaEl;
-    if (!target) {
-      target = document.createElement("div");
-      target.className = "msg-human-delivery";
-      const msgCol = row.querySelector(".msg-col");
-      const reactionsEl = row.querySelector(".msg-reactions");
-      if (msgCol) {
-        msgCol.insertBefore(target, reactionsEl || null);
-      }
-    }
-    target.innerHTML = `
-      <span class="msg-human-delivery__label">Agent delivery</span>
-      ${chips.join("")}
-    `;
-  }
-
   function refreshHumanDeliveryIndicators(threadId) {
-    const activeThreadId = threadId || (window.currentThreadId || null);
+    void threadId;
     document.querySelectorAll("#messages .msg-row[data-is-human='1']").forEach((row) => {
-      updateHumanDeliveryStateForRow(row, activeThreadId);
+      const deliveryMetaEl = row.querySelector(".msg-human-delivery");
+      if (deliveryMetaEl) {
+        deliveryMetaEl.remove();
+      }
     });
   }
 

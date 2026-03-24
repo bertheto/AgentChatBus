@@ -81,6 +81,7 @@ export class StatusPanel {
         const lmProactiveBadgeClass = lmProactiveSupported ? 'ok' : 'error';
         const lmCopilotBadgeClass = lmCopilotSupported ? 'ok' : (lmModels.length > 0 ? 'warn' : 'error');
         const startupMode = this._getStartupModeSummary(m.startupMode);
+        const webUiMode = this._getWebUiModeSummary(m.startupMode, m.env?.AGENTCHATBUS_WEB_UI_DIR);
         const backend = this._getBackendSummary(m.backendEngine, m.startupMode);
         const backendSource = m.backendEngineSource || 'unknown';
         const backendVersion = m.backendVersion || 'N/A';
@@ -152,9 +153,12 @@ export class StatusPanel {
         <div class="card">
             <h2>⚙️ Startup Configuration</h2>
             <div><span class="label">Mode:</span> <span class="value mode-tag">${startupMode.icon} ${startupMode.label}</span></div>
+            <div><span class="label">Web UI Mode:</span> <span class="value mode-tag">${webUiMode.icon} ${webUiMode.label}</span></div>
             <div><span class="label">Managed By:</span> <span class="value">${startupMode.managedBy}</span></div>
             <div class="hint">${startupMode.description}</div>
+            <div class="hint">${webUiMode.description}</div>
             <div><span class="label">Resolved By:</span> <span class="value">${m.resolvedBy || 'N/A'}</span></div>
+            <div><span class="label">Web UI Path:</span> <span class="value">${isRemote ? hidden : (m.env?.AGENTCHATBUS_WEB_UI_DIR || 'N/A')}</span></div>
             <div><span class="label">Executable:</span> <span class="value">${commandDisplay}</span></div>
             <div><span class="label">Arguments:</span> <span class="value">${argsDisplay}</span></div>
             <div><span class="label">WorkDir:</span> <span class="value">${workDirDisplay}</span></div>
@@ -164,6 +168,8 @@ export class StatusPanel {
                 <div><span class="label">Supported Modes:</span> <span class="value">5</span></div>
                 <div class="mode-help-item">🛠️ <code>workspace-dev-service</code>: Extension launches local workspace agentchatbus-ts with local web-ui sources and dev auto-reload.</div>
                 <div class="mode-help-item">✅ <code>bundled-ts-service</code>: Extension launches bundled agentchatbus-ts (managed by VS Code extension).</div>
+                <div class="mode-help-item">🔒 <code>Extension Bundled Web UI</code>: Reads the web UI packaged inside the extension.</div>
+                <div class="mode-help-item">✅ <code>Workspace Web UI</code>: Reads the live <code>web-ui/</code> sources from the current repo.</div>
                 <div class="mode-help-item">🧩 <code>external-service-extension-managed</code>: External backend detected, ownership is assignable (typically started by an extension-managed bootstrap).</div>
                 <div class="mode-help-item">👤 <code>external-service-manual</code>: External backend detected, ownership is not assignable (typically started manually by command).</div>
                 <div class="mode-help-item">📡 <code>external-service-unknown</code>: External backend detected, but health payload lacks ownership detail (legacy/limited backend).</div>
@@ -319,6 +325,56 @@ export class StatusPanel {
         if (mode === 'workspace-dev-service') return 'Node.js';
         if (mode === 'bundled-ts-service') return 'Node.js';
         return 'Unknown';
+    }
+
+    private _getWebUiModeSummary(
+        startupMode: unknown,
+        webUiDir: unknown,
+    ): {
+        label: string;
+        description: string;
+        icon: string;
+    } {
+        const mode = String(startupMode || '').trim().toLowerCase();
+        const normalizedWebUiDir = String(webUiDir || '').trim().replace(/\\/g, '/').toLowerCase();
+
+        if (mode === 'bundled-ts-service') {
+            return {
+                label: 'Extension Bundled Web UI',
+                description: 'Using the web UI packaged inside the VS Code extension resources.',
+                icon: '🔒',
+            };
+        }
+
+        if (mode === 'workspace-dev-service') {
+            return {
+                label: 'Workspace Web UI',
+                description: 'Using the live web-ui sources from the current AgentChatBus workspace.',
+                icon: '✅',
+            };
+        }
+
+        if (normalizedWebUiDir.includes('/resources/web-ui')) {
+            return {
+                label: 'Extension Bundled Web UI',
+                description: 'Resolved AGENTCHATBUS_WEB_UI_DIR points at extension-packaged web UI assets.',
+                icon: '🔒',
+            };
+        }
+
+        if (normalizedWebUiDir.endsWith('/web-ui') || normalizedWebUiDir.includes('/web-ui/')) {
+            return {
+                label: 'Workspace Web UI',
+                description: 'Resolved AGENTCHATBUS_WEB_UI_DIR points at a repo/workspace web-ui directory.',
+                icon: '✅',
+            };
+        }
+
+        return {
+            label: 'Unknown Web UI Source',
+            description: 'Could not determine whether the server is using bundled or workspace web UI assets.',
+            icon: '❓',
+        };
     }
 
     private _escapeHtml(raw: unknown): string {

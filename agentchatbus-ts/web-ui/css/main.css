@@ -1017,7 +1017,7 @@ body[data-theme="light"] .thread-item .ti-pin-btn {
   gap: 10px;
   min-height: 0;
   min-width: 0;
-  height: 360px;
+  height: clamp(720px, 82vh, 960px);
   width: 100%;
   padding: 12px;
   border-radius: 16px;
@@ -1179,11 +1179,12 @@ body[data-theme="light"] .thread-item .ti-pin-btn {
 
 .cli-session-log-panel--activity {
   flex: 0 0 auto;
-  max-height: 120px;
+  max-height: 160px;
 }
 
 .cli-session-log-panel--terminal {
   flex: 1 1 auto;
+  min-height: 0;
 }
 
 .cli-session-log-panel__header {
@@ -1289,6 +1290,7 @@ body[data-theme="light"] .thread-item .ti-pin-btn {
 .cli-session-terminal__shell--card {
   border: none;
   width: 100%;
+  min-height: 600px;
 }
 
 .cli-session-terminal {
@@ -1296,6 +1298,7 @@ body[data-theme="light"] .thread-item .ti-pin-btn {
   height: 100%;
   padding: 10px 12px;
   box-sizing: border-box;
+  min-height: 560px;
 }
 
 .cli-session-terminal--card {

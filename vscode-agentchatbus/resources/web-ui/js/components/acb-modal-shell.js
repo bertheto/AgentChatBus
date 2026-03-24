@@ -107,7 +107,7 @@
                 </button>
               </div>
 
-              <div class="meeting-modal-thread-shell__intro settings-field-description">Create a thread and launch one or more agents into it.</div>
+              <div class="meeting-modal-thread-shell__intro settings-field-description">Create a thread and launch one or more agent sessions into it.</div>
 
               <div class="meeting-modal-thread-shell__body">
                 <div id="thread-create-layout" class="meeting-modal-layout meeting-modal-layout--single">
@@ -119,7 +119,7 @@
                           <input type="radio" name="thread-launch-mode" value="thread_with_agent" checked onchange="window.AcbModals && window.AcbModals.syncThreadLaunchUi()" />
                           <div>
                             <strong>Create and start agents</strong>
-                            <span>Create the thread and immediately launch one or more participant sessions.</span>
+                            <span>Create the thread and immediately launch one or more agent sessions.</span>
                           </div>
                         </label>
                         <label class="meeting-modal-radio">
@@ -143,7 +143,7 @@
                         <div class="settings-field">
                           <label class="template-selector-label" for="modal-template">Collaboration Template</label>
                           <select id="modal-template">
-                            <option value="">No template (Standard chat)</option>
+                            <option value="">Stand chat</option>
                           </select>
                           <div id="modal-template-desc" class="settings-field-description" style="margin-top:4px; min-height:1.4em;"></div>
                         </div>
@@ -154,11 +154,11 @@
                       <div class="meeting-modal-section__title">Agents To Start</div>
                       <div class="settings-field thread-launch-shared-instruction">
                         <label for="thread-launch-global-instruction">Shared Instruction</label>
-                        <input
+                        <textarea
                           id="thread-launch-global-instruction"
-                          type="text"
                           placeholder="Shared instruction for all agents"
-                        />
+                          rows="5"
+                        ></textarea>
                         <div class="settings-field-description">Applies to every agent by default. Leave an individual agent override blank to use this shared instruction.</div>
                       </div>
                       <div class="thread-launch-toolbar">
@@ -176,14 +176,26 @@
                             <option value="5">5s</option>
                           </select>
                         </div>
+                        <div class="thread-launch-toolbar__models">
+                          <button
+                            id="thread-launch-detect-models"
+                            class="btn-secondary"
+                            type="button"
+                            onclick="window.AcbModals && window.AcbModals.detectThreadLaunchModels(window.AcbApi && window.AcbApi.api)"
+                          >
+                            Detect Models
+                          </button>
+                          <div id="thread-launch-model-status" class="thread-launch-model-status">Never detected</div>
+                        </div>
                         <button id="thread-launch-add-agent" class="btn-secondary thread-launch-toolbar__add" type="button" onclick="window.AcbModals && window.AcbModals.addThreadLaunchAgent()">Add Agent</button>
                       </div>
+                      <div id="thread-launch-model-summary" class="thread-launch-model-summary"></div>
                       <div id="thread-launch-agents-list" class="thread-launch-agents-list" data-agent-count="1"></div>
                       <div class="meeting-modal-hint">Agents launch sequentially. The first active agent becomes the administrator, and later agents join as participants.</div>
                     </div>
 
                     <details id="thread-agent-side" class="meeting-modal-preview meeting-modal-preview--collapsible">
-                      <summary class="meeting-modal-preview__summary">Resolved Launch Prompt</summary>
+                      <summary id="thread-agent-prompt-summary" class="meeting-modal-preview__summary">Resolved Launch Prompt</summary>
                       <div id="thread-agent-prompt-meta" class="meeting-modal-preview__meta"></div>
                       <pre id="thread-agent-prompt-preview" class="meeting-modal-preview__body meeting-modal-preview__body--compact"></pre>
                     </details>
@@ -250,20 +262,38 @@
                       <select id="agent-modal-adapter">
                         <option value="codex">Codex</option>
                         <option value="cursor">Cursor</option>
+                        <option value="copilot">Copilot</option>
                         <option value="claude">Claude</option>
+                        <option value="gemini">Gemini</option>
                       </select>
                     </div>
                     <div class="settings-field">
                       <label for="agent-modal-mode">Mode</label>
                       <select id="agent-modal-mode">
-                        <option value="interactive">Interactive</option>
-                        <option value="headless">Headless</option>
+                        <option value="interactive">Interactive PTY</option>
+                        <option value="headless">Headless JSON Resume</option>
                       </select>
+                    </div>
+                    <div class="settings-field" style="grid-column:1 / -1;">
+                      <label for="agent-modal-model">Model</label>
+                      <div class="thread-launch-model-row">
+                        <input id="agent-modal-model" type="text" placeholder="Leave blank for adapter default, or type any model" />
+                        <select id="agent-modal-model-suggestion">
+                          <option value="">Suggestions</option>
+                        </select>
+                      </div>
                     </div>
                     <div class="settings-field" style="grid-column:1 / -1;">
                       <label for="agent-modal-display-name">Display Name</label>
                       <input id="agent-modal-display-name" type="text" placeholder="Optional: Research Agent" />
-                      <div class="settings-field-description">Leave blank to use an automatically generated participant label.</div>
+                      <div class="settings-field-description">Leave blank to use an automatically generated agent label.</div>
+                    </div>
+                    <div class="settings-field" style="grid-column:1 / -1;">
+                      <label for="agent-modal-emoji">Emoji</label>
+                      <div class="thread-launch-emoji-row">
+                        <span id="agent-modal-emoji-preview" class="thread-launch-emoji-preview" aria-hidden="true">🤖</span>
+                        <select id="agent-modal-emoji"></select>
+                      </div>
                     </div>
                   </div>
                   <div class="settings-field" style="margin-bottom:0;">

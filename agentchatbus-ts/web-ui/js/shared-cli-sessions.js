@@ -1,4 +1,6 @@
 (function () {
+  const MIN_TERMINAL_COLS = 140;
+  const MIN_TERMINAL_ROWS = 40;
   const sessionsByThread = new Map();
   const activeSessionIdByThread = new Map();
   const terminalVisibilityByThread = new Map();
@@ -498,6 +500,10 @@
     runtime.terminal.write(`\r\n[agentchatbus] ${message}\r\n`);
   }
 
+  function panelTitleForSession(session) {
+    return isInteractiveSession(session) ? "Terminal" : "CLI Output";
+  }
+
   async function getUiAgent() {
     return window.AcbUiAgent ? await window.AcbUiAgent.ensureUiAgent() : null;
   }
@@ -513,12 +519,13 @@
       return;
     }
 
-    const nextCols = Math.max(1, Math.floor(dims.cols));
-    const nextRows = Math.max(1, Math.floor(dims.rows));
+    const nextCols = Math.max(MIN_TERMINAL_COLS, Math.floor(dims.cols));
+    const nextRows = Math.max(MIN_TERMINAL_ROWS, Math.floor(dims.rows));
     if (runtime.lastResizeCols === nextCols && runtime.lastResizeRows === nextRows) {
       return;
     }
 
+    runtime.terminal.resize(nextCols, nextRows);
     runtime.fitAddon.fit();
     runtime.lastResizeCols = nextCols;
     runtime.lastResizeRows = nextRows;
@@ -540,7 +547,18 @@
       }),
     });
 
+    if (!result) {
+      return;
+    }
+
     if (result?.ok === false) {
+      const errorText = String(result.error || result.detail || "");
+      if (
+        errorText.includes("does not support terminal resize")
+        || errorText.includes("not ready for terminal resize")
+      ) {
+        return;
+      }
       throw new Error(result.error || "Resize was rejected.");
     }
   }
@@ -634,7 +652,8 @@
       convertEol: false,
       disableStdin: true,
       fontFamily: '"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
-      fontSize: 12,
+      fontSize: 10,
+      lineHeight: 1.2,
       scrollback: 5000,
       theme: {
         background: "#08111f",
@@ -660,10 +679,11 @@
       snapshotFallbackText: "",
       resizeObserver: null,
       resizeTimer: null,
-      lastResizeCols: null,
-      lastResizeRows: null,
+      lastResizeCols: MIN_TERMINAL_COLS,
+      lastResizeRows: MIN_TERMINAL_ROWS,
     };
     terminalInstances.set(session.id, runtime);
+    terminal.resize(MIN_TERMINAL_COLS, MIN_TERMINAL_ROWS);
 
     if (typeof ResizeObserver === "function") {
       runtime.resizeObserver = new ResizeObserver(() => {
@@ -1110,8 +1130,8 @@
           </div>
         </div>
         <div class="cli-session-card__actions">
-          <button type="button" class="btn-secondary btn-compact" data-role="stop">Stop CLI</button>
-          <button type="button" class="btn-secondary btn-compact cli-session-card__danger" data-role="kick">Kick Agent</button>
+          <button type="button" class="btn-secondary btn-compact" data-role="primary-action"></button>
+          <button type="button" class="btn-secondary btn-compact cli-session-card__danger" data-role="secondary-action"></button>
         </div>
       </div>
       <div class="cli-session-card__body">
@@ -1127,7 +1147,7 @@
         </section>
         <section class="cli-session-log-panel cli-session-log-panel--terminal">
           <div class="cli-session-log-panel__header">
-            <div class="cli-session-log-panel__title">CLI Output</div>
+            <div class="cli-session-log-panel__title" data-role="terminal-title">${panelTitleForSession(session)}</div>
             <label class="cli-session-log-panel__autoscroll">
               <input type="checkbox" data-role="terminal-autoscroll" checked />
               <span>Auto-scroll</span>
@@ -1159,16 +1179,34 @@
       });
     }
 
-    const stopBtn = card.querySelector('[data-role="stop"]');
-    const kickBtn = card.querySelector('[data-role="kick"]');
-    if (stopBtn) {
-      stopBtn.addEventListener("click", () => {
-        void confirmAndStopSession(session.id);
+    const primaryActionBtn = card.querySelector('[data-role="primary-action"]');
+    const secondaryActionBtn = card.querySelector('[data-role="secondary-action"]');
+    if (primaryActionBtn) {
+      primaryActionBtn.addEventListener("click", () => {
+        const currentSessionId = String(card.dataset.sessionId || session.id || "");
+        const currentSession = getSessionsForThread(getActiveThreadId()).find((item) => item.id === currentSessionId);
+        if (!currentSession) {
+          return;
+        }
+        if (isInteractiveSession(currentSession)) {
+          void sendEscapeToSession(currentSessionId);
+          return;
+        }
+        void confirmAndStopSession(currentSessionId);
       });
     }
-    if (kickBtn) {
-      kickBtn.addEventListener("click", () => {
-        void confirmAndKickAgent(session.id);
+    if (secondaryActionBtn) {
+      secondaryActionBtn.addEventListener("click", () => {
+        const currentSessionId = String(card.dataset.sessionId || session.id || "");
+        const currentSession = getSessionsForThread(getActiveThreadId()).find((item) => item.id === currentSessionId);
+        if (!currentSession) {
+          return;
+        }
+        if (isInteractiveSession(currentSession)) {
+          void sendEnterToSession(currentSessionId);
+          return;
+        }
+        void confirmAndKickAgent(currentSessionId);
       });
     }
     return card;
@@ -1188,8 +1226,9 @@
     const activityEl = card.querySelector('[data-role="activity"]');
     const terminalEl = card.querySelector('[data-role="terminal"]');
     const terminalShellEl = card.querySelector('[data-role="terminal-shell"]');
-    const stopBtn = card.querySelector('[data-role="stop"]');
-    const kickBtn = card.querySelector('[data-role="kick"]');
+    const terminalTitleEl = card.querySelector('[data-role="terminal-title"]');
+    const primaryActionBtn = card.querySelector('[data-role="primary-action"]');
+    const secondaryActionBtn = card.querySelector('[data-role="secondary-action"]');
     const activityAutoscrollEl = card.querySelector('[data-role="activity-autoscroll"]');
     const terminalAutoscrollEl = card.querySelector('[data-role="terminal-autoscroll"]');
 
@@ -1244,6 +1283,9 @@
       statusEl.textContent = `${statusInfo.statusText} · ${statusInfo.detail}`;
       statusEl.dataset.tone = statusInfo.tone;
     }
+    if (terminalTitleEl) {
+      terminalTitleEl.textContent = panelTitleForSession(session);
+    }
     if (activityEl) {
       const timingSummary = renderTimingSummary(session);
       const toolSummary = renderToolEventSummary(session);
@@ -1254,16 +1296,36 @@
     }
 
     const isRunning = String(session?.state || "").trim().toLowerCase() === "running";
-    if (stopBtn) {
-      stopBtn.disabled = !isRunning;
-      stopBtn.title = isRunning ? "Stop this CLI process after confirmation" : "This CLI process is not running";
+    if (primaryActionBtn) {
+      if (isInteractiveSession(session)) {
+        primaryActionBtn.textContent = "Esc";
+        primaryActionBtn.disabled = !isRunning;
+        primaryActionBtn.title = isRunning
+          ? "Send Escape to the interactive PTY session"
+          : "This PTY session is not running";
+      } else {
+        primaryActionBtn.textContent = "Stop CLI";
+        primaryActionBtn.disabled = !isRunning;
+        primaryActionBtn.title = isRunning
+          ? "Stop this CLI process after confirmation"
+          : "This CLI process is not running";
+      }
     }
-    if (kickBtn) {
-      const hasParticipantAgent = Boolean(String(session?.participant_agent_id || "").trim());
-      kickBtn.disabled = !hasParticipantAgent;
-      kickBtn.title = hasParticipantAgent
-        ? "Force this agent offline after confirmation"
-        : "No participant agent is attached to this session";
+    if (secondaryActionBtn) {
+      if (isInteractiveSession(session)) {
+        secondaryActionBtn.textContent = "Enter";
+        secondaryActionBtn.disabled = !isRunning;
+        secondaryActionBtn.title = isRunning
+          ? "Send Enter to the interactive PTY session"
+          : "This PTY session is not running";
+      } else {
+        const hasParticipantAgent = Boolean(String(session?.participant_agent_id || "").trim());
+        secondaryActionBtn.textContent = "Kick Agent";
+        secondaryActionBtn.disabled = !hasParticipantAgent;
+        secondaryActionBtn.title = hasParticipantAgent
+          ? "Force this agent offline after confirmation"
+          : "No participant agent is attached to this session";
+      }
     }
 
     if (terminalShellEl) {
@@ -1491,6 +1553,30 @@
     return null;
   }
 
+  async function sendSessionInputById(sessionId, text, api = window.AcbApi.api) {
+    const threadId = getActiveThreadId();
+    const session = getSessionsForThread(threadId).find((item) => item.id === sessionId);
+    if (!threadId || !session) {
+      return null;
+    }
+
+    const uiAgent = await getUiAgent();
+    if (!uiAgent) {
+      return null;
+    }
+
+    return await api(`/api/cli-sessions/${session.id}/input`, {
+      method: "POST",
+      headers: {
+        "X-Agent-Token": uiAgent.token,
+      },
+      body: JSON.stringify({
+        requested_by_agent_id: uiAgent.agent_id,
+        text,
+      }),
+    });
+  }
+
   async function kickAgentById(agentId, api = window.AcbApi.api) {
     if (!agentId) {
       return null;
@@ -1565,6 +1651,14 @@
     return result;
   }
 
+  async function sendEscapeToSession(sessionId) {
+    return await sendSessionInputById(sessionId, "\u001b");
+  }
+
+  async function sendEnterToSession(sessionId) {
+    return await sendSessionInputById(sessionId, "\r");
+  }
+
   function handleSseEvent(event) {
     const type = String(event?.type || "");
     if (!type.startsWith("cli.session.")) {
@@ -1596,9 +1690,12 @@
     selectSessionFromElement,
     toggleTerminalVisibility,
     stopSessionById,
+    sendSessionInputById,
     kickAgentById,
     confirmAndStopSession,
     confirmAndKickAgent,
+    sendEscapeToSession,
+    sendEnterToSession,
     restartSelected: () => restartSelected(window.AcbApi.api),
     stopSelected: () => stopSelected(window.AcbApi.api),
     restartLatest: () => restartSelected(window.AcbApi.api),

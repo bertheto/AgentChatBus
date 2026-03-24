@@ -1,4 +1,20 @@
 (function () {
+  let _cachedAgents = [];
+  let _lastStatusBarArgs = null;
+
+  function setCachedAgents(agents) {
+    _cachedAgents = Array.isArray(agents) ? agents.slice() : [];
+    try {
+      window.__acbCurrentAgents = _cachedAgents;
+    } catch {
+      // Ignore global cache assignment failures and keep local cache usable.
+    }
+  }
+
+  function getCachedAgents() {
+    return Array.isArray(_cachedAgents) ? _cachedAgents.slice() : [];
+  }
+
   function updateOnlinePresence({
     onlineAgentKeys,
     onlineAgentLabelsByKey,
@@ -113,6 +129,7 @@
   }) {
     hideAgentTooltip();
     const allAgents = (await api("/api/agents")) || [];
+    setCachedAgents(allAgents);
     setCurrentAgents(allAgents);
     onlineAgentKeys.clear();
     onlineAgentLabelsByKey.clear();
@@ -143,11 +160,26 @@
     escapeHtml,
     bindAgentTooltipEvents,
   }) {
+    _lastStatusBarArgs = {
+      api,
+      setCurrentAgents,
+      getActiveThreadId,
+      getAgentState,
+      getStateEmoji,
+      getOfflineTime,
+      isOfflineMoreThanHour,
+      getCompressedOfflineChar,
+      isStdioAgent,
+      getTooltipText,
+      escapeHtml,
+      bindAgentTooltipEvents,
+    };
     const activeThreadIdVal = getActiveThreadId();
     const agentsPath = activeThreadIdVal
       ? `/api/threads/${encodeURIComponent(activeThreadIdVal)}/agents`
       : "/api/agents";
     const allAgents = (await api(agentsPath)) || [];
+    setCachedAgents(allAgents);
     setCurrentAgents(allAgents);
     const container = document.getElementById("agent-status-list");
     if (!container) return;
@@ -181,16 +213,41 @@
     }
 
     participants.forEach((a) => {
-      const state = getAgentState(a);
-      const avatarEmoji = String(a?.emoji || "").trim() || "🤖";
-      const stateEmoji = getStateEmoji(state);
+      const currentAgentId = String(a?.id ?? a?.agent_id ?? "").trim();
+      const relatedSession = activeThreadIdVal && currentAgentId && window.AcbCliSessions
+        ? window.AcbCliSessions.getSessionForAgent?.(activeThreadIdVal, currentAgentId) || null
+        : null;
+      const unifiedStatus = window.AcbAgentStatus?.deriveUnifiedStatus
+        ? window.AcbAgentStatus.deriveUnifiedStatus({
+          agent: a,
+          session: relatedSession,
+          threadStatus: window.__acbActiveThreadStatus || "",
+        })
+        : null;
+      const state = unifiedStatus?.primaryLabel || getAgentState(a);
+      const avatarEmoji = unifiedStatus?.avatarEmoji || String(a?.emoji || "").trim() || "🤖";
+      const stateEmoji = unifiedStatus?.stateEmoji || getStateEmoji(state);
       const label = String(a.display_name ?? a.name ?? "").trim() || "Unknown";
-      const offlineTime = getOfflineTime(a);
+      const currentAdminId = String(window.__acbActiveThreadAdmin?.admin_id || "").trim();
+      const isAdministrator = Boolean(activeThreadIdVal && currentAdminId && currentAgentId === currentAdminId);
+      const offlineTime = getOfflineTime(a, {
+        session: relatedSession,
+        threadStatus: window.__acbActiveThreadStatus || "",
+      });
       const offlineDisplay = offlineTime ? ` (${offlineTime})` : "";
-      const isLongOffline = isOfflineMoreThanHour(a);
+      const isLongOffline = isOfflineMoreThanHour(a, {
+        session: relatedSession,
+        threadStatus: window.__acbActiveThreadStatus || "",
+      });
       const compressedChar = getCompressedOfflineChar(offlineTime);
       const isStdio = isStdioAgent ? isStdioAgent(a) : false;
-      const tooltipText = getTooltipText ? getTooltipText(a, state, offlineTime) : state;
+      const tooltipText = unifiedStatus?.tooltipText
+        || (getTooltipText
+          ? getTooltipText(a, state, offlineTime, {
+            session: relatedSession,
+            threadStatus: window.__acbActiveThreadStatus || "",
+          })
+          : state);
 
       const item = document.createElement("acb-agent-status-item");
       item.setData({
@@ -198,6 +255,8 @@
         stateEmoji,
         label,
         state,
+        stateText: unifiedStatus?.statusText || state,
+        isAdministrator,
         offlineDisplay,
         isLongOffline,
         compressedChar,
@@ -219,7 +278,15 @@
     });
   }
 
+  async function rerenderStatusBar() {
+    if (!_lastStatusBarArgs) {
+      return;
+    }
+    await updateStatusBar(_lastStatusBarArgs);
+  }
+
   window.AcbAgents = {
+    getCachedAgents,
     updateOnlinePresence,
     getAgentDisplayName,
     getAgentPresenceKey,
@@ -227,5 +294,6 @@
     rebuildActiveThreadParticipants,
     refreshAgents,
     updateStatusBar,
+    rerenderStatusBar,
   };
 })();

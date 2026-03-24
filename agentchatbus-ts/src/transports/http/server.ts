@@ -1120,6 +1120,35 @@ export function createHttpServer() {
     return { ...result, requested_by_agent_id: agentId };
   });
 
+  fastify.post("/api/cli-sessions/:sessionId/input", async (request, reply) => {
+    const params = request.params as { sessionId: string };
+    const body = request.body as JsonBody;
+    const agentId = requireAuthorizedAgent(request, reply, body, "requested_by_agent_id");
+    if (!agentId) {
+      return reply;
+    }
+    const existingSession = cliSessionManager.getSession(params.sessionId);
+    if (!existingSession) {
+      reply.code(404);
+      return { detail: "CLI session not found" };
+    }
+    if (!requireSessionController(reply, existingSession, agentId)) {
+      return reply;
+    }
+    const text = typeof body.text === "string" ? body.text : "";
+    if (!text) {
+      reply.code(400);
+      return { detail: "text is required" };
+    }
+    const result = await cliSessionManager.sendInput(params.sessionId, text);
+    if (!result) {
+      reply.code(404);
+      return { detail: "CLI session not found" };
+    }
+    reply.code(result.ok ? 200 : 400);
+    return { ...result, requested_by_agent_id: agentId };
+  });
+
   fastify.get("/api/threads/:threadId/agents", async (request) => {
     const params = request.params as { threadId: string };
     return store.getThreadAgents(params.threadId);

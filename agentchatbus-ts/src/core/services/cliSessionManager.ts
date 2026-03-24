@@ -1956,20 +1956,24 @@ export class CliSessionManager {
     if (!runtime) {
       return null;
     }
-    if (!runtime.snapshot.supports_resize || !runtime.controls?.resize) {
-      return {
-        ok: false,
-        error: `Session adapter '${runtime.snapshot.adapter}' in mode '${runtime.snapshot.mode}' does not support terminal resize.`,
-      };
-    }
     const normalizedCols = normalizeTerminalCols(cols);
     const normalizedRows = normalizeTerminalRows(rows);
-    runtime.controls.resize(normalizedCols, normalizedRows);
     runtime.snapshot.cols = normalizedCols;
     runtime.snapshot.rows = normalizedRows;
-    runtime.screenState?.terminal.resize(normalizedCols, normalizedRows);
-    if (runtime.screenState) {
-      this.refreshScreenSnapshot(runtime, snapshotHeadlessScreen(runtime.screenState.terminal));
+    if (!runtime.snapshot.supports_resize) {
+      runtime.snapshot.updated_at = nowIso();
+      this.emitSessionEvent("cli.session.state", runtime);
+      return {
+        ok: true,
+        session: this.cloneSnapshot(runtime.snapshot),
+      };
+    }
+    if (runtime.controls?.resize) {
+      runtime.controls.resize(normalizedCols, normalizedRows);
+      runtime.screenState?.terminal.resize(normalizedCols, normalizedRows);
+      if (runtime.screenState) {
+        this.refreshScreenSnapshot(runtime, snapshotHeadlessScreen(runtime.screenState.terminal));
+      }
     }
     runtime.snapshot.updated_at = nowIso();
     this.emitSessionEvent("cli.session.state", runtime);
@@ -2048,6 +2052,21 @@ export class CliSessionManager {
           },
           onControls: (controls) => {
             runtime.controls = controls;
+            if (
+              runtime.snapshot.supports_resize
+              && runtime.controls.resize
+              && Number.isFinite(runtime.snapshot.cols)
+              && Number.isFinite(runtime.snapshot.rows)
+            ) {
+              try {
+                runtime.controls.resize(
+                  normalizeTerminalCols(runtime.snapshot.cols),
+                  normalizeTerminalRows(runtime.snapshot.rows),
+                );
+              } catch {
+                // Best effort sync for early UI resize requests.
+              }
+            }
           },
         }
       );

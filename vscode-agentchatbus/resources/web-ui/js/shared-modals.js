@@ -93,10 +93,240 @@
   const DEFAULT_THREAD_LAUNCH_INTERVAL_SECONDS = 2;
   const MAX_THREAD_LAUNCH_AGENTS = 4;
   const THREAD_LAUNCH_ADAPTER_STORAGE_KEY = "acb.threadLaunchAdapters.v1";
+  const THREAD_LAUNCH_MODEL_CACHE_KEY = "acb.threadLaunchModels.v2";
+  const THREAD_LAUNCH_SELECTIONS_STORAGE_KEY = "acb.threadLaunchSelections.v1";
+  // Keep this list aligned with agentchatbus-ts/src/main.ts and src/main.py so
+  // the launch picker matches the server-side deterministic emoji pool.
+  const THREAD_LAUNCH_EMOJI_OPTIONS = [
+    // animals
+    "🦊", "🐼", "🐸", "🐙", "🦄", "🐯", "🦁", "🐵", "🐧", "🐢",
+    "🦉", "🐳", "🐝", "🦋", "🪲", "🦀", "🐞", "🦎", "🐊", "🐠",
+    "🐬", "🦖", "🦒", "🦓", "🦔", "🦦", "🦥", "🦩", "🐘", "🦛",
+    "🐨", "🐹", "🐰", "🐮", "🐷", "🐔", "🐧",
+    // plants & nature
+    "🌵", "🌲", "🌴", "🌿", "🍄", "🪴", "🍀",
+    // food
+    "🍉", "🍓", "🍒", "🍍", "🥑", "🌽", "🍕", "🍣", "🍜", "🍪",
+    "🍩", "🍫",
+    // objects & tools
+    "⚡", "🔥", "💡", "🔭", "🧪", "🧬", "🧭", "🪐", "🛰️", "📡",
+    "🔧", "🛠️", "🧰", "🧲", "🧯", "🔒", "🔑", "📌", "📎", "📚",
+    "🗺️", "🧠",
+    // games & music
+    "🎯", "🧩", "🎲", "♟️", "🎸", "🎧", "🎷",
+    // travel & misc
+    "🚲", "🛶", "🏄", "🧳", "🏺", "🪁", "🪄", "🧵", "🧶", "🪙", "🗝️",
+  ];
   let _threadLaunchAgents = [];
   let _selectedThreadLaunchAgentId = "";
+  let _cliModelDiscovery = null;
+  let _cliModelDiscoveryLoading = false;
+
+  function createEmptyCliModelDiscovery() {
+    return {
+      fetched_at: null,
+      providers: {
+        codex: { adapter: "codex", status: "ready", strategy: "static", models: [], fetched_at: "", source_label: "Static fallback" },
+        cursor: { adapter: "cursor", status: "ready", strategy: "static", models: [], fetched_at: "", source_label: "Static fallback" },
+        claude: { adapter: "claude", status: "ready", strategy: "static", models: [], fetched_at: "", source_label: "Static fallback" },
+        gemini: { adapter: "gemini", status: "ready", strategy: "static", models: [], fetched_at: "", source_label: "Static fallback" },
+        copilot: { adapter: "copilot", status: "ready", strategy: "static", models: [], fetched_at: "", source_label: "Static fallback" },
+      },
+    };
+  }
+
+  function normalizeCliModelDiscovery(payload) {
+    const base = createEmptyCliModelDiscovery();
+    const providers = payload && typeof payload === "object" && payload.providers && typeof payload.providers === "object"
+      ? payload.providers
+      : {};
+    for (const adapter of Object.keys(base.providers)) {
+      const next = providers[adapter];
+      if (!next || typeof next !== "object") {
+        continue;
+      }
+      base.providers[adapter] = {
+        adapter,
+        status: String(next.status || "ready"),
+        strategy: String(next.strategy || "static"),
+        models: Array.isArray(next.models)
+          ? next.models
+            .map((model) => ({
+              id: normalizeThreadLaunchModelValue(adapter, model?.id),
+              label: String(model?.label || model?.id || "").trim(),
+            }))
+            .filter((model) => model.id)
+          : [],
+        fetched_at: String(next.fetched_at || ""),
+        source_label: String(next.source_label || "Static fallback"),
+        error: next.error ? String(next.error) : "",
+      };
+    }
+    base.fetched_at = payload && typeof payload === "object" && payload.fetched_at
+      ? String(payload.fetched_at)
+      : null;
+    return base;
+  }
+
+  function readCliModelDiscoveryCache() {
+    try {
+      const raw = globalThis.localStorage?.getItem(THREAD_LAUNCH_MODEL_CACHE_KEY);
+      if (!raw) {
+        return null;
+      }
+      return normalizeCliModelDiscovery(JSON.parse(raw));
+    } catch {
+      return null;
+    }
+  }
+
+  function writeCliModelDiscoveryCache(snapshot) {
+    try {
+      globalThis.localStorage?.setItem(
+        THREAD_LAUNCH_MODEL_CACHE_KEY,
+        JSON.stringify(snapshot),
+      );
+    } catch {
+      // Ignore storage failures and keep the modal usable.
+    }
+  }
+
+  function getCliModelDiscovery() {
+    if (!_cliModelDiscovery) {
+      _cliModelDiscovery = readCliModelDiscoveryCache() || createEmptyCliModelDiscovery();
+    }
+    return _cliModelDiscovery;
+  }
+
+  function getModelDiscoveryEntry(adapter) {
+    const snapshot = getCliModelDiscovery();
+    return snapshot.providers?.[adapter] || null;
+  }
+
+  function getThreadLaunchAgentModelOptions(agent) {
+    const entry = getModelDiscoveryEntry(String(agent?.adapter || "codex").trim() || "codex");
+    const models = Array.isArray(entry?.models) ? entry.models : [];
+    const currentModel = String(agent?.model || "").trim();
+    const normalized = models
+      .map((model) => ({
+        id: String(model?.id || "").trim(),
+        label: String(model?.label || model?.id || "").trim(),
+      }))
+      .filter((model) => model.id);
+    if (currentModel && !normalized.some((model) => model.id === currentModel)) {
+      normalized.unshift({
+        id: currentModel,
+        label: `${currentModel} (Custom)`,
+      });
+    }
+    return normalized;
+  }
+
+  function buildThreadLaunchModelOptionsHtml(agent) {
+    const options = getThreadLaunchAgentModelOptions(agent);
+    return options.map((model) => (
+      `<option value="${_escapeHtml(model.id)}">${_escapeHtml(model.label || model.id)}</option>`
+    )).join("");
+  }
+
+  function formatDiscoveryTime(isoString) {
+    const value = String(isoString || "").trim();
+    if (!value) {
+      return "";
+    }
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) {
+      return value;
+    }
+    return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  }
+
+  function buildModelDiscoveryStatusText() {
+    const snapshot = getCliModelDiscovery();
+    if (_cliModelDiscoveryLoading) {
+      return "Detecting models...";
+    }
+    if (!snapshot?.fetched_at) {
+      return "Never detected";
+    }
+    const entries = Object.values(snapshot.providers || {});
+    const readyCount = entries.filter((entry) => entry.status === "ready").length;
+    const runtimeCount = entries.filter((entry) => entry.strategy === "runtime").length;
+    const helpCount = entries.filter((entry) => entry.strategy === "help").length;
+    const staticCount = entries.filter((entry) => entry.strategy === "static").length;
+    return `Ready ${readyCount}/5 · Runtime ${runtimeCount} · Help ${helpCount} · Static ${staticCount} · ${formatDiscoveryTime(snapshot.fetched_at)}`;
+  }
+
+  function renderModelDiscoverySummary() {
+    const summaryEl = document.getElementById("thread-launch-model-summary");
+    if (!summaryEl) {
+      return;
+    }
+    const snapshot = getCliModelDiscovery();
+    const providers = ["cursor", "copilot", "claude", "codex", "gemini"];
+    summaryEl.innerHTML = providers.map((adapter) => {
+      const entry = snapshot.providers?.[adapter];
+      if (!entry) {
+        return "";
+      }
+      const label = adapter === "cursor" ? "Cursor"
+        : adapter === "claude" ? "Claude"
+        : adapter === "gemini" ? "Gemini"
+        : adapter === "copilot" ? "Copilot"
+        : "Codex";
+      const detail = `${entry.source_label} · ${Array.isArray(entry.models) ? entry.models.length : 0} models`;
+      const error = entry.error ? ` · ${entry.error}` : "";
+      return `<span class="thread-launch-model-summary__item">${_escapeHtml(label)}: ${_escapeHtml(detail)}${_escapeHtml(error)}</span>`;
+    }).filter(Boolean).join("");
+  }
+
+  function syncModelDiscoveryUi() {
+    const statusEl = document.getElementById("thread-launch-model-status");
+    const buttonEl = document.getElementById("thread-launch-detect-models");
+    if (statusEl) {
+      statusEl.textContent = buildModelDiscoveryStatusText();
+    }
+    if (buttonEl) {
+      buttonEl.disabled = _cliModelDiscoveryLoading;
+      buttonEl.textContent = _cliModelDiscoveryLoading ? "Detecting..." : (getCliModelDiscovery()?.fetched_at ? "Refresh Models" : "Detect Models");
+    }
+    renderModelDiscoverySummary();
+  }
+
+  async function loadCliModelDiscovery(api, options = {}) {
+    if (!_cliModelDiscovery) {
+      _cliModelDiscovery = readCliModelDiscoveryCache() || createEmptyCliModelDiscovery();
+    }
+    syncModelDiscoveryUi();
+    if (!api || _cliModelDiscoveryLoading) {
+      return _cliModelDiscovery;
+    }
+    _cliModelDiscoveryLoading = true;
+    syncModelDiscoveryUi();
+    try {
+      const path = options.force === true ? "/api/cli-models/discover" : "/api/cli-models";
+      const method = options.force === true ? "POST" : "GET";
+      const payload = await api(path, { method });
+      if (payload) {
+        const normalized = normalizeCliModelDiscovery(payload);
+        _cliModelDiscovery = normalized;
+        writeCliModelDiscoveryCache(_cliModelDiscovery);
+      }
+    } finally {
+      _cliModelDiscoveryLoading = false;
+      syncModelDiscoveryUi();
+      renderThreadLaunchAgents();
+    }
+    return _cliModelDiscovery;
+  }
 
   function readThreadLaunchAdapterPreferences() {
+    const selectionPreferences = readThreadLaunchSelectionPreferences();
+    if (selectionPreferences.length > 0) {
+      return selectionPreferences
+        .map((entry) => String(entry?.adapter || "").trim().toLowerCase())
+        .filter((value) => value === "codex" || value === "cursor" || value === "claude" || value === "gemini" || value === "copilot");
+    }
     try {
       const raw = globalThis.localStorage?.getItem(THREAD_LAUNCH_ADAPTER_STORAGE_KEY);
       if (!raw) {
@@ -108,7 +338,35 @@
       }
       return parsed
         .map((value) => String(value || "").trim().toLowerCase())
-        .filter((value) => value === "codex" || value === "cursor" || value === "claude");
+        .filter((value) => value === "codex" || value === "cursor" || value === "claude" || value === "gemini" || value === "copilot");
+    } catch {
+      return [];
+    }
+  }
+
+  function readThreadLaunchSelectionPreferences() {
+    try {
+      const raw = globalThis.localStorage?.getItem(THREAD_LAUNCH_SELECTIONS_STORAGE_KEY);
+      if (!raw) {
+        return [];
+      }
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) {
+        return [];
+      }
+      return parsed
+        .map((entry) => {
+          const adapter = String(entry?.adapter || "").trim().toLowerCase();
+          const model = String(entry?.model || "").trim();
+          if (!(adapter === "codex" || adapter === "cursor" || adapter === "claude" || adapter === "gemini" || adapter === "copilot")) {
+            return null;
+          }
+          return {
+            adapter,
+            model: normalizeThreadLaunchModelValue(adapter, model),
+          };
+        })
+        .filter((entry) => Boolean(entry));
     } catch {
       return [];
     }
@@ -118,10 +376,42 @@
     try {
       const adapters = _threadLaunchAgents
         .map((agent) => String(agent?.adapter || "").trim().toLowerCase())
-        .map((value) => (value === "cursor" || value === "claude" ? value : "codex"));
+        .map((value) => (value === "cursor" || value === "claude" || value === "gemini" || value === "copilot" ? value : "codex"));
       globalThis.localStorage?.setItem(
         THREAD_LAUNCH_ADAPTER_STORAGE_KEY,
         JSON.stringify(adapters),
+      );
+    } catch {
+      // Ignore storage failures and keep the modal usable.
+    }
+  }
+
+  function writeThreadLaunchSelectionPreferences() {
+    try {
+      const selections = _threadLaunchAgents.map((agent) => ({
+        adapter: String(agent?.adapter || "").trim().toLowerCase() || "claude",
+        model: normalizeThreadLaunchModelValue(agent?.adapter, agent?.model),
+      }));
+      globalThis.localStorage?.setItem(
+        THREAD_LAUNCH_SELECTIONS_STORAGE_KEY,
+        JSON.stringify(selections),
+      );
+    } catch {
+      // Ignore storage failures and keep the modal usable.
+    }
+  }
+
+  function writeThreadLaunchSelectionPreferencesFromConfig(config) {
+    try {
+      const existing = readThreadLaunchSelectionPreferences();
+      const nextEntry = {
+        adapter: String(config?.adapter || "").trim().toLowerCase() || "claude",
+        model: normalizeThreadLaunchModelValue(config?.adapter, config?.model),
+      };
+      const nextSelections = [nextEntry, ...existing.slice(1)];
+      globalThis.localStorage?.setItem(
+        THREAD_LAUNCH_SELECTIONS_STORAGE_KEY,
+        JSON.stringify(nextSelections),
       );
     } catch {
       // Ignore storage failures and keep the modal usable.
@@ -132,13 +422,31 @@
     const normalizedFallback = String(fallback || "claude").trim().toLowerCase();
     const preferences = readThreadLaunchAdapterPreferences();
     const preferred = String(preferences[slotIndex] || "").trim().toLowerCase();
-    if (preferred === "codex" || preferred === "cursor" || preferred === "claude") {
+    if (preferred === "codex" || preferred === "cursor" || preferred === "claude" || preferred === "gemini" || preferred === "copilot") {
       return preferred;
     }
-    if (normalizedFallback === "codex" || normalizedFallback === "cursor" || normalizedFallback === "claude") {
+    if (normalizedFallback === "codex" || normalizedFallback === "cursor" || normalizedFallback === "claude" || normalizedFallback === "gemini" || normalizedFallback === "copilot") {
       return normalizedFallback;
     }
     return "claude";
+  }
+
+  function getPreferredThreadLaunchModel(slotIndex) {
+    const preferences = readThreadLaunchSelectionPreferences();
+    return String(preferences[slotIndex]?.model || "").trim();
+  }
+
+  function normalizeThreadLaunchModelValue(adapter, model) {
+    const normalizedAdapter = String(adapter || "").trim().toLowerCase();
+    const normalizedModel = String(model || "").trim();
+    if (normalizedAdapter === "cursor") {
+      return normalizedModel || "auto";
+    }
+    return normalizedModel;
+  }
+
+  function getRequiredThreadLaunchModel(adapter, model) {
+    return normalizeThreadLaunchModelValue(adapter, model);
   }
 
   async function _loadTemplates(api) {
@@ -156,7 +464,7 @@
   function _populateTemplateDropdown(templates) {
     const sel = document.getElementById("modal-template");
     if (!sel) return;
-    // Keep the first "No template" option, remove the rest
+    // Keep the first built-in default option, remove the rest
     while (sel.options.length > 1) sel.remove(1);
     for (const t of templates) {
       const opt = document.createElement("option");
@@ -223,12 +531,34 @@
   function resetAgentForm(prefix) {
     const adapterEl = document.getElementById(`${prefix}-adapter`);
     const modeEl = document.getElementById(`${prefix}-mode`);
+    const modelEl = document.getElementById(`${prefix}-model`);
+    const modelSuggestionEl = document.getElementById(`${prefix}-model-suggestion`);
     const displayNameEl = document.getElementById(`${prefix}-display-name`);
+    const emojiEl = document.getElementById(`${prefix}-emoji`);
+    const emojiPreviewEl = document.getElementById(`${prefix}-emoji-preview`);
     const instructionEl = document.getElementById(`${prefix}-instruction`);
-    if (adapterEl) adapterEl.value = "claude";
-    if (modeEl) modeEl.value = "interactive";
+    const preferredAdapter = getPreferredThreadLaunchAdapter(0, "claude");
+    const preferredModel = getRequiredThreadLaunchModel(
+      preferredAdapter,
+      getPreferredThreadLaunchModel(0),
+    );
+    const preferredEmoji = pickRandomThreadLaunchEmoji();
+    if (adapterEl) adapterEl.value = preferredAdapter;
+    if (modeEl) modeEl.value = getThreadLaunchModeForAdapter(preferredAdapter);
+    if (modelEl) modelEl.value = preferredModel;
+    if (modelSuggestionEl) modelSuggestionEl.value = "";
     if (displayNameEl) displayNameEl.value = "";
+    if (emojiEl) {
+      emojiEl.innerHTML = THREAD_LAUNCH_EMOJI_OPTIONS.map((emoji) => (
+        `<option value="${_escapeHtml(emoji)}" ${emoji === preferredEmoji ? "selected" : ""}>${_escapeHtml(emoji)}</option>`
+      )).join("");
+      emojiEl.value = preferredEmoji;
+    }
+    if (emojiPreviewEl) {
+      emojiPreviewEl.textContent = preferredEmoji;
+    }
     if (instructionEl) instructionEl.value = "";
+    syncAddAgentModelControls(prefix);
   }
 
   function resetAutoAssembleForm() {
@@ -286,24 +616,125 @@
 
   function readAgentLaunchConfig(prefix) {
     const adapter = String(document.getElementById(`${prefix}-adapter`)?.value || "codex").trim();
-    const mode = String(document.getElementById(`${prefix}-mode`)?.value || "interactive").trim();
+    const defaultMode = getThreadLaunchModeForAdapter(adapter);
+    const requestedMode = String(document.getElementById(`${prefix}-mode`)?.value || defaultMode).trim();
+    const mode = requestedMode === "headless" ? "headless" : defaultMode;
+    const model = getRequiredThreadLaunchModel(
+      adapter,
+      String(document.getElementById(`${prefix}-model`)?.value || "").trim(),
+    );
     const displayName = String(document.getElementById(`${prefix}-display-name`)?.value || "").trim();
+    const emoji = String(document.getElementById(`${prefix}-emoji`)?.value || "").trim();
     const initialInstruction = String(document.getElementById(`${prefix}-instruction`)?.value || "").trim();
     return {
       adapter,
+      model,
       mode,
       meetingTransport: "agent_mcp",
       displayName,
+      emoji,
       initialInstruction,
     };
+  }
+
+  function buildAddAgentModelOptionsHtml(adapter, currentModel = "") {
+    const options = getThreadLaunchAgentModelOptions({
+      adapter,
+      model: currentModel,
+    });
+    return options.map((model) => (
+      `<option value="${_escapeHtml(model.id)}">${_escapeHtml(model.label || model.id)}</option>`
+    )).join("");
+  }
+
+  function syncAddAgentModelControls(prefix) {
+    const adapterEl = document.getElementById(`${prefix}-adapter`);
+    const modelEl = document.getElementById(`${prefix}-model`);
+    const suggestionEl = document.getElementById(`${prefix}-model-suggestion`);
+    const emojiEl = document.getElementById(`${prefix}-emoji`);
+    const emojiPreviewEl = document.getElementById(`${prefix}-emoji-preview`);
+    if (!adapterEl) {
+      return;
+    }
+    const adapter = String(adapterEl.value || "claude").trim() || "claude";
+    if (modelEl) {
+      modelEl.value = getRequiredThreadLaunchModel(adapter, modelEl.value);
+      modelEl.required = !(adapter === "cursor" || adapter === "gemini");
+    }
+    if (suggestionEl) {
+      const currentModel = String(modelEl?.value || "").trim();
+      suggestionEl.innerHTML = `<option value="">Suggestions</option>${buildAddAgentModelOptionsHtml(adapter, currentModel)}`;
+      suggestionEl.value = "";
+    }
+    if (emojiEl && emojiPreviewEl) {
+      emojiPreviewEl.textContent = String(emojiEl.value || "").trim() || "🤖";
+    }
   }
 
   function buildDefaultParticipantName(config) {
     if (config.displayName) {
       return config.displayName;
     }
-    const adapterLabel = config.adapter === "cursor" ? "Cursor" : config.adapter === "claude" ? "Claude" : "Codex";
+    const adapterLabel = config.adapter === "cursor" ? "Cursor" :
+                         config.adapter === "claude" ? "Claude" :
+                         config.adapter === "gemini" ? "Gemini" :
+                         config.adapter === "copilot" ? "Copilot" : "Codex";
     return adapterLabel;
+  }
+
+  function getThreadLaunchModeForAdapter(adapter) {
+    void adapter;
+    return "interactive";
+  }
+
+  function getThreadLaunchModeLabel(mode) {
+    return mode === "headless" ? "Headless JSON Resume" : "Interactive PTY";
+  }
+
+  function buildThreadLaunchModeOptionsHtml(currentMode = "interactive") {
+    const normalized = currentMode === "headless" ? "headless" : "interactive";
+    return [
+      `<option value="interactive" ${normalized === "interactive" ? "selected" : ""}>Interactive PTY</option>`,
+      `<option value="headless" ${normalized === "headless" ? "selected" : ""}>Headless JSON Resume</option>`,
+    ].join("");
+  }
+
+  function getThreadLaunchUsedEmojis(excludeAgentId = "") {
+    const excluded = String(excludeAgentId || "").trim();
+    return new Set(
+      _threadLaunchAgents
+        .filter((agent) => String(agent?.id || "").trim() !== excluded)
+        .map((agent) => String(agent?.emoji || "").trim())
+        .filter((emoji) => THREAD_LAUNCH_EMOJI_OPTIONS.includes(emoji)),
+    );
+  }
+
+  function pickRandomThreadLaunchEmoji(excludeAgentId = "") {
+    const used = getThreadLaunchUsedEmojis(excludeAgentId);
+    const available = THREAD_LAUNCH_EMOJI_OPTIONS.filter((emoji) => !used.has(emoji));
+    const pool = available.length ? available : THREAD_LAUNCH_EMOJI_OPTIONS.slice();
+    if (!pool.length) {
+      return "🤖";
+    }
+    if (globalThis.crypto && typeof globalThis.crypto.getRandomValues === "function") {
+      const bytes = new Uint32Array(1);
+      globalThis.crypto.getRandomValues(bytes);
+      return pool[bytes[0] % pool.length];
+    }
+    return pool[Math.floor(Math.random() * pool.length)] || pool[0];
+  }
+
+  function getThreadLaunchEmojiOptions(agentId) {
+    const current = String(getThreadLaunchAgentById(agentId)?.emoji || "").trim();
+    const used = getThreadLaunchUsedEmojis(agentId);
+    return THREAD_LAUNCH_EMOJI_OPTIONS.filter((emoji) => emoji === current || !used.has(emoji));
+  }
+
+  function buildThreadLaunchEmojiOptionsHtml(agentId) {
+    const current = String(getThreadLaunchAgentById(agentId)?.emoji || "").trim() || "🤖";
+    return getThreadLaunchEmojiOptions(agentId).map((emoji) => (
+      `<option value="${_escapeHtml(emoji)}" ${emoji === current ? "selected" : ""}>${_escapeHtml(emoji)}</option>`
+    )).join("");
   }
 
   function createThreadLaunchAgent(overrides = {}, slotIndex = 0) {
@@ -312,10 +743,21 @@
       slotIndex,
       requestedAdapter || "claude",
     );
+    const preferredModel = getRequiredThreadLaunchModel(
+      adapter,
+      String(overrides.model || "").trim() || getPreferredThreadLaunchModel(slotIndex),
+    );
+    const requestedEmoji = String(overrides.emoji || "").trim();
+    const fallbackEmoji = pickRandomThreadLaunchEmoji();
+    const emoji = THREAD_LAUNCH_EMOJI_OPTIONS.includes(requestedEmoji)
+      ? requestedEmoji
+      : fallbackEmoji;
     return {
       id: `thread-agent-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       adapter,
-      mode: "interactive",
+      model: preferredModel,
+      emoji,
+      mode: getThreadLaunchModeForAdapter(adapter),
       meetingTransport: "agent_mcp",
       displayName: "",
       initialInstruction: "",
@@ -331,8 +773,11 @@
   function getThreadLaunchAgentConfigs() {
     return _threadLaunchAgents.map((agent) => ({
       adapter: agent.adapter || "claude",
-      mode: "interactive",
-      meetingTransport: "agent_mcp",
+      model: String(agent.model || "").trim(),
+      emoji: String(agent.emoji || "").trim() || pickRandomThreadLaunchEmoji(agent.id),
+      mode: String(agent.mode || getThreadLaunchModeForAdapter(agent.adapter || "claude")).trim()
+        || getThreadLaunchModeForAdapter(agent.adapter || "claude"),
+      meetingTransport: agent.meetingTransport || "agent_mcp",
       displayName: "",
       initialInstruction: String(agent.initialInstruction || "").trim(),
     }));
@@ -370,14 +815,10 @@
   }
 
   function buildDefaultInstruction({ topic, config, isFirstAgent }) {
-    const roleLine = isFirstAgent
-      ? "You are the first active agent in this thread."
-      : "You are joining an existing thread as a participant.";
     return [
       `You are joining the AgentChatBus thread "${topic}".`,
-      roleLine,
-      "Introduce yourself briefly, explain what you can help with, and wait for further instructions.",
-      config.adapter === "cursor" && config.mode === "headless"
+      "After joining, check the returned bus_connect role metadata, introduce yourself briefly, explain what you can help with, and wait for further instructions.",
+      config.mode === "headless"
         ? "Respond in plain text."
         : "",
     ].filter(Boolean).join(" ");
@@ -422,12 +863,23 @@
   function buildLaunchPromptPreview({ topic, threadId, config, isFirstAgent }) {
     const participantName = buildDefaultParticipantName(config);
     const initialInstruction = getResolvedThreadLaunchInstruction({ topic, config, isFirstAgent });
+    const resolvedThreadTarget = threadId
+      ? `"${topic}" (${threadId})`
+      : `"${topic}"`;
     return [
       "Please use the MCP tool `agentchatbus` to join the discussion.",
       "",
-      `Use \`bus_connect\` to join the thread "${topic}".`,
+      `Use \`bus_connect\` to join the exact thread ${resolvedThreadTarget}.`,
       "",
-      `When joining, resume the provided participant identity: ${participantName} (agent id assigned at launch time).`,
+      `Resume the provided participant identity exactly: ${participantName}.`,
+      "",
+      "Do not call `agent_register`. Do not create a new identity for this launch.",
+      "",
+      "At launch time, the real prompt will include the exact `thread_id`, `agent_id`, and `token` to pass into `bus_connect`.",
+      "",
+      "The launched CLI should call `bus_connect` once with those exact credentials.",
+      "",
+      "After `bus_connect`, treat the returned `agent.is_administrator`, `agent.role_assignment`, and `thread.administrator` fields as the source of truth for your role and the current administrator.",
       "",
       "If you need to wait for new messages, use `msg_wait` with a 10 minute timeout.",
       "",
@@ -439,8 +891,6 @@
       "",
       "Do not create a new thread.",
       "",
-      "Do not replace the provided participant identity with a new one unless resuming fails.",
-      "",
       `Initial instruction:\n${initialInstruction}`,
     ].join("\n");
   }
@@ -449,6 +899,7 @@
     const previewEl = document.getElementById("thread-agent-prompt-preview");
     const metaEl = document.getElementById("thread-agent-prompt-meta");
     const detailsEl = document.getElementById("thread-agent-side");
+    const summaryEl = document.getElementById("thread-agent-prompt-summary");
     if (!previewEl) {
       return;
     }
@@ -458,6 +909,9 @@
       previewEl.textContent = "";
       if (metaEl) {
         metaEl.textContent = "";
+      }
+      if (summaryEl) {
+        summaryEl.textContent = "Resolved Launch Prompt";
       }
       if (detailsEl) {
         detailsEl.classList.add("meeting-modal-hidden");
@@ -473,6 +927,9 @@
       config: selectedAgent,
       isFirstAgent,
     });
+    if (summaryEl) {
+      summaryEl.textContent = `Resolved Launch Prompt · ${roleLabel}`;
+    }
     if (metaEl) {
       metaEl.textContent = `Previewing Agent ${index + 1} · ${roleLabel} · ${buildDefaultParticipantName(selectedAgent)}`;
     }
@@ -500,11 +957,20 @@
       const isFirstAgent = index === 0;
       const selectedClass = agent.id === _selectedThreadLaunchAgentId ? " is-selected" : "";
       return `
-        <div class="thread-launch-agent-row${selectedClass}" onclick="window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')">
+        <div
+          class="thread-launch-agent-row${selectedClass}"
+          onclick="window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')"
+          onpointerdown="window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')"
+        >
           <div class="thread-launch-agent-row__header">
             <div class="thread-launch-agent-row__meta">
-              <button class="thread-launch-agent-row__title" type="button" onclick="event.stopPropagation(); window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')">
-                Agent ${index + 1}
+              <button
+                class="thread-launch-agent-row__title"
+                type="button"
+                onclick="event.stopPropagation(); window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')"
+                onpointerdown="event.stopPropagation(); window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')"
+              >
+                ${_escapeHtml(String(agent.emoji || "🤖").trim() || "🤖")} Agent ${index + 1}
               </button>
               <span class="thread-launch-agent-row__badge${isFirstAgent ? " thread-launch-agent-row__badge--admin" : ""}">
                 ${isFirstAgent ? "Administrator" : "Participant"}
@@ -512,11 +978,22 @@
             </div>
             ${index > 0 ? `<button class="btn-secondary btn-compact thread-launch-agent-row__remove" type="button" onclick="event.stopPropagation(); window.AcbModals && window.AcbModals.removeThreadLaunchAgent('${_escapeHtml(agent.id)}')">Remove</button>` : ""}
           </div>
-          <div class="thread-launch-agent-row__fields">
-            <div class="settings-field">
+          <div
+            class="thread-launch-agent-row__fields"
+            onclick="window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')"
+            onpointerdown="window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')"
+          >
+            <div class="settings-field thread-launch-agent-field thread-launch-agent-field--adapter">
               <label>Adapter</label>
-              <div class="thread-launch-adapter-group" onclick="event.stopPropagation()">
-                <label class="thread-launch-adapter-option">
+              <div
+                class="thread-launch-adapter-group"
+                onclick="event.stopPropagation(); window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')"
+                onpointerdown="event.stopPropagation(); window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')"
+              >
+                <label
+                  class="thread-launch-adapter-option"
+                  onpointerdown="event.stopPropagation(); window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')"
+                >
                   <input
                     type="radio"
                     name="thread-launch-adapter-${_escapeHtml(agent.id)}"
@@ -524,12 +1001,16 @@
                     data-agent-id="${_escapeHtml(agent.id)}"
                     data-field="adapter"
                     ${agent.adapter === "codex" ? "checked" : ""}
-                    onclick="event.stopPropagation()"
+                    onclick="event.stopPropagation(); window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')"
+                    onpointerdown="event.stopPropagation(); window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')"
                     onchange="window.AcbModals && window.AcbModals.updateThreadLaunchAgentField(this)"
                   />
                   <span>Codex</span>
                 </label>
-                <label class="thread-launch-adapter-option">
+                <label
+                  class="thread-launch-adapter-option"
+                  onpointerdown="event.stopPropagation(); window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')"
+                >
                   <input
                     type="radio"
                     name="thread-launch-adapter-${_escapeHtml(agent.id)}"
@@ -537,12 +1018,16 @@
                     data-agent-id="${_escapeHtml(agent.id)}"
                     data-field="adapter"
                     ${agent.adapter === "cursor" ? "checked" : ""}
-                    onclick="event.stopPropagation()"
+                    onclick="event.stopPropagation(); window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')"
+                    onpointerdown="event.stopPropagation(); window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')"
                     onchange="window.AcbModals && window.AcbModals.updateThreadLaunchAgentField(this)"
                   />
                   <span>Cursor</span>
                 </label>
-                <label class="thread-launch-adapter-option">
+                <label
+                  class="thread-launch-adapter-option"
+                  onpointerdown="event.stopPropagation(); window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')"
+                >
                   <input
                     type="radio"
                     name="thread-launch-adapter-${_escapeHtml(agent.id)}"
@@ -550,14 +1035,116 @@
                     data-agent-id="${_escapeHtml(agent.id)}"
                     data-field="adapter"
                     ${agent.adapter === "claude" ? "checked" : ""}
-                    onclick="event.stopPropagation()"
+                    onclick="event.stopPropagation(); window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')"
+                    onpointerdown="event.stopPropagation(); window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')"
                     onchange="window.AcbModals && window.AcbModals.updateThreadLaunchAgentField(this)"
                   />
                   <span>Claude</span>
                 </label>
+                <label
+                  class="thread-launch-adapter-option"
+                  onpointerdown="event.stopPropagation(); window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')"
+                >
+                  <input
+                    type="radio"
+                    name="thread-launch-adapter-${_escapeHtml(agent.id)}"
+                    value="gemini"
+                    data-agent-id="${_escapeHtml(agent.id)}"
+                    data-field="adapter"
+                    ${agent.adapter === "gemini" ? "checked" : ""}
+                    onclick="event.stopPropagation(); window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')"
+                    onpointerdown="event.stopPropagation(); window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')"
+                    onchange="window.AcbModals && window.AcbModals.updateThreadLaunchAgentField(this)"
+                  />
+                  <span>Gemini</span>
+                </label>
+                <label
+                  class="thread-launch-adapter-option"
+                  onpointerdown="event.stopPropagation(); window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')"
+                >
+                  <input
+                    type="radio"
+                    name="thread-launch-adapter-${_escapeHtml(agent.id)}"
+                    value="copilot"
+                    data-agent-id="${_escapeHtml(agent.id)}"
+                    data-field="adapter"
+                    ${agent.adapter === "copilot" ? "checked" : ""}
+                    onclick="event.stopPropagation(); window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')"
+                    onpointerdown="event.stopPropagation(); window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')"
+                    onchange="window.AcbModals && window.AcbModals.updateThreadLaunchAgentField(this)"
+                  />
+                  <span>Copilot</span>
+                </label>
               </div>
             </div>
-            <div class="settings-field">
+            <div class="settings-field thread-launch-agent-field thread-launch-agent-field--emoji">
+              <label>Emoji</label>
+              <div class="thread-launch-emoji-row">
+                <span class="thread-launch-emoji-preview" aria-hidden="true">${_escapeHtml(String(agent.emoji || "🤖").trim() || "🤖")}</span>
+                <select
+                  data-agent-id="${_escapeHtml(agent.id)}"
+                  data-field="emoji"
+                  onclick="event.stopPropagation(); window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')"
+                  onpointerdown="event.stopPropagation(); window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')"
+                  onchange="window.AcbModals && window.AcbModals.updateThreadLaunchAgentField(this)"
+                >
+                  ${buildThreadLaunchEmojiOptionsHtml(agent.id)}
+                </select>
+              </div>
+            </div>
+            <div class="settings-field thread-launch-agent-field">
+              <label>Mode</label>
+              <select
+                data-agent-id="${_escapeHtml(agent.id)}"
+                data-field="mode"
+                onclick="event.stopPropagation(); window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')"
+                onpointerdown="event.stopPropagation(); window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')"
+                onchange="window.AcbModals && window.AcbModals.updateThreadLaunchAgentField(this)"
+              >
+                ${buildThreadLaunchModeOptionsHtml(agent.mode)}
+              </select>
+              <div class="thread-launch-model-meta">${_escapeHtml(getThreadLaunchModeLabel(agent.mode))}</div>
+            </div>
+            <div class="settings-field thread-launch-agent-field thread-launch-agent-field--model">
+              <label>Model</label>
+              <div class="thread-launch-model-row">
+                <input
+                  type="text"
+                  value="${_escapeHtml(getRequiredThreadLaunchModel(agent.adapter, agent.model))}"
+                  data-agent-id="${_escapeHtml(agent.id)}"
+                  data-field="model"
+                  placeholder="Leave blank for adapter default, or type any model"
+                  ${agent.adapter === "cursor" || agent.adapter === "gemini" ? "" : "required"}
+                  onclick="event.stopPropagation(); window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')"
+                  onpointerdown="event.stopPropagation(); window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')"
+                  onfocus="event.stopPropagation(); window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')"
+                  oninput="window.AcbModals && window.AcbModals.updateThreadLaunchAgentField(this)"
+                  onchange="window.AcbModals && window.AcbModals.updateThreadLaunchAgentField(this)"
+                />
+                <select
+                  data-agent-id="${_escapeHtml(agent.id)}"
+                  data-field="modelSuggestion"
+                  onclick="event.stopPropagation(); window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')"
+                  onpointerdown="event.stopPropagation(); window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')"
+                  onchange="window.AcbModals && window.AcbModals.updateThreadLaunchAgentField(this)"
+                >
+                  <option value="">Suggestions</option>
+                  ${buildThreadLaunchModelOptionsHtml(agent)}
+                </select>
+              </div>
+              <div class="thread-launch-model-meta">${_escapeHtml((() => {
+                const entry = getModelDiscoveryEntry(agent.adapter);
+                if (!entry) {
+                  return "Type any model manually, or run Detect Models once and reuse the cache across agents.";
+                }
+                const count = Array.isArray(entry.models) ? entry.models.length : 0;
+                const when = formatDiscoveryTime(entry.fetched_at || getCliModelDiscovery()?.fetched_at || "");
+                const source = String(entry.source_label || "Static fallback").trim();
+                const error = entry.error ? ` · ${entry.error}` : "";
+                return `${source} · ${count} suggestions${when ? ` · ${when}` : ""}${error}`;
+              })())}</div>
+            </div>
+            <div class="settings-field thread-launch-agent-field thread-launch-agent-field--instruction">
               <label>Instruction Override</label>
               <input
                 type="text"
@@ -565,7 +1152,8 @@
                 data-agent-id="${_escapeHtml(agent.id)}"
                 data-field="initialInstruction"
                 placeholder="Leave blank to use the shared instruction"
-                onclick="event.stopPropagation()"
+                onclick="event.stopPropagation(); window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')"
+                onpointerdown="event.stopPropagation(); window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')"
                 onfocus="event.stopPropagation(); window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')"
                 oninput="window.AcbModals && window.AcbModals.updateThreadLaunchAgentField(this)"
               />
@@ -582,6 +1170,8 @@
       addBtn.disabled = _threadLaunchAgents.length >= MAX_THREAD_LAUNCH_AGENTS;
     }
     writeThreadLaunchAdapterPreferences();
+    writeThreadLaunchSelectionPreferences();
+    syncModelDiscoveryUi();
     syncThreadLaunchPromptPreview();
     syncThreadLaunchUi();
   }
@@ -594,6 +1184,7 @@
     if (intervalEl) {
       intervalEl.value = String(DEFAULT_THREAD_LAUNCH_INTERVAL_SECONDS);
     }
+    syncModelDiscoveryUi();
     renderThreadLaunchAgents();
   }
 
@@ -641,11 +1232,51 @@
     }
     _selectedThreadLaunchAgentId = agentId;
     if (field === "adapter") {
+      const previousAdapter = agent.adapter;
       agent.adapter = String(element.value || "claude").trim() || "claude";
+      agent.mode = getThreadLaunchModeForAdapter(agent.adapter);
+      agent.meetingTransport = "agent_mcp";
+      if (agent.adapter === "cursor" || agent.adapter === "gemini") {
+        agent.model = getRequiredThreadLaunchModel(agent.adapter, agent.model);
+      } else if (previousAdapter === "cursor" && String(agent.model || "").trim() === "auto") {
+        agent.model = "";
+      } else if (previousAdapter === "gemini" && !String(agent.model || "").trim()) {
+        agent.model = "";
+      }
       if (_threadLaunchAgents[0]?.id === agentId) {
         syncThreadLaunchGlobalInstructionField();
       }
       writeThreadLaunchAdapterPreferences();
+      renderThreadLaunchAgents();
+      return;
+    }
+    if (field === "emoji") {
+      const nextEmoji = String(element.value || "").trim();
+      if (!THREAD_LAUNCH_EMOJI_OPTIONS.includes(nextEmoji)) {
+        return;
+      }
+      agent.emoji = nextEmoji;
+      renderThreadLaunchAgents();
+      return;
+    }
+    if (field === "mode") {
+      agent.mode = String(element.value || "").trim() === "headless" ? "headless" : "interactive";
+      if (_threadLaunchAgents[0]?.id === agentId) {
+        syncThreadLaunchGlobalInstructionField();
+      }
+      renderThreadLaunchAgents();
+      return;
+    }
+    if (field === "model") {
+      agent.model = getRequiredThreadLaunchModel(agent.adapter, element.value);
+      syncThreadLaunchPromptPreview();
+      return;
+    }
+    if (field === "modelSuggestion") {
+      const suggestedModel = String(element.value || "").trim();
+      if (suggestedModel) {
+        agent.model = getRequiredThreadLaunchModel(agent.adapter, suggestedModel);
+      }
       renderThreadLaunchAgents();
       return;
     }
@@ -761,15 +1392,19 @@
   }
 
   async function registerParticipantAgent(api, config) {
-    const adapterLabel = config.adapter === "cursor" ? "Cursor" : config.adapter === "claude" ? "Claude" : "Codex";
-    const modeLabel = config.mode === "headless" ? "Headless CLI" : "Interactive CLI";
+    const adapterLabel = config.adapter === "cursor" ? "Cursor" :
+                         config.adapter === "claude" ? "Claude" :
+                         config.adapter === "gemini" ? "Gemini" :
+                         config.adapter === "copilot" ? "Copilot" : "Codex";
+    const modeLabel = config.mode === "headless" ? "Headless CLI" : "Interactive PTY";
     const displayName = buildDefaultParticipantName(config);
     const result = await api("/api/agents/register", {
       method: "POST",
       body: JSON.stringify({
         ide: adapterLabel,
-        model: modeLabel,
+        model: String(config.model || "").trim() || modeLabel,
         display_name: displayName,
+        emoji: String(config.emoji || "").trim() || undefined,
       }),
     });
     return result?.agent_id && result?.token ? result : null;
@@ -791,6 +1426,7 @@
       },
       body: JSON.stringify({
         adapter: config.adapter,
+        model: String(config.model || "").trim() || undefined,
         mode: config.mode,
         meeting_transport: config.meetingTransport,
         initial_instruction: config.initialInstruction || "",
@@ -835,8 +1471,10 @@
     setModalVisible("thread", true);
     resetThreadLaunchAgents();
     syncThreadLaunchUi();
+    syncModelDiscoveryUi();
     setTimeout(() => document.getElementById("modal-topic").focus(), 100);
     if (api) {
+      void loadCliModelDiscovery(api, { force: false });
       _loadTemplates(api).then((templates) => _populateTemplateDropdown(templates));
     }
   }
@@ -852,6 +1490,13 @@
     const topicInput = document.getElementById("modal-topic");
     const topic = topicInput.value.trim();
     if (!topic) return;
+
+    const modelInputs = Array.from(document.querySelectorAll('[data-field="model"]'));
+    for (const input of modelInputs) {
+      if (input instanceof HTMLInputElement && !input.reportValidity()) {
+        return;
+      }
+    }
 
     const templateSel = document.getElementById("modal-template");
     const template = templateSel ? templateSel.value || null : null;
@@ -882,7 +1527,7 @@
     if (shouldLaunchFirstAgent && firstAgentConfig) {
       participantAgent = await registerParticipantAgent(api, firstAgentConfig);
       if (!participantAgent) {
-        console.error("[Thread Create] Could not register participant agent");
+        console.error("[Thread Create] Could not register target agent");
         return;
       }
       creatorAuth = {
@@ -951,7 +1596,7 @@
         }
         const nextParticipantAgent = await registerParticipantAgent(api, config);
         if (!nextParticipantAgent) {
-          console.error(`[Thread Create] Could not register participant agent ${index + 2}`);
+          console.error(`[Thread Create] Could not register target agent ${index + 2}`);
           continue;
         }
         const session = await createParticipantSession(api, {
@@ -963,7 +1608,7 @@
           isFirstAgent: false,
         });
         if (!session) {
-          console.error(`[Thread Create] Failed to create participant CLI session ${index + 2}`);
+          console.error(`[Thread Create] Failed to create target agent CLI session ${index + 2}`);
         }
       }
       if (followupLaunchConfigs.length > 0 && window.AcbCliSessions && typeof window.AcbCliSessions.refreshThread === "function") {
@@ -978,11 +1623,52 @@
       return;
     }
     resetAgentForm("agent-modal");
+    syncAddAgentModelControls("agent-modal");
+    if (api) {
+      void loadCliModelDiscovery(api, { force: false }).then(() => {
+        syncAddAgentModelControls("agent-modal");
+      });
+    }
     bindInstructionAutofill("agent-modal", {
       getTopic: () => document.getElementById("thread-title")?.textContent?.trim() || "current thread",
       getThreadId: () => window.currentThreadId || "",
       isFirstAgent: false,
     });
+    const adapterEl = document.getElementById("agent-modal-adapter");
+    const modelEl = document.getElementById("agent-modal-model");
+    const modelSuggestionEl = document.getElementById("agent-modal-model-suggestion");
+    const emojiEl = document.getElementById("agent-modal-emoji");
+    const emojiPreviewEl = document.getElementById("agent-modal-emoji-preview");
+    if (adapterEl && adapterEl.dataset.addAgentBound !== "1") {
+      adapterEl.dataset.addAgentBound = "1";
+      adapterEl.addEventListener("change", () => {
+        syncAddAgentModelControls("agent-modal");
+        syncDefaultInstructionField("agent-modal", {
+          topic: document.getElementById("thread-title")?.textContent?.trim() || "current thread",
+          threadId: window.currentThreadId || "",
+          isFirstAgent: false,
+        });
+      });
+    }
+    if (modelSuggestionEl && modelSuggestionEl.dataset.addAgentBound !== "1") {
+      modelSuggestionEl.dataset.addAgentBound = "1";
+      modelSuggestionEl.addEventListener("change", () => {
+        if (modelEl && String(modelSuggestionEl.value || "").trim()) {
+          modelEl.value = getRequiredThreadLaunchModel(
+            String(adapterEl?.value || "claude").trim(),
+            modelSuggestionEl.value,
+          );
+        }
+      });
+    }
+    if (emojiEl && emojiEl.dataset.addAgentBound !== "1") {
+      emojiEl.dataset.addAgentBound = "1";
+      emojiEl.addEventListener("change", () => {
+        if (emojiPreviewEl) {
+          emojiPreviewEl.textContent = String(emojiEl.value || "").trim() || "🤖";
+        }
+      });
+    }
     resetAutoAssembleForm();
     switchAddAgentTab("manual");
     const threadTitle = document.getElementById("thread-title")?.textContent?.trim() || "current thread";
@@ -1045,10 +1731,16 @@
       return;
     }
 
+    const modelInput = document.getElementById("agent-modal-model");
+    if (modelInput instanceof HTMLInputElement && !modelInput.reportValidity()) {
+      return;
+    }
+
     const config = readAgentLaunchConfig("agent-modal");
+    writeThreadLaunchSelectionPreferencesFromConfig(config);
     const participantAgent = await registerParticipantAgent(api, config);
     if (!participantAgent) {
-      console.error("[Add Agent] Could not register participant agent");
+      console.error("[Add Agent] Could not register target agent");
       return;
     }
 
@@ -1062,7 +1754,7 @@
       isFirstAgent: false,
     });
     if (!session) {
-      console.error("[Add Agent] Failed to create participant CLI session");
+      console.error("[Add Agent] Failed to create target agent CLI session");
       return;
     }
 
@@ -1477,6 +2169,13 @@
     }
   }
 
+  async function detectThreadLaunchModels(api) {
+    if (!api) {
+      return null;
+    }
+    return await loadCliModelDiscovery(api, { force: true });
+  }
+
   window.AcbModals = {
     positionDialogNearClick,
     openThreadModal,
@@ -1484,6 +2183,7 @@
     submitThreadModal,
     syncThreadLaunchUi,
     addThreadLaunchAgent,
+    detectThreadLaunchModels,
     removeThreadLaunchAgent,
     selectThreadLaunchAgent,
     updateThreadLaunchAgentField,

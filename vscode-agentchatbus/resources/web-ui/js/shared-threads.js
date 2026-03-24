@@ -1,4 +1,70 @@
 (function () {
+  const PINNED_THREADS_STORAGE_KEY = "acb.pinnedThreads.v1";
+
+  function loadPinnedThreadIds() {
+    try {
+      const raw = window.localStorage?.getItem(PINNED_THREADS_STORAGE_KEY);
+      const parsed = raw ? JSON.parse(raw) : [];
+      return new Set(Array.isArray(parsed) ? parsed.map((id) => String(id || "").trim()).filter(Boolean) : []);
+    } catch {
+      return new Set();
+    }
+  }
+
+  function savePinnedThreadIds(ids) {
+    try {
+      const values = Array.from(ids).map((id) => String(id || "").trim()).filter(Boolean);
+      window.localStorage?.setItem(PINNED_THREADS_STORAGE_KEY, JSON.stringify(values));
+    } catch {
+      // Ignore storage write failures and keep the UI functional.
+    }
+  }
+
+  function isThreadPinned(threadId) {
+    return loadPinnedThreadIds().has(String(threadId || "").trim());
+  }
+
+  function setThreadPinned(threadId, pinned) {
+    const resolvedId = String(threadId || "").trim();
+    if (!resolvedId) {
+      return false;
+    }
+    const ids = loadPinnedThreadIds();
+    if (pinned) {
+      ids.add(resolvedId);
+    } else {
+      ids.delete(resolvedId);
+    }
+    savePinnedThreadIds(ids);
+    return ids.has(resolvedId);
+  }
+
+  function toggleThreadPinned(threadId) {
+    const resolvedId = String(threadId || "").trim();
+    const nextPinned = !isThreadPinned(resolvedId);
+    setThreadPinned(resolvedId, nextPinned);
+    return nextPinned;
+  }
+
+  function decorateThreads(threads) {
+    const pinnedIds = loadPinnedThreadIds();
+    return (Array.isArray(threads) ? threads : []).map((thread) => ({
+      ...thread,
+      isPinned: pinnedIds.has(String(thread?.id || "").trim()),
+    }));
+  }
+
+  function sortThreadsForDisplay(threads) {
+    return [...threads].sort((left, right) => {
+      const leftPinned = left?.isPinned ? 0 : 1;
+      const rightPinned = right?.isPinned ? 0 : 1;
+      if (leftPinned !== rightPinned) {
+        return leftPinned - rightPinned;
+      }
+      return String(right?.created_at || "").localeCompare(String(left?.created_at || ""));
+    });
+  }
+
   function toggleThreadFilterPanel(event) {
     if (event) event.stopPropagation();
     const panel = document.getElementById("thread-filter-panel");
@@ -42,6 +108,7 @@
     threads,
     activeThreadId,
     onSelectThread,
+    onTogglePin,
     onOpenContextMenu,
     esc,
     timeAgo,
@@ -74,6 +141,15 @@
           onOpenContextMenu(d.event, d.thread);
         }
       });
+      item.addEventListener("thread-pin-toggle", (e) => {
+        const d = e.detail || {};
+        if (!d.id) {
+          return;
+        }
+        if (typeof onTogglePin === "function") {
+          onTogglePin(d.id, d.pinned !== false);
+        }
+      });
       pane.appendChild(item);
     });
   }
@@ -82,18 +158,24 @@
     api,
     getSelectedStatuses,
     getActiveThreadId,
+    onActiveThreadStatus,
     resetThreadSelection,
     onSelectThread,
+    onTogglePin,
     onOpenContextMenu,
     esc,
     timeAgo,
     updateThreadFilterButton,
   }) {
     const response = (await api("/api/threads?include_archived=1")) || { threads: [] };
-    const allThreads = (response && response.threads) || [];
+    const allThreads = sortThreadsForDisplay(decorateThreads((response && response.threads) || []));
     const selectedStatuses = getSelectedStatuses();
     const activeThreadId = getActiveThreadId();
     const threads = allThreads.filter((t) => selectedStatuses.has(t.status));
+    if (activeThreadId && typeof onActiveThreadStatus === "function") {
+      const activeThread = allThreads.find((t) => t.id === activeThreadId) || null;
+      onActiveThreadStatus(activeThread ? normalizeThreadStatus(activeThread.status) : null);
+    }
 
     const hasActiveThread = activeThreadId && threads.some((t) => t.id === activeThreadId);
     if (activeThreadId && !hasActiveThread) {
@@ -104,6 +186,7 @@
       threads,
       activeThreadId,
       onSelectThread,
+      onTogglePin,
       onOpenContextMenu,
       esc,
       timeAgo,
@@ -112,30 +195,41 @@
     updateThreadFilterButton();
   }
 
+  function normalizeThreadStatus(value) {
+    return String(value || "").trim() || null;
+  }
+
   function openThreadContextMenu(event, thread, options = {}) {
     event.preventDefault();
     event.stopPropagation();
 
     const menu = document.getElementById("thread-context-menu");
+    const renameBtn = document.getElementById("ctx-rename");
     const archiveBtn = document.getElementById("ctx-archive");
     const unarchiveBtn = document.getElementById("ctx-unarchive");
     const closeBtn = document.getElementById("ctx-close");
+    const pinBtn = document.getElementById("ctx-pin");
     const deleteBtn = document.getElementById("ctx-delete");
-    if (!menu || !archiveBtn || !unarchiveBtn || !closeBtn || !deleteBtn) return thread;
+    if (!menu || !renameBtn || !archiveBtn || !unarchiveBtn || !closeBtn || !pinBtn || !deleteBtn) return thread;
 
     const adModeEnabled = !!options.showAd;
 
     closeBtn.disabled = adModeEnabled;
-    closeBtn.textContent = adModeEnabled ? "Close (disabled by show_ad)" : "Close";
+    closeBtn.textContent = adModeEnabled ? "🔒 Close (disabled by show_ad)" : "🔒 Close";
+    renameBtn.disabled = false;
+    renameBtn.textContent = "✏️ Rename";
     archiveBtn.disabled = false;
-    archiveBtn.textContent = "Archive";
+    archiveBtn.textContent = "🗄️ Archive";
+    pinBtn.disabled = false;
+    pinBtn.textContent = thread?.isPinned ? "📍 Unpin" : "📌 Pin";
     deleteBtn.disabled = adModeEnabled;
-    deleteBtn.textContent = adModeEnabled ? "Delete (disabled by show_ad)" : "Delete";
+    deleteBtn.textContent = adModeEnabled ? "🗑️ Delete (disabled by show_ad)" : "🗑️ Delete";
 
     if (thread.status === "archived") {
       archiveBtn.style.display = "none";
       unarchiveBtn.style.display = "block";
       unarchiveBtn.disabled = false;
+      unarchiveBtn.textContent = "📂 Unarchive";
     } else {
       archiveBtn.style.display = "block";
       unarchiveBtn.style.display = "none";
@@ -201,18 +295,35 @@
   async function closeThread({ threadId, api, refreshThreads, x = null, y = null }) {
     if (!threadId) return;
 
+    const confirmDialog = document.getElementById('confirm-dialog');
     const inputDialog = document.getElementById('input-dialog');
-    if (!inputDialog) {
-      console.error('[closeThread] Input dialog not found');
+    if (!confirmDialog || !inputDialog) {
+      console.error('[closeThread] Confirm dialog or input dialog not found');
       return;
     }
 
+    const confirmed = await confirmDialog.show({
+      title: 'Close Thread',
+      message: `
+        <strong>Closing a thread stops automatic coordination.</strong><br><br>
+        AgentChatBus will stop automatically waking offline CLI agents for this thread and stop relaying new discussion turns through the CLI meeting coordinator.<br><br>
+        Any running CLI sessions attached to this thread will also be stopped.<br><br>
+        Existing messages are preserved, and human participants can still keep chatting after closure. This action does not delete the thread.
+      `,
+      confirmText: 'Continue',
+      confirmClass: 'btn-destructive',
+      x,
+      y,
+    });
+
+    if (!confirmed) return;
+
     const summary = await inputDialog.show({
       title: 'Close Thread',
-      message: 'Optional summary for this thread (leave blank to skip):',
+      message: 'Optional closing summary for this thread (leave blank to skip):',
       placeholder: 'Enter summary...',
       value: '',
-      confirmText: 'Close',
+      confirmText: 'Close Thread',
       x,
       y,
     });
@@ -220,11 +331,15 @@
     // User cancelled the dialog
     if (summary === null) return;
 
-    await api(`/api/threads/${threadId}/close`, {
+    const result = await api(`/api/threads/${threadId}/close`, {
       method: "POST",
       body: JSON.stringify({ summary: summary || null }),
     });
     await refreshThreads();
+    if (window.AcbCliSessions && typeof window.AcbCliSessions.refreshThread === "function") {
+      await window.AcbCliSessions.refreshThread(threadId, api);
+    }
+    return result;
   }
 
   async function archiveThreadFromMenu({
@@ -340,7 +455,7 @@
 
     const prompt = `Please use AgentChatBus MCP tools to join the Thread. Enter the "${topic}" Thread, using bus_connect.
 The Thread name must match exactly. Please follow the system prompt within the Thread. All agents should maintain a cooperative attitude. If you need to modify code, you must obtain consent from other agents. Because you are reading the same codebase. Everyone can see the source code. Please be polite and avoid code conflicts. Human programmers may also participate in the discussion and assist agents. But mainly agents should cooperate with each other.
-The person who created the Thread is the Thread administrator and is responsible for administration and task coordination. If you are entering an existing Thread, wait for other agents to assign tasks. You need to confirm before making any changes.
+After bus_connect, treat the returned role metadata and thread administrator metadata as the source of truth for coordination.
 Please make sure to keep calling msg_wait. Do not exit the agent process. Do not exit the agent process unless you receive a notification. msg_wait does not consume any resources, please use msg_wait to maintain the connection.
 Task: After entering, stand by. Human programmers may need to publish requirements.`;
 
@@ -348,6 +463,78 @@ Task: After entering, stand by. Human programmers may need to publish requiremen
     if (ok) {
       console.log(`[copyJoinPrompt] Copied join prompt for thread: "${topic}"`);
     }
+  }
+
+  async function renameThreadFromMenu({
+    getContextMenuThread,
+    hideThreadContextMenu,
+    api,
+    refreshThreads,
+    getActiveThreadId,
+    onActiveThreadRenamed,
+  }) {
+    const ctx = getContextMenuThread();
+    if (!ctx?.id) return null;
+    const inputDialog = document.getElementById("input-dialog");
+    if (!inputDialog || typeof inputDialog.show !== "function") {
+      console.error("[renameThreadFromMenu] Input dialog not found");
+      return null;
+    }
+
+    const { id, topic = "", status = "discuss", _clickX = null, _clickY = null } = ctx;
+    hideThreadContextMenu();
+
+    const nextTopic = await inputDialog.show({
+      title: "Rename Thread",
+      message: "Enter a new thread name:",
+      placeholder: "Thread name",
+      value: topic,
+      confirmText: "Rename",
+      x: _clickX,
+      y: _clickY,
+    });
+
+    if (nextTopic === null) {
+      return null;
+    }
+
+    const normalizedTopic = String(nextTopic || "").trim();
+    if (!normalizedTopic || normalizedTopic === String(topic || "").trim()) {
+      return null;
+    }
+
+    const result = await api(`/api/threads/${id}/rename`, {
+      method: "POST",
+      body: JSON.stringify({ topic: normalizedTopic }),
+    });
+    if (!result || result.ok !== true || !result.thread) {
+      if (result?.detail) {
+        alert(result.detail);
+      }
+      return result || null;
+    }
+
+    await refreshThreads();
+    if (getActiveThreadId() === id && typeof onActiveThreadRenamed === "function") {
+      onActiveThreadRenamed({
+        id,
+        topic: String(result.thread.topic || normalizedTopic),
+        status: String(result.thread.status || status),
+      });
+    }
+    return result;
+  }
+
+  async function pinThreadFromMenu({
+    getContextMenuThread,
+    hideThreadContextMenu,
+    refreshThreads,
+  }) {
+    const ctx = getContextMenuThread();
+    if (!ctx?.id) return;
+    setThreadPinned(ctx.id, !Boolean(ctx.isPinned));
+    hideThreadContextMenu();
+    await refreshThreads();
   }
 
   window.AcbThreads = {
@@ -365,5 +552,10 @@ Task: After entering, stand by. Human programmers may need to publish requiremen
     exportThread,
     copyThreadNameFromMenu,
     copyJoinPromptFromMenu,
+    renameThreadFromMenu,
+    isThreadPinned,
+    setThreadPinned,
+    toggleThreadPinned,
+    pinThreadFromMenu,
   };
 })();

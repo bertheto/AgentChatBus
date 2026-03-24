@@ -1,19 +1,46 @@
 (function () {
+  const MIN_TERMINAL_COLS = 140;
+  const MIN_TERMINAL_ROWS = 40;
   const sessionsByThread = new Map();
   const activeSessionIdByThread = new Map();
   const terminalVisibilityByThread = new Map();
+  const terminalInstances = new Map();
+  const headlessOutputStateBySession = new Map();
+  const threadAgentsByThread = new Map();
+  const autoScrollPreferencesBySession = new Map();
   const ACTIVE_SESSION_STATES = new Set(["created", "starting", "running"]);
-  const terminalState = {
-    sessionId: null,
-    terminal: null,
-    fitAddon: null,
-    outputCursor: 0,
-    resizeObserver: null,
-    resizeTimer: null,
-    lastResizeCols: null,
-    lastResizeRows: null,
-    inputQueue: Promise.resolve(),
-  };
+  const DELIVERY_BUSY_REPLY_STATES = new Set(["waiting_for_reply", "working", "streaming"]);
+  const DELIVERY_BUSY_AUTOMATION_STATES = new Set([
+    "codex_working",
+    "claude_working",
+    "cursor_working",
+    "gemini_working",
+    "copilot_working",
+  ]);
+  const KNOWN_TOOL_NAMES = [
+    "bus_connect",
+    "msg_wait",
+    "msg_post",
+    "msg_get",
+    "msg_list",
+    "msg_edit",
+    "msg_react",
+    "msg_unreact",
+    "thread_create",
+    "thread_get",
+    "thread_list",
+    "thread_close",
+    "thread_archive",
+    "thread_unarchive",
+    "thread_set_state",
+    "thread_settings_get",
+    "thread_settings_update",
+    "agent_register",
+    "agent_update",
+    "agent_resume",
+    "agent_heartbeat",
+    "agent_list",
+  ];
 
   function escapeHtml(value) {
     return String(value ?? "")
@@ -32,44 +59,12 @@
     return document.getElementById("cli-session-strip");
   }
 
-  function getParticipantsEl() {
-    return document.getElementById("cli-session-participants");
-  }
-
   function getSessionCountEl() {
     return document.getElementById("cli-session-count");
   }
 
   function getDetailEl() {
     return document.getElementById("cli-session-detail");
-  }
-
-  function getTerminalEl() {
-    return document.getElementById("cli-session-terminal");
-  }
-
-  function getComposerEl() {
-    return document.getElementById("cli-session-compose");
-  }
-
-  function getDetailBadgeEl() {
-    return document.getElementById("cli-session-selected-badge");
-  }
-
-  function getDetailTitleEl() {
-    return document.getElementById("cli-session-selected-title");
-  }
-
-  function getDetailRoleEl() {
-    return document.getElementById("cli-session-selected-role");
-  }
-
-  function getDetailMetaEl() {
-    return document.getElementById("cli-session-selected-meta");
-  }
-
-  function getDetailSummaryEl() {
-    return document.getElementById("cli-session-selected-summary");
   }
 
   function getOrCreateSessionMap(threadId) {
@@ -82,8 +77,21 @@
   }
 
   function clearThreadSessions(threadId) {
+    const sessionMap = sessionsByThread.get(threadId);
     sessionsByThread.delete(threadId);
+    threadAgentsByThread.delete(threadId);
     activeSessionIdByThread.delete(threadId);
+    if (sessionMap instanceof Map) {
+      for (const sessionId of sessionMap.keys()) {
+        teardownHeadlessOutputState(sessionId);
+      }
+    }
+    for (const sessionId of Array.from(terminalInstances.keys())) {
+      const instance = terminalInstances.get(sessionId);
+      if (instance?.threadId === threadId) {
+        teardownTerminalInstance(sessionId);
+      }
+    }
   }
 
   function sessionDisplayName(session) {
@@ -95,29 +103,59 @@
     if (session?.adapter === "codex" && session?.mode === "interactive") {
       return participantLabel ? `${participantLabel} · Codex PTY` : "Codex PTY";
     }
+    if (session?.adapter === "cursor" && session?.mode === "interactive") {
+      return participantLabel ? `${participantLabel} · Cursor PTY` : "Cursor PTY";
+    }
+    if (session?.adapter === "copilot" && session?.mode === "interactive") {
+      return participantLabel ? `${participantLabel} · Copilot PTY` : "Copilot PTY";
+    }
+    if (session?.adapter === "claude" && session?.mode === "interactive") {
+      return participantLabel ? `${participantLabel} · Claude PTY` : "Claude PTY";
+    }
+    if (session?.adapter === "gemini" && session?.mode === "interactive") {
+      return participantLabel ? `${participantLabel} · Gemini PTY` : "Gemini PTY";
+    }
+    if (session?.adapter === "codex" && session?.mode === "headless") {
+      return participantLabel ? `${participantLabel} · Codex JSON resume` : "Codex JSON resume";
+    }
     if (session?.adapter === "cursor" && session?.mode === "headless") {
-      return participantLabel ? `${participantLabel} · Cursor headless` : "Cursor headless";
+      return participantLabel ? `${participantLabel} · Cursor JSON resume` : "Cursor JSON resume";
+    }
+    if (session?.adapter === "copilot" && session?.mode === "headless") {
+      return participantLabel ? `${participantLabel} · Copilot JSON resume` : "Copilot JSON resume";
+    }
+    if (session?.adapter === "claude" && session?.mode === "headless") {
+      return participantLabel ? `${participantLabel} · Claude JSON resume` : "Claude JSON resume";
+    }
+    if (session?.adapter === "gemini" && session?.mode === "headless") {
+      return participantLabel ? `${participantLabel} · Gemini JSON resume` : "Gemini JSON resume";
     }
     const base = `${String(session?.adapter || "cli")} ${String(session?.mode || "session")}`;
     return participantLabel ? `${participantLabel} · ${base}` : base;
   }
 
-  function sessionAvatar(session) {
-    const candidate = sessionDisplayName(session).replace(/[^A-Za-z0-9]/g, "");
-    return String(candidate.charAt(0) || String(session?.adapter || "A").charAt(0) || "A").toUpperCase();
+  function hasBusConnectedParticipant(session) {
+    const participantAgent = getParticipantAgent(session);
+    return Boolean(
+      window.AcbAgentStatus?.hasBusConnectedParticipant?.({
+        agent: participantAgent,
+        session,
+      }),
+    );
   }
 
-  function stateTone(state) {
-    switch (String(state || "").toLowerCase()) {
-      case "completed":
-        return "success";
-      case "failed":
-        return "error";
-      case "stopped":
-        return "warn";
-      default:
-        return "running";
-    }
+  function sessionAvatar(session) {
+    const participantAgent = getParticipantAgent(session);
+    const unifiedStatus = window.AcbAgentStatus?.deriveUnifiedStatus?.({
+      agent: participantAgent,
+      session,
+      threadStatus: getActiveThreadLifecycleStatus(),
+    });
+    return unifiedStatus?.avatarEmoji || "❓";
+  }
+
+  function resolvedRole(session) {
+    return String(session?.resolved_participant_role || session?.participant_role || "").trim().toLowerCase();
   }
 
   function stateLabel(state) {
@@ -126,15 +164,61 @@
   }
 
   function roleLabel(session) {
-    return session?.participant_role === "administrator" ? "Admin" : "Participant";
+    return resolvedRole(session) === "administrator" ? "Administrator" : "Participant";
   }
 
   function roleTone(session) {
-    return session?.participant_role === "administrator" ? "admin" : "participant";
+    return resolvedRole(session) === "administrator" ? "admin" : "participant";
   }
 
-  function isInteractiveSession(session) {
-    return Boolean(session?.supports_input);
+  function getPromptHistoryEntries(session) {
+    if (Array.isArray(session?.prompt_history) && session.prompt_history.length) {
+      return session.prompt_history;
+    }
+    const fallbackPrompt = String(session?.prompt || "");
+    if (!fallbackPrompt.trim()) {
+      return [];
+    }
+    return [{
+      at: String(session?.created_at || session?.updated_at || ""),
+      kind: "initial",
+      prompt: fallbackPrompt,
+    }];
+  }
+
+  function promptHistoryKindLabel(kind) {
+    const normalized = String(kind || "").trim().toLowerCase();
+    if (normalized === "initial") {
+      return "Initial";
+    }
+    if (normalized === "delivery") {
+      return "Delivery";
+    }
+    if (normalized === "wake") {
+      return "Wake";
+    }
+    if (normalized === "update") {
+      return "Update";
+    }
+    return normalized || "Prompt";
+  }
+
+  function buildPromptHistoryTooltip(session) {
+    const entries = getPromptHistoryEntries(session);
+    if (!entries.length) {
+      return "";
+    }
+    return entries.map((entry, index) => {
+      const timestamp = formatToolEventTime(entry?.at);
+      const label = promptHistoryKindLabel(entry?.kind);
+      const prompt = String(entry?.prompt || "").trim() || "(empty)";
+      return `${index + 1}. ${label}${timestamp ? ` ${timestamp}` : ""}\n${prompt}`;
+    }).join("\n\n");
+  }
+
+  function buildPromptTagLabel(session) {
+    const count = getPromptHistoryEntries(session).length;
+    return count > 1 ? `Prompt ${count}` : "Prompt";
   }
 
   function isActiveSession(session) {
@@ -142,8 +226,8 @@
   }
 
   function compareSessionsForDisplay(left, right) {
-    const leftAdmin = left?.participant_role === "administrator" ? 0 : 1;
-    const rightAdmin = right?.participant_role === "administrator" ? 0 : 1;
+    const leftAdmin = resolvedRole(left) === "administrator" ? 0 : 1;
+    const rightAdmin = resolvedRole(right) === "administrator" ? 0 : 1;
     if (leftAdmin !== rightAdmin) {
       return leftAdmin - rightAdmin;
     }
@@ -168,12 +252,6 @@
       return leftActive - rightActive;
     }
 
-    const leftInteractive = isInteractiveSession(left) ? 0 : 1;
-    const rightInteractive = isInteractiveSession(right) ? 0 : 1;
-    if (leftInteractive !== rightInteractive) {
-      return leftInteractive - rightInteractive;
-    }
-
     const updatedCompare = String(right?.updated_at || "").localeCompare(String(left?.updated_at || ""));
     if (updatedCompare !== 0) {
       return updatedCompare;
@@ -188,13 +266,51 @@
   }
 
   function getSessionsForThread(threadId) {
-    return Array.from((sessionsByThread.get(threadId) || new Map()).values())
-      .sort(compareSessionsForDisplay);
+    return Array.from((sessionsByThread.get(threadId) || new Map()).values()).sort(compareSessionsForDisplay);
   }
 
   function getParticipantSessionsForThread(threadId) {
-    return getSessionsForThread(threadId)
-      .filter((session) => Boolean(session?.participant_agent_id));
+    return getSessionsForThread(threadId).filter((session) => Boolean(session?.participant_agent_id));
+  }
+
+  function getSessionForAgent(threadId, agentId) {
+    const resolvedThreadId = String(threadId || "").trim();
+    const resolvedAgentId = String(agentId || "").trim();
+    if (!resolvedThreadId || !resolvedAgentId) {
+      return null;
+    }
+
+    const candidates = getSessionsForThread(resolvedThreadId).filter((session) => {
+      return String(session?.participant_agent_id || "").trim() === resolvedAgentId;
+    });
+    if (!candidates.length) {
+      return null;
+    }
+    return choosePreferredSession(candidates) || candidates[0] || null;
+  }
+
+  function isSessionDeliveryBusy(session) {
+    if (!session || !isActiveSession(session)) {
+      return false;
+    }
+
+    if (String(session?.interactive_work_state || "").trim() === "busy") {
+      return true;
+    }
+
+    if (String(session?.meeting_post_state || "").trim() === "posting") {
+      return true;
+    }
+
+    if (DELIVERY_BUSY_REPLY_STATES.has(String(session?.reply_capture_state || "").trim())) {
+      return true;
+    }
+
+    if (DELIVERY_BUSY_AUTOMATION_STATES.has(String(session?.automation_state || "").trim())) {
+      return true;
+    }
+
+    return false;
   }
 
   function getDeliverySummaryForSeq(seq, threadId = getActiveThreadId()) {
@@ -203,8 +319,7 @@
       return null;
     }
 
-    const sessions = getParticipantSessionsForThread(threadId)
-      .filter((session) => isActiveSession(session));
+    const sessions = getParticipantSessionsForThread(threadId).filter((session) => isActiveSession(session));
     if (!sessions.length) {
       return null;
     }
@@ -213,7 +328,11 @@
     const waiting = [];
     for (const session of sessions) {
       const label = sessionDisplayName(session);
-      if ((Number(session?.last_delivered_seq) || 0) >= normalizedSeq) {
+      const acknowledgedSeq = Number(session?.last_acknowledged_seq) || 0;
+      const deliveryBusy = isSessionDeliveryBusy(session);
+      const deliverySettled = acknowledgedSeq >= normalizedSeq && !deliveryBusy;
+
+      if (deliverySettled) {
         delivered.push(label);
       } else {
         waiting.push(label);
@@ -224,6 +343,8 @@
       participantCount: sessions.length,
       delivered,
       waiting,
+      waitingCount: waiting.length,
+      deliveredCount: delivered.length,
     };
   }
 
@@ -311,6 +432,9 @@
     ensureSelectedSession(session.thread_id);
     if (session.thread_id === getActiveThreadId()) {
       renderThread(session.thread_id);
+      if (window.AcbAgents?.rerenderStatusBar) {
+        void window.AcbAgents.rerenderStatusBar();
+      }
     }
   }
 
@@ -323,7 +447,6 @@
       return null;
     }
     activeSessionIdByThread.set(threadId, sessionId);
-    renderThread(threadId);
     return sessionMap.get(sessionId) || null;
   }
 
@@ -332,93 +455,80 @@
     return selectSession(sessionId);
   }
 
-  function teardownTerminal() {
-    if (terminalState.resizeObserver) {
-      terminalState.resizeObserver.disconnect();
-    }
-    if (terminalState.resizeTimer) {
-      window.clearTimeout(terminalState.resizeTimer);
-    }
-    if (terminalState.terminal) {
-      terminalState.terminal.dispose();
-    }
-    terminalState.sessionId = null;
-    terminalState.terminal = null;
-    terminalState.fitAddon = null;
-    terminalState.outputCursor = 0;
-    terminalState.resizeObserver = null;
-    terminalState.resizeTimer = null;
-    terminalState.lastResizeCols = null;
-    terminalState.lastResizeRows = null;
-    terminalState.inputQueue = Promise.resolve();
+  function getTerminalInstance(sessionId) {
+    return terminalInstances.get(sessionId) || null;
   }
 
-  function writeTerminalNotice(message) {
-    if (!terminalState.terminal) {
+  function isInteractiveSession(session) {
+    return String(session?.mode || "").trim().toLowerCase() === "interactive";
+  }
+
+  function teardownTerminalInstance(sessionId) {
+    const runtime = terminalInstances.get(sessionId);
+    if (!runtime) {
       return;
     }
-    terminalState.terminal.write(`\r\n[agentchatbus] ${message}\r\n`);
+    if (runtime.resizeObserver) {
+      runtime.resizeObserver.disconnect();
+    }
+    if (runtime.resizeTimer) {
+      window.clearTimeout(runtime.resizeTimer);
+    }
+    if (runtime.terminal) {
+      runtime.terminal.dispose();
+    }
+    terminalInstances.delete(sessionId);
+  }
+
+  function teardownHeadlessOutputState(sessionId) {
+    headlessOutputStateBySession.delete(sessionId);
+    autoScrollPreferencesBySession.delete(sessionId);
+  }
+
+  function teardownAllTerminals() {
+    for (const sessionId of Array.from(terminalInstances.keys())) {
+      teardownTerminalInstance(sessionId);
+    }
+    headlessOutputStateBySession.clear();
+  }
+
+  function writeTerminalNotice(sessionId, message) {
+    const runtime = getTerminalInstance(sessionId);
+    if (!runtime?.terminal) {
+      return;
+    }
+    runtime.terminal.write(`\r\n[agentchatbus] ${message}\r\n`);
+  }
+
+  function panelTitleForSession(session) {
+    return isInteractiveSession(session) ? "Terminal" : "CLI Output";
   }
 
   async function getUiAgent() {
     return window.AcbUiAgent ? await window.AcbUiAgent.ensureUiAgent() : null;
   }
 
-  async function sendRawInput(sessionId, text) {
-    const uiAgent = await getUiAgent();
-    if (!uiAgent) {
-      throw new Error("UI agent is not available.");
-    }
-
-    const result = await window.AcbApi.api(`/api/cli-sessions/${sessionId}/input`, {
-      method: "POST",
-      headers: {
-        "X-Agent-Token": uiAgent.token,
-      },
-      body: JSON.stringify({
-        requested_by_agent_id: uiAgent.agent_id,
-        text,
-      }),
-    });
-
-    if (result?.ok === false) {
-      throw new Error(result.error || "Input was rejected.");
-    }
-  }
-
-  function queueRawInput(sessionId, text) {
-    if (!text || !sessionId) {
-      return Promise.resolve();
-    }
-
-    terminalState.inputQueue = terminalState.inputQueue
-      .then(() => sendRawInput(sessionId, text))
-      .catch((error) => {
-        writeTerminalNotice(error instanceof Error ? error.message : String(error));
-      });
-
-    return terminalState.inputQueue;
-  }
-
   async function syncTerminalSize(sessionId) {
-    if (!terminalState.fitAddon || !terminalState.sessionId || terminalState.sessionId !== sessionId) {
+    const runtime = getTerminalInstance(sessionId);
+    if (!runtime?.fitAddon || !runtime.hostEl?.isConnected) {
       return;
     }
 
-    const dims = terminalState.fitAddon.proposeDimensions();
+    const dims = runtime.fitAddon.proposeDimensions();
     if (!dims || !Number.isFinite(dims.cols) || !Number.isFinite(dims.rows)) {
       return;
     }
 
-    const nextCols = Math.max(1, Math.floor(dims.cols));
-    const nextRows = Math.max(1, Math.floor(dims.rows));
-    if (terminalState.lastResizeCols === nextCols && terminalState.lastResizeRows === nextRows) {
+    const nextCols = Math.max(MIN_TERMINAL_COLS, Math.floor(dims.cols));
+    const nextRows = Math.max(MIN_TERMINAL_ROWS, Math.floor(dims.rows));
+    if (runtime.lastResizeCols === nextCols && runtime.lastResizeRows === nextRows) {
       return;
     }
 
-    terminalState.fitAddon.fit();
-    terminalState.lastResizeCols = nextCols;
-    terminalState.lastResizeRows = nextRows;
+    runtime.terminal.resize(nextCols, nextRows);
+    runtime.fitAddon.fit();
+    runtime.lastResizeCols = nextCols;
+    runtime.lastResizeRows = nextRows;
 
     const uiAgent = await getUiAgent();
     if (!uiAgent) {
@@ -437,61 +547,113 @@
       }),
     });
 
+    if (!result) {
+      return;
+    }
+
     if (result?.ok === false) {
+      const errorText = String(result.error || result.detail || "");
+      if (
+        errorText.includes("does not support terminal resize")
+        || errorText.includes("not ready for terminal resize")
+      ) {
+        return;
+      }
       throw new Error(result.error || "Resize was rejected.");
     }
   }
 
   function scheduleTerminalResize(sessionId) {
-    if (terminalState.resizeTimer) {
-      window.clearTimeout(terminalState.resizeTimer);
+    const runtime = getTerminalInstance(sessionId);
+    if (!runtime) {
+      return;
     }
-    terminalState.resizeTimer = window.setTimeout(() => {
+    if (runtime.resizeTimer) {
+      window.clearTimeout(runtime.resizeTimer);
+    }
+    runtime.resizeTimer = window.setTimeout(() => {
       syncTerminalSize(sessionId).catch((error) => {
-        writeTerminalNotice(error instanceof Error ? error.message : String(error));
+        writeTerminalNotice(sessionId, error instanceof Error ? error.message : String(error));
       });
     }, 80);
   }
 
-  function appendTerminalOutput(entry) {
-    if (!terminalState.terminal || !entry || typeof entry.seq !== "number") {
+  function appendTerminalOutput(sessionId, entry) {
+    const runtime = getTerminalInstance(sessionId);
+    if (!runtime?.terminal || !entry || typeof entry.seq !== "number") {
       return;
     }
-    if (entry.seq <= terminalState.outputCursor) {
+    if (entry.seq <= runtime.outputCursor) {
       return;
     }
-    terminalState.terminal.write(String(entry.text || ""));
-    terminalState.outputCursor = entry.seq;
+    runtime.terminal.write(String(entry.text || ""));
+    runtime.outputCursor = entry.seq;
   }
 
-  async function mountTerminalForSession(session) {
-    if (!isInteractiveSession(session)) {
-      teardownTerminal();
+  function buildInteractiveTerminalFallbackText(session) {
+    const values = [
+      session?.screen_excerpt,
+      session?.reply_capture_excerpt,
+      session?.stdout_excerpt,
+      session?.last_error,
+    ];
+    const merged = joinDistinctLogSections(values);
+    return merged || "Interactive terminal attached. Waiting for visible output...";
+  }
+
+  function syncInteractiveTerminalSnapshot(session) {
+    const runtime = getTerminalInstance(session?.id);
+    if (!runtime?.terminal) {
+      return;
+    }
+    if ((Number(runtime.outputCursor) || 0) > 0) {
+      return;
+    }
+    const nextText = buildInteractiveTerminalFallbackText(session);
+    if (!nextText || runtime.snapshotFallbackText === nextText) {
+      return;
+    }
+    runtime.snapshotFallbackText = nextText;
+    if (typeof runtime.terminal.reset === "function") {
+      runtime.terminal.reset();
+    } else {
+      runtime.terminal.clear();
+    }
+    runtime.terminal.write(String(nextText).replace(/\n/g, "\r\n"));
+  }
+
+  async function mountTerminalForSessionCard(session, hostEl) {
+    if (!isInteractiveSession(session) || !hostEl) {
       return;
     }
 
-    const terminalEl = getTerminalEl();
-    if (!terminalEl) {
+    const existing = getTerminalInstance(session.id);
+    if (existing?.hostEl === hostEl && existing.terminal) {
+      scheduleTerminalResize(session.id);
       return;
     }
 
-    if (terminalState.sessionId === session.id && terminalState.terminal) {
+    if (existing) {
+      teardownTerminalInstance(session.id);
+    }
+
+    hostEl.innerHTML = "";
+
+    const TerminalCtor = window.Terminal;
+    const FitAddonCtor = window.FitAddon?.FitAddon || window.FitAddon;
+    if (!TerminalCtor || !FitAddonCtor) {
+      hostEl.innerHTML = '<div class="cli-session-terminal__fallback">xterm.js did not load.</div>';
       return;
     }
 
-    teardownTerminal();
-
-    if (!window.Terminal || !window.FitAddon || !window.FitAddon.FitAddon) {
-      terminalEl.innerHTML = '<div class="cli-session-terminal__fallback">xterm.js did not load.</div>';
-      return;
-    }
-
-    const terminal = new window.Terminal({
+    const terminal = new TerminalCtor({
       allowTransparency: true,
       cursorBlink: true,
       convertEol: false,
+      disableStdin: true,
       fontFamily: '"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
-      fontSize: 12,
+      fontSize: 10,
+      lineHeight: 1.2,
       scrollback: 5000,
       theme: {
         background: "#08111f",
@@ -500,115 +662,219 @@
         selectionBackground: "rgba(59, 130, 246, 0.28)",
       },
     });
-    const fitAddon = new window.FitAddon.FitAddon();
+    const fitAddon = new FitAddonCtor();
     terminal.loadAddon(fitAddon);
-    terminal.open(terminalEl);
+    terminal.open(hostEl);
+    if (typeof terminal.attachCustomKeyEventHandler === "function") {
+      terminal.attachCustomKeyEventHandler(() => false);
+    }
 
-    terminal.onData((data) => {
-      void queueRawInput(session.id, data);
-    });
-
-    terminalState.sessionId = session.id;
-    terminalState.terminal = terminal;
-    terminalState.fitAddon = fitAddon;
-    terminalState.outputCursor = 0;
-    terminalState.lastResizeCols = null;
-    terminalState.lastResizeRows = null;
+    const runtime = {
+      sessionId: session.id,
+      threadId: session.thread_id,
+      terminal,
+      fitAddon,
+      hostEl,
+      outputCursor: 0,
+      snapshotFallbackText: "",
+      resizeObserver: null,
+      resizeTimer: null,
+      lastResizeCols: MIN_TERMINAL_COLS,
+      lastResizeRows: MIN_TERMINAL_ROWS,
+    };
+    terminalInstances.set(session.id, runtime);
+    terminal.resize(MIN_TERMINAL_COLS, MIN_TERMINAL_ROWS);
 
     if (typeof ResizeObserver === "function") {
-      terminalState.resizeObserver = new ResizeObserver(() => {
+      runtime.resizeObserver = new ResizeObserver(() => {
         scheduleTerminalResize(session.id);
       });
-      terminalState.resizeObserver.observe(terminalEl);
+      runtime.resizeObserver.observe(hostEl);
     }
 
     scheduleTerminalResize(session.id);
 
     try {
       const result = await window.AcbApi.api(`/api/cli-sessions/${session.id}/output?after=0&limit=1000`);
-      if (terminalState.sessionId !== session.id) {
+      const latest = getTerminalInstance(session.id);
+      if (!latest || latest.hostEl !== hostEl) {
         return;
       }
       const entries = Array.isArray(result?.entries) ? result.entries : [];
-      entries.forEach((entry) => appendTerminalOutput(entry));
-      terminal.focus();
+      if (entries.length) {
+        entries.forEach((entry) => appendTerminalOutput(session.id, entry));
+      } else {
+        syncInteractiveTerminalSnapshot(session);
+      }
     } catch (error) {
-      writeTerminalNotice(error instanceof Error ? error.message : String(error));
+      writeTerminalNotice(session.id, error instanceof Error ? error.message : String(error));
     }
   }
 
-  function renderSessionSummary(session) {
-    if ((session?.meeting_post_state === "error" || session?.meeting_post_state === "stale") && session?.meeting_post_error) {
-      return `<div class="cli-session-strip__body cli-session-strip__body--error">Relay error: ${escapeHtml(session.meeting_post_error)}</div>`;
-    }
-    if (session?.reply_capture_excerpt) {
-      const state = session?.reply_capture_state ? ` (${escapeHtml(session.reply_capture_state)})` : "";
-      return `<div class="cli-session-strip__body"><strong>Latest reply${state}:</strong><br>${escapeHtml(session.reply_capture_excerpt).replaceAll("\n", "<br>")}</div>`;
-    }
-    if (session?.reply_capture_error) {
-      return `<div class="cli-session-strip__body cli-session-strip__body--error">Reply capture error: ${escapeHtml(session.reply_capture_error)}</div>`;
-    }
-    if (session?.last_result) {
-      return `<div class="cli-session-strip__body"><strong>Session result:</strong><br>${escapeHtml(session.last_result)}</div>`;
-    }
-    if (session?.last_error) {
-      return `<div class="cli-session-strip__body cli-session-strip__body--error">${escapeHtml(session.last_error)}</div>`;
-    }
-    return '<div class="cli-session-strip__body cli-session-strip__body--empty">No captured reply yet.</div>';
+  function normalizeSessionLogText(value) {
+    return String(value || "")
+      .replace(/\r\n/g, "\n")
+      .replace(/\r/g, "\n")
+      .trim();
   }
 
-  function renderInteractiveBody(session) {
-    const label = escapeHtml(sessionDisplayName(session));
-    return `
-      <div class="cli-session-terminal__note">Click the terminal to focus it. Keystrokes are sent to the PTY in real time.</div>
-      <div class="cli-session-terminal__shell">
-        <div id="cli-session-terminal" class="cli-session-terminal"></div>
-      </div>
-      <div class="cli-session-compose__row">
-        <textarea id="cli-session-compose" class="cli-session-compose" rows="2" placeholder="Optional: send a full prompt line to ${label}" onkeydown="return window.AcbCliSessions && window.AcbCliSessions.handleComposerKeydown(event)"></textarea>
-        <button class="toolbar-btn cli-session-compose__send" type="button" onclick="window.AcbCliSessions && window.AcbCliSessions.sendComposerInput()">Send</button>
-      </div>
-      <div id="cli-session-selected-summary">${renderSessionSummary(session)}</div>
-    `;
+  function getAutoScrollPreference(sessionId, panelType) {
+    const existing = autoScrollPreferencesBySession.get(sessionId) || {};
+    return existing[panelType] !== false;
   }
 
-  function renderPassiveBody(session) {
-    return `<div id="cli-session-selected-summary">${renderSessionSummary(session)}</div>`;
+  function setAutoScrollPreference(sessionId, panelType, enabled) {
+    const existing = autoScrollPreferencesBySession.get(sessionId) || {};
+    existing[panelType] = enabled !== false;
+    autoScrollPreferencesBySession.set(sessionId, existing);
   }
 
-  function buildMetaBits(session) {
-    const metaBits = [
-      `${escapeHtml(session.adapter)} / ${escapeHtml(session.mode)}`,
-      `run #${escapeHtml(session.run_count)}`,
-    ];
-    if (session.participant_display_name) {
-      metaBits.push(`participant ${escapeHtml(session.participant_display_name)}`);
+  function scrollLogBodyToBottom(hostEl, sessionId, panelType) {
+    if (!hostEl || !getAutoScrollPreference(sessionId, panelType)) {
+      return;
     }
-    if (session.participant_role) {
-      metaBits.push(`role ${escapeHtml(session.participant_role)}`);
+
+    const scrollTarget = hostEl.matches?.(".cli-session-log__body")
+      ? hostEl
+      : hostEl.querySelector?.(".cli-session-log__body") || hostEl;
+
+    const applyScroll = () => {
+      scrollTarget.scrollTop = Math.max(0, scrollTarget.scrollHeight - scrollTarget.clientHeight);
+    };
+
+    applyScroll();
+    window.requestAnimationFrame(applyScroll);
+  }
+
+  function highlightToolNamesInHtml(escapedText) {
+    let html = String(escapedText || "");
+    KNOWN_TOOL_NAMES.forEach((toolName) => {
+      const pattern = new RegExp(`(^|[^A-Za-z0-9_])(${toolName})(?=$|[^A-Za-z0-9_])`, "g");
+      html = html.replace(pattern, (_, prefix, match) => `${prefix}<span class="cli-session-log__tool">${match}</span>`);
+    });
+    return html;
+  }
+
+  function formatLogHtml(text) {
+    const escaped = escapeHtml(String(text || ""));
+    return highlightToolNamesInHtml(escaped).replace(/\n/g, "<br>");
+  }
+
+  function joinDistinctLogSections(values) {
+    const seen = new Set();
+    const sections = [];
+    values.forEach((value) => {
+      const normalized = normalizeSessionLogText(value);
+      if (!normalized || seen.has(normalized)) {
+        return;
+      }
+      seen.add(normalized);
+      sections.push(normalized);
+    });
+    return sections.join("\n\n");
+  }
+
+  function buildHeadlessSessionFallbackText(session) {
+    const rawErrors = Array.isArray(session?.raw_result?.errors)
+      ? session.raw_result.errors.map((entry) => normalizeSessionLogText(entry)).filter(Boolean)
+      : [];
+    const combined = joinDistinctLogSections([
+      session?.last_error,
+      session?.stderr_excerpt,
+      session?.stdout_excerpt,
+      ...rawErrors,
+      session?.last_result,
+    ]);
+    if (combined) {
+      return combined;
     }
-    if (session.meeting_transport) {
-      metaBits.push(`transport ${escapeHtml(session.meeting_transport)}`);
+    if (String(session?.state || "") === "failed") {
+      return "This headless session failed before any terminal output was captured.";
     }
-    if (session.shell) {
-      metaBits.push(`shell ${escapeHtml(session.shell)}`);
+    return "Headless session output will appear here when logs or results become available.";
+  }
+
+  function buildHeadlessSessionOutputText(session, entries) {
+    const logText = normalizeSessionLogText(
+      Array.isArray(entries)
+        ? entries.map((entry) => String(entry?.text || "")).join("")
+        : "",
+    );
+    if (logText) {
+      return logText;
     }
-    if (session.automation_state) {
-      metaBits.push(`auto ${escapeHtml(session.automation_state)}`);
+    return buildHeadlessSessionFallbackText(session);
+  }
+
+  function renderHeadlessSessionText(hostEl, session, text) {
+    if (!hostEl) {
+      return;
     }
-    if (session.reply_capture_state) {
-      metaBits.push(`reply ${escapeHtml(session.reply_capture_state)}`);
+    hostEl.innerHTML = "";
+    const transcriptEl = document.createElement("div");
+    transcriptEl.className = "cli-session-terminal__transcript cli-session-log__body";
+    if (String(session?.state || "") === "failed") {
+      transcriptEl.classList.add("cli-session-terminal__transcript--error");
     }
-    if (session.meeting_post_state) {
-      metaBits.push(`relay ${escapeHtml(session.meeting_post_state)}`);
+    if (!normalizeSessionLogText(text)) {
+      transcriptEl.classList.add("cli-session-terminal__transcript--muted");
     }
-    if (session.external_session_id) {
-      metaBits.push(`external ${escapeHtml(session.external_session_id)}`);
+    transcriptEl.innerHTML = formatLogHtml(text);
+    hostEl.appendChild(transcriptEl);
+    scrollLogBodyToBottom(hostEl, session.id, "terminal");
+  }
+
+  async function mountHeadlessOutputForSessionCard(session, hostEl) {
+    if (!hostEl) {
+      return;
     }
-    if (session.cols && session.rows) {
-      metaBits.push(`${escapeHtml(session.cols)}x${escapeHtml(session.rows)}`);
+
+    const outputCursor = Number(session?.output_cursor) || 0;
+    const sessionState = String(session?.state || "");
+    const lastError = String(session?.last_error || "");
+    const existing = headlessOutputStateBySession.get(session.id);
+    if (
+      existing
+      && existing.hostEl === hostEl
+      && existing.outputCursor === outputCursor
+      && existing.sessionState === sessionState
+      && existing.lastError === lastError
+    ) {
+      return;
     }
-    return metaBits;
+
+    const runtime = {
+      hostEl,
+      outputCursor,
+      sessionState,
+      lastError,
+    };
+    headlessOutputStateBySession.set(session.id, runtime);
+    renderHeadlessSessionText(hostEl, session, buildHeadlessSessionFallbackText(session));
+
+    if (outputCursor <= 0) {
+      return;
+    }
+
+    try {
+      const result = await window.AcbApi.api(`/api/cli-sessions/${session.id}/output?after=0&limit=1000`);
+      const latest = headlessOutputStateBySession.get(session.id);
+      if (!latest || latest !== runtime || latest.hostEl !== hostEl) {
+        return;
+      }
+      const entries = Array.isArray(result?.entries) ? result.entries : [];
+      renderHeadlessSessionText(hostEl, session, buildHeadlessSessionOutputText(session, entries));
+    } catch (error) {
+      const latest = headlessOutputStateBySession.get(session.id);
+      if (!latest || latest !== runtime || latest.hostEl !== hostEl) {
+        return;
+      }
+      const notice = joinDistinctLogSections([
+        buildHeadlessSessionFallbackText(session),
+        error instanceof Error ? error.message : String(error),
+      ]);
+      renderHeadlessSessionText(hostEl, session, notice);
+    }
   }
 
   function ensurePanelShell(panelEl) {
@@ -619,16 +885,11 @@
     panelEl.innerHTML = `
       <div class="cli-session-strip__header">
         <div class="cli-session-strip__title">
-          <span>Participants & Sessions</span>
-          <span id="cli-session-count" class="cli-session-strip__count">0 participants</span>
-        </div>
-        <div class="cli-session-strip__actions">
-          <button class="thread-header-cta" type="button" onclick="window.openAddAgentModal && window.openAddAgentModal()">Add Agent</button>
-          <button id="cli-session-terminal-toggle" class="thread-header-cta" type="button" onclick="window.AcbCliSessions && window.AcbCliSessions.toggleTerminalVisibility()">Hide Terminal</button>
+          <span>Agent Sessions</span>
+          <span id="cli-session-count" class="cli-session-strip__count">0 sessions</span>
         </div>
       </div>
-      <div id="cli-session-participants" class="cli-session-participants"></div>
-      <div id="cli-session-detail" class="cli-session-detail"></div>
+      <div id="cli-session-detail" class="cli-session-detail cli-session-detail--grid"></div>
     `;
     panelEl.dataset.cliSessionShell = "1";
   }
@@ -639,198 +900,495 @@
       return;
     }
     const count = Array.isArray(sessions) ? sessions.length : 0;
-    countEl.textContent = `${count} participant${count === 1 ? "" : "s"}`;
+    countEl.textContent = `${count} session${count === 1 ? "" : "s"}`;
   }
 
   function renderTerminalToggle(threadId = getActiveThreadId()) {
-    const toggleEl = document.getElementById("cli-session-terminal-toggle");
+    const toggleEl = document.getElementById("thread-agent-panel-toggle");
     if (!toggleEl) {
       return;
     }
     const visible = isTerminalVisible(threadId);
-    toggleEl.textContent = visible ? "Hide Agent Panel" : "Show Agent Panel";
-    toggleEl.setAttribute(
-      "title",
-      visible ? "Hide the selected agent detail panel" : "Show the selected agent detail panel",
-    );
+    const labelEl = toggleEl.querySelector(".thread-agent-panel-toggle__label");
+    if (labelEl) {
+      labelEl.textContent = visible ? "Hide Agent Panel" : "Show Agent Panel";
+    }
+    toggleEl.setAttribute("aria-label", visible ? "Hide agent panel" : "Show agent panel");
+    toggleEl.setAttribute("title", visible ? "Hide the agent session panel" : "Show the agent session panel");
   }
 
-  function renderParticipantsList(sessions, selectedSessionId) {
-    const participantsEl = getParticipantsEl();
-    if (!participantsEl) {
+  function getSessionStatusText(session) {
+    const state = stateLabel(session?.state);
+    return state === "Unknown" ? "Disconnected" : state;
+  }
+
+  function buildSessionMeta(session) {
+    return [
+      String(session.adapter || "CLI"),
+      String(session.mode || "session"),
+    ].join(" · ");
+  }
+
+  function formatToolEventTime(value) {
+    const date = value ? new Date(value) : null;
+    if (!date || Number.isNaN(date.getTime())) {
+      return "--:--:--";
+    }
+    return date.toLocaleTimeString([], {
+      hour12: false,
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    });
+  }
+
+  function renderToolEventSummary(session) {
+    const entries = Array.isArray(session?.recent_tool_events) ? session.recent_tool_events : [];
+    if (!entries.length) {
+      return "No MCP tool calls recorded yet.";
+    }
+    return entries
+      .map((entry) => `${formatToolEventTime(entry?.at)} ${String(entry?.tool_name || "").trim() || "unknown_tool"}`)
+      .join(" · ");
+  }
+
+  function renderStreamEventSummary(session) {
+    const entries = Array.isArray(session?.recent_stream_events) ? session.recent_stream_events : [];
+    if (!entries.length) {
+      return "No stream input received yet.";
+    }
+    return entries
+      .map((entry) => `${formatToolEventTime(entry?.at)} received ${String(entry?.stream || "stream").trim()}`)
+      .join(" · ");
+  }
+
+  function buildActivityLogHtml(session) {
+    return [
+      `<div class="cli-session-log__line">${formatLogHtml(renderTimingSummary(session))}</div>`,
+      `<div class="cli-session-log__line">${formatLogHtml(renderToolEventSummary(session))}</div>`,
+      `<div class="cli-session-log__line">${formatLogHtml(renderStreamEventSummary(session))}</div>`,
+    ].join("");
+  }
+
+  function renderTimingSummary(session) {
+    const parts = [];
+    parts.push(`Requested ${formatToolEventTime(session?.created_at)}`);
+    if (session?.launch_started_at) {
+      parts.push(`Launch ${formatToolEventTime(session.launch_started_at)}`);
+    }
+    if (session?.process_started_at) {
+      parts.push(`PID ${formatToolEventTime(session.process_started_at)}`);
+    }
+    if (session?.first_output_at) {
+      parts.push(`First output ${formatToolEventTime(session.first_output_at)}`);
+    }
+    if (session?.connected_at) {
+      parts.push(`bus_connect ${formatToolEventTime(session.connected_at)}`);
+    }
+    if (session?.last_tool_call_at) {
+      parts.push(`Last tool ${formatToolEventTime(session.last_tool_call_at)}`);
+    }
+    if (session?.last_output_at) {
+      parts.push(`Last output ${formatToolEventTime(session.last_output_at)}`);
+    }
+    return parts.join(" · ");
+  }
+
+  function truncateMiddle(value, maxLength = 18) {
+    const text = String(value || "").trim();
+    if (!text || text.length <= maxLength) {
+      return text;
+    }
+    const head = Math.max(6, Math.ceil((maxLength - 3) / 2));
+    const tail = Math.max(6, Math.floor((maxLength - 3) / 2));
+    return `${text.slice(0, head)}...${text.slice(-tail)}`;
+  }
+
+  function collectSessionTextCandidates(session) {
+    const values = [
+      session?.external_session_id,
+      session?.external_request_id,
+      session?.stdout_excerpt,
+      session?.stderr_excerpt,
+      session?.last_result,
+      session?.last_error,
+    ];
+    if (Array.isArray(session?.raw_result?.errors)) {
+      session.raw_result.errors.forEach((entry) => values.push(entry));
+    }
+    values.push(session?.raw_result?.thread_id);
+    values.push(session?.raw_result?.session_id);
+    values.push(session?.raw_result?.chat_id);
+    values.push(session?.raw_result?.conversation_id);
+    return values
+      .map((value) => String(value || ""))
+      .filter(Boolean);
+  }
+
+  function extractLastExternalId(session) {
+    const directId = String(session?.external_session_id || "").trim();
+    if (directId) {
+      return directId;
+    }
+
+    const candidates = collectSessionTextCandidates(session);
+    for (const candidate of candidates) {
+      const lineMatch = candidate.match(/^([A-Za-z0-9][A-Za-z0-9._:-]{5,})$/);
+      if (lineMatch?.[1]) {
+        return String(lineMatch[1]).trim() || null;
+      }
+
+      const patterns = [
+        /"type"\s*:\s*"thread\.started"[\s\S]*?"thread_id"\s*:\s*"([^"]+)"/g,
+        /"session_id"\s*:\s*"([^"]+)"/g,
+        /"chat_id"\s*:\s*"([^"]+)"/g,
+        /"conversation_id"\s*:\s*"([^"]+)"/g,
+      ];
+      for (const pattern of patterns) {
+        const matches = Array.from(candidate.matchAll(pattern));
+        if (matches.length) {
+          return String(matches[matches.length - 1][1] || "").trim() || null;
+        }
+      }
+    }
+    return null;
+  }
+
+  function replaceThreadAgents(threadId, agents) {
+    if (!threadId) {
       return;
     }
-
-    participantsEl.innerHTML = sessions.map((session) => {
-      const selected = session.id === selectedSessionId;
-      const role = roleLabel(session);
-      const meta = [
-        String(session.adapter || "CLI"),
-        String(session.mode || "session"),
-        stateLabel(session.state),
-      ].join(" · ");
-      return `
-        <button
-          type="button"
-          class="cli-session-participant${selected ? " is-selected" : ""}"
-          data-session-id="${escapeHtml(session.id)}"
-          onclick="window.AcbCliSessions && window.AcbCliSessions.selectSessionFromElement(this)"
-        >
-          <span class="cli-session-participant__avatar">${escapeHtml(sessionAvatar(session))}</span>
-          <span class="cli-session-participant__body">
-            <span class="cli-session-participant__row">
-              <span class="cli-session-participant__name">${escapeHtml(sessionDisplayName(session))}</span>
-              <span class="cli-session-role-badge cli-session-role-badge--${roleTone(session)}">${escapeHtml(role)}</span>
-            </span>
-            <span class="cli-session-participant__meta">${escapeHtml(meta)}</span>
-          </span>
-        </button>
-      `;
-    }).join("");
+    const nextMap = new Map();
+    if (Array.isArray(agents)) {
+      agents.forEach((agent) => {
+        if (agent?.id) {
+          nextMap.set(String(agent.id), agent);
+        }
+      });
+    }
+    threadAgentsByThread.set(threadId, nextMap);
   }
 
-  function updateDetailChrome(session) {
-    const badgeEl = getDetailBadgeEl();
-    if (badgeEl) {
-      badgeEl.className = `cli-session-strip__badge cli-session-strip__badge--${stateTone(session.state)}`;
-      badgeEl.textContent = stateLabel(session.state);
+  function getParticipantAgent(session) {
+    const threadId = String(session?.thread_id || "");
+    const participantAgentId = String(session?.participant_agent_id || "");
+    if (!threadId || !participantAgentId) {
+      return null;
+    }
+    return threadAgentsByThread.get(threadId)?.get(participantAgentId) || null;
+  }
+
+  function getActiveThreadLifecycleStatus() {
+    return String(window.__acbActiveThreadStatus || "").trim().toLowerCase();
+  }
+
+  function getSessionStatusInfo(session) {
+    const participantAgent = getParticipantAgent(session);
+    const unifiedStatus = window.AcbAgentStatus?.deriveUnifiedStatus?.({
+      agent: participantAgent,
+      session,
+      threadStatus: getActiveThreadLifecycleStatus(),
+    });
+    if (unifiedStatus) {
+      return {
+        headline: unifiedStatus.primaryLabel,
+        detail: unifiedStatus.detail,
+        tone: unifiedStatus.tone,
+        statusText: unifiedStatus.statusText,
+        secondaryLabels: unifiedStatus.secondaryLabels,
+      };
     }
 
-    const titleEl = getDetailTitleEl();
-    if (titleEl) {
-      titleEl.textContent = sessionDisplayName(session);
+    return {
+      headline: getSessionStatusText(session),
+      detail: isActiveSession(session)
+        ? "Session process is running."
+        : "Session is idle.",
+      tone: isActiveSession(session) ? "pending" : "neutral",
+      statusText: getSessionStatusText(session),
+      secondaryLabels: [],
+    };
+  }
+
+  function createSessionCardElement(session) {
+    const card = document.createElement("section");
+    card.className = "cli-session-card";
+    card.dataset.sessionId = String(session.id || "");
+    card.innerHTML = `
+      <div class="cli-session-card__header">
+        <div class="cli-session-card__identity">
+          <span class="cli-session-card__avatar" data-role="avatar"></span>
+          <div class="cli-session-card__identity-body">
+            <div class="cli-session-card__identity-row">
+              <span class="cli-session-card__name" data-role="name"></span>
+              <span class="cli-session-role-badge" data-role="role"></span>
+              <span class="cli-session-card__prompt-tag" data-role="prompt-tag" hidden></span>
+            </div>
+            <div class="cli-session-card__meta" data-role="meta"></div>
+            <div class="cli-session-card__external-id" data-role="external-id" hidden></div>
+            <div class="cli-session-card__status" data-role="status"></div>
+          </div>
+        </div>
+        <div class="cli-session-card__actions">
+          <button type="button" class="btn-secondary btn-compact" data-role="primary-action"></button>
+          <button type="button" class="btn-secondary btn-compact cli-session-card__danger" data-role="secondary-action"></button>
+        </div>
+      </div>
+      <div class="cli-session-card__body">
+        <section class="cli-session-log-panel cli-session-log-panel--activity">
+          <div class="cli-session-log-panel__header">
+            <div class="cli-session-log-panel__title">Activity Log</div>
+            <label class="cli-session-log-panel__autoscroll">
+              <input type="checkbox" data-role="activity-autoscroll" checked />
+              <span>Auto-scroll</span>
+            </label>
+          </div>
+          <div class="cli-session-card__activity cli-session-log__body" data-role="activity"></div>
+        </section>
+        <section class="cli-session-log-panel cli-session-log-panel--terminal">
+          <div class="cli-session-log-panel__header">
+            <div class="cli-session-log-panel__title" data-role="terminal-title">${panelTitleForSession(session)}</div>
+            <label class="cli-session-log-panel__autoscroll">
+              <input type="checkbox" data-role="terminal-autoscroll" checked />
+              <span>Auto-scroll</span>
+            </label>
+          </div>
+          <div class="cli-session-terminal__shell cli-session-terminal__shell--card" data-role="terminal-shell">
+            <div class="cli-session-terminal cli-session-terminal--card" data-role="terminal"></div>
+          </div>
+        </section>
+      </div>
+    `;
+
+    const activityAutoscrollEl = card.querySelector('[data-role="activity-autoscroll"]');
+    const terminalAutoscrollEl = card.querySelector('[data-role="terminal-autoscroll"]');
+    if (activityAutoscrollEl) {
+      activityAutoscrollEl.checked = getAutoScrollPreference(session.id, "activity");
+      activityAutoscrollEl.addEventListener("change", () => {
+        setAutoScrollPreference(session.id, "activity", activityAutoscrollEl.checked);
+        const activityEl = card.querySelector('[data-role="activity"]');
+        scrollLogBodyToBottom(activityEl, session.id, "activity");
+      });
+    }
+    if (terminalAutoscrollEl) {
+      terminalAutoscrollEl.checked = getAutoScrollPreference(session.id, "terminal");
+      terminalAutoscrollEl.addEventListener("change", () => {
+        setAutoScrollPreference(session.id, "terminal", terminalAutoscrollEl.checked);
+        const terminalEl = card.querySelector('[data-role="terminal"]');
+        scrollLogBodyToBottom(terminalEl, session.id, "terminal");
+      });
     }
 
-    const roleEl = getDetailRoleEl();
+    const primaryActionBtn = card.querySelector('[data-role="primary-action"]');
+    const secondaryActionBtn = card.querySelector('[data-role="secondary-action"]');
+    if (primaryActionBtn) {
+      primaryActionBtn.addEventListener("click", () => {
+        const currentSessionId = String(card.dataset.sessionId || session.id || "");
+        const currentSession = getSessionsForThread(getActiveThreadId()).find((item) => item.id === currentSessionId);
+        if (!currentSession) {
+          return;
+        }
+        if (isInteractiveSession(currentSession)) {
+          void sendEscapeToSession(currentSessionId);
+          return;
+        }
+        void confirmAndStopSession(currentSessionId);
+      });
+    }
+    if (secondaryActionBtn) {
+      secondaryActionBtn.addEventListener("click", () => {
+        const currentSessionId = String(card.dataset.sessionId || session.id || "");
+        const currentSession = getSessionsForThread(getActiveThreadId()).find((item) => item.id === currentSessionId);
+        if (!currentSession) {
+          return;
+        }
+        if (isInteractiveSession(currentSession)) {
+          void sendEnterToSession(currentSessionId);
+          return;
+        }
+        void confirmAndKickAgent(currentSessionId);
+      });
+    }
+    return card;
+  }
+
+  function updateSessionCardElement(card, session) {
+    card.dataset.sessionId = String(session.id || "");
+    card.dataset.sessionState = String(session.state || "");
+
+    const avatarEl = card.querySelector('[data-role="avatar"]');
+    const nameEl = card.querySelector('[data-role="name"]');
+    const roleEl = card.querySelector('[data-role="role"]');
+    const promptTagEl = card.querySelector('[data-role="prompt-tag"]');
+    const metaEl = card.querySelector('[data-role="meta"]');
+    const externalIdEl = card.querySelector('[data-role="external-id"]');
+    const statusEl = card.querySelector('[data-role="status"]');
+    const activityEl = card.querySelector('[data-role="activity"]');
+    const terminalEl = card.querySelector('[data-role="terminal"]');
+    const terminalShellEl = card.querySelector('[data-role="terminal-shell"]');
+    const terminalTitleEl = card.querySelector('[data-role="terminal-title"]');
+    const primaryActionBtn = card.querySelector('[data-role="primary-action"]');
+    const secondaryActionBtn = card.querySelector('[data-role="secondary-action"]');
+    const activityAutoscrollEl = card.querySelector('[data-role="activity-autoscroll"]');
+    const terminalAutoscrollEl = card.querySelector('[data-role="terminal-autoscroll"]');
+
+    if (activityAutoscrollEl) {
+      activityAutoscrollEl.checked = getAutoScrollPreference(session.id, "activity");
+    }
+    if (terminalAutoscrollEl) {
+      terminalAutoscrollEl.checked = getAutoScrollPreference(session.id, "terminal");
+    }
+
+    if (avatarEl) {
+      avatarEl.textContent = sessionAvatar(session);
+    }
+    if (nameEl) {
+      nameEl.textContent = sessionDisplayName(session);
+    }
     if (roleEl) {
-      if (session?.participant_role) {
-        roleEl.hidden = false;
-        roleEl.className = `cli-session-role-badge cli-session-role-badge--${roleTone(session)}`;
-        roleEl.textContent = roleLabel(session);
+      roleEl.textContent = roleLabel(session);
+      roleEl.className = `cli-session-role-badge cli-session-role-badge--${roleTone(session)}`;
+    }
+    if (promptTagEl) {
+      const promptTooltip = buildPromptHistoryTooltip(session);
+      if (promptTooltip) {
+        promptTagEl.hidden = false;
+        promptTagEl.textContent = buildPromptTagLabel(session);
+        promptTagEl.title = promptTooltip;
+        promptTagEl.setAttribute("aria-label", promptTooltip);
       } else {
-        roleEl.hidden = true;
-        roleEl.textContent = "";
+        promptTagEl.hidden = true;
+        promptTagEl.textContent = "";
+        promptTagEl.removeAttribute("title");
+        promptTagEl.removeAttribute("aria-label");
+      }
+    }
+    if (metaEl) {
+      metaEl.textContent = buildSessionMeta(session);
+    }
+    if (externalIdEl) {
+      const externalId = extractLastExternalId(session);
+      if (externalId) {
+        externalIdEl.hidden = false;
+        externalIdEl.textContent = `Last external id: ${truncateMiddle(externalId, 22)}`;
+        externalIdEl.title = externalId;
+      } else {
+        externalIdEl.hidden = true;
+        externalIdEl.textContent = "";
+        externalIdEl.removeAttribute("title");
+      }
+    }
+    if (statusEl) {
+      const statusInfo = getSessionStatusInfo(session);
+      statusEl.textContent = `${statusInfo.statusText} · ${statusInfo.detail}`;
+      statusEl.dataset.tone = statusInfo.tone;
+    }
+    if (terminalTitleEl) {
+      terminalTitleEl.textContent = panelTitleForSession(session);
+    }
+    if (activityEl) {
+      const timingSummary = renderTimingSummary(session);
+      const toolSummary = renderToolEventSummary(session);
+      const streamSummary = renderStreamEventSummary(session);
+      activityEl.innerHTML = buildActivityLogHtml(session);
+      activityEl.title = `${timingSummary}\n${toolSummary}\n${streamSummary}`;
+      scrollLogBodyToBottom(activityEl, session.id, "activity");
+    }
+
+    const isRunning = String(session?.state || "").trim().toLowerCase() === "running";
+    if (primaryActionBtn) {
+      if (isInteractiveSession(session)) {
+        primaryActionBtn.textContent = "Esc";
+        primaryActionBtn.disabled = !isRunning;
+        primaryActionBtn.title = isRunning
+          ? "Send Escape to the interactive PTY session"
+          : "This PTY session is not running";
+      } else {
+        primaryActionBtn.textContent = "Stop CLI";
+        primaryActionBtn.disabled = !isRunning;
+        primaryActionBtn.title = isRunning
+          ? "Stop this CLI process after confirmation"
+          : "This CLI process is not running";
+      }
+    }
+    if (secondaryActionBtn) {
+      if (isInteractiveSession(session)) {
+        secondaryActionBtn.textContent = "Enter";
+        secondaryActionBtn.disabled = !isRunning;
+        secondaryActionBtn.title = isRunning
+          ? "Send Enter to the interactive PTY session"
+          : "This PTY session is not running";
+      } else {
+        const hasParticipantAgent = Boolean(String(session?.participant_agent_id || "").trim());
+        secondaryActionBtn.textContent = "Kick Agent";
+        secondaryActionBtn.disabled = !hasParticipantAgent;
+        secondaryActionBtn.title = hasParticipantAgent
+          ? "Force this agent offline after confirmation"
+          : "No participant agent is attached to this session";
       }
     }
 
-    const metaEl = getDetailMetaEl();
-    if (metaEl) {
-      metaEl.innerHTML = buildMetaBits(session)
-        .map((bit) => `<span>${bit}</span>`)
-        .join("");
+    if (terminalShellEl) {
+      terminalShellEl.hidden = false;
     }
-
-    const summaryEl = getDetailSummaryEl();
-    if (summaryEl) {
-      summaryEl.innerHTML = renderSessionSummary(session);
+    if (terminalEl) {
+      if (isInteractiveSession(session)) {
+        teardownHeadlessOutputState(session.id);
+        void mountTerminalForSessionCard(session, terminalEl);
+        syncInteractiveTerminalSnapshot(session);
+      } else {
+        teardownTerminalInstance(session.id);
+        void mountHeadlessOutputForSessionCard(session, terminalEl);
+      }
     }
   }
 
-  function canReuseInteractiveSelection(panelEl, session) {
-    return Boolean(
-      panelEl
-      && session
-      && isInteractiveSession(session)
-      && terminalState.sessionId === session.id
-      && terminalState.terminal
-      && panelEl.dataset.selectedSessionId === String(session.id || "")
-      && panelEl.dataset.selectedInteractive === "1"
-      && getTerminalEl()
+  function renderSessionCards(detailEl, sessions) {
+    if (!detailEl) {
+      return;
+    }
+
+    const existingCards = new Map(
+      Array.from(detailEl.querySelectorAll(".cli-session-card")).map((card) => [card.dataset.sessionId, card]),
     );
-  }
+    const nextIds = new Set(sessions.map((session) => String(session.id || "")));
 
-  function renderSessionDetail(panelEl, session, options = {}) {
-    const detailEl = getDetailEl();
-    if (!detailEl || !session) {
-      return;
+    for (const [sessionId, card] of existingCards.entries()) {
+      if (!nextIds.has(sessionId)) {
+        teardownTerminalInstance(sessionId);
+        teardownHeadlessOutputState(sessionId);
+        card.remove();
+      }
     }
 
-    panelEl.dataset.selectedSessionId = String(session.id || "");
-    panelEl.dataset.selectedInteractive = isInteractiveSession(session) ? "1" : "0";
-    const terminalVisible = isTerminalVisible(session.thread_id);
-
-    if (!terminalVisible) {
-      detailEl.hidden = true;
-      teardownTerminal();
-      return;
-    }
-
-    detailEl.hidden = false;
-
-    if (!options.reuseInteractive) {
-      detailEl.innerHTML = `
-        <div class="cli-session-detail__card">
-          <div class="cli-session-detail__header">
-            <div class="cli-session-detail__title-stack">
-              <div class="cli-session-detail__title-row">
-                <span id="cli-session-selected-badge" class="cli-session-strip__badge cli-session-strip__badge--${stateTone(session.state)}">${escapeHtml(stateLabel(session.state))}</span>
-                <span id="cli-session-selected-title" class="cli-session-detail__title">${escapeHtml(sessionDisplayName(session))}</span>
-                <span id="cli-session-selected-role" class="cli-session-role-badge cli-session-role-badge--${roleTone(session)}"${session?.participant_role ? "" : " hidden"}>${escapeHtml(roleLabel(session))}</span>
-              </div>
-              <div id="cli-session-selected-meta" class="cli-session-strip__meta"></div>
-            </div>
-            <div class="cli-session-strip__actions">
-              <button class="toolbar-btn" type="button" title="Restart selected CLI session" aria-label="Restart selected CLI session" onclick="window.AcbCliSessions && window.AcbCliSessions.restartSelected()">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <polyline points="23 4 23 10 17 10"></polyline>
-                  <polyline points="1 20 1 14 7 14"></polyline>
-                  <path d="M3.51 9a9 9 0 0 1 14.13-3.36L23 10"></path>
-                  <path d="M20.49 15a9 9 0 0 1-14.13 3.36L1 14"></path>
-                </svg>
-              </button>
-              <button class="toolbar-btn" type="button" title="Stop selected CLI session" aria-label="Stop selected CLI session" onclick="window.AcbCliSessions && window.AcbCliSessions.stopSelected()">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                  <rect x="6" y="6" width="12" height="12" rx="2"></rect>
-                </svg>
-              </button>
-            </div>
-          </div>
-          <div class="cli-session-detail__view">
-            ${isInteractiveSession(session)
-              ? renderInteractiveBody(session)
-              : renderPassiveBody(session)}
-          </div>
-        </div>
-      `;
-    }
-
-    updateDetailChrome(session);
-
-    if (isInteractiveSession(session)) {
-      void mountTerminalForSession(session);
-      return;
-    }
-
-    teardownTerminal();
+    sessions.forEach((session) => {
+      const sessionId = String(session.id || "");
+      let card = existingCards.get(sessionId);
+      if (!card) {
+        card = createSessionCardElement(session);
+      }
+      updateSessionCardElement(card, session);
+      detailEl.appendChild(card);
+    });
   }
 
   function renderEmptyState(panelEl) {
     ensurePanelShell(panelEl);
     panelEl.hidden = false;
     panelEl.dataset.selectedSessionId = "";
-    panelEl.dataset.selectedInteractive = "0";
     renderHeaderSummary([]);
-
-    const participantsEl = getParticipantsEl();
-    if (participantsEl) {
-      participantsEl.innerHTML = "";
-    }
 
     const detailEl = getDetailEl();
     if (detailEl) {
-      detailEl.hidden = false;
       detailEl.innerHTML = `
         <div class="cli-session-detail__empty">
-          <strong>No agents have joined this thread yet.</strong><br>
-          Start the first participant when you are ready to turn this thread into an active meeting.
-          <div class="cli-session-detail__empty-actions">
-            <button class="thread-header-cta" type="button" onclick="window.openAddAgentModal && window.openAddAgentModal()">Add First Agent</button>
-          </div>
+          <strong>No agent sessions are active for this thread yet.</strong><br>
+          Interactive agent terminals will appear here as fixed-size cards when sessions start.
         </div>
       `;
     }
 
-    teardownTerminal();
+    teardownAllTerminals();
     if (window.AcbChat?.refreshHumanDeliveryIndicators) {
       window.AcbChat.refreshHumanDeliveryIndicators(getActiveThreadId());
     }
@@ -843,18 +1401,25 @@
     }
 
     if (!threadId) {
-      teardownTerminal();
+      teardownAllTerminals();
       panelEl.hidden = true;
       panelEl.innerHTML = "";
       panelEl.dataset.cliSessionShell = "";
       panelEl.dataset.selectedSessionId = "";
-      panelEl.dataset.selectedInteractive = "0";
       return;
     }
 
     ensurePanelShell(panelEl);
-    panelEl.hidden = false;
     renderTerminalToggle(threadId);
+    const terminalVisible = isTerminalVisible(threadId);
+    panelEl.hidden = !terminalVisible;
+    if (!terminalVisible) {
+      teardownAllTerminals();
+      if (window.AcbChat?.refreshHumanDeliveryIndicators) {
+        window.AcbChat.refreshHumanDeliveryIndicators(threadId);
+      }
+      return;
+    }
 
     const sessions = getSessionsForThread(threadId);
     if (!sessions.length) {
@@ -862,17 +1427,9 @@
       return;
     }
 
-    const selectedSession = ensureSelectedSession(threadId);
-    if (!selectedSession) {
-      renderEmptyState(panelEl);
-      return;
-    }
-
+    ensureSelectedSession(threadId);
     renderHeaderSummary(sessions);
-    renderParticipantsList(sessions, selectedSession.id);
-
-    const reuseInteractive = canReuseInteractiveSelection(panelEl, selectedSession);
-    renderSessionDetail(panelEl, selectedSession, { reuseInteractive });
+    renderSessionCards(getDetailEl(), sessions);
     if (window.AcbChat?.refreshHumanDeliveryIndicators) {
       window.AcbChat.refreshHumanDeliveryIndicators(threadId);
     }
@@ -884,51 +1441,23 @@
       return null;
     }
 
-    const result = await api(`/api/threads/${threadId}/cli-sessions`);
+    const [result, threadAgents] = await Promise.all([
+      api(`/api/threads/${threadId}/cli-sessions`),
+      api(`/api/threads/${threadId}/agents`).catch(() => []),
+    ]);
     const sessions = Array.isArray(result?.sessions) ? result.sessions : [];
+    replaceThreadAgents(threadId, Array.isArray(threadAgents) ? threadAgents : []);
     replaceSessionsForThread(threadId, sessions);
     renderThread(threadId);
+    if (window.AcbAgents?.rerenderStatusBar) {
+      await window.AcbAgents.rerenderStatusBar();
+    }
 
     if (window.AcbChat && typeof window.AcbChat.refreshThreadAdmin === "function") {
       await window.AcbChat.refreshThreadAdmin(threadId, api);
     }
 
     return getSelectedSession(threadId);
-  }
-
-  async function startCodexInteractive(api) {
-    const threadId = getActiveThreadId();
-    if (!threadId) {
-      return null;
-    }
-
-    const uiAgent = await getUiAgent();
-    if (!uiAgent) {
-      return null;
-    }
-
-    const result = await api(`/api/threads/${threadId}/cli-sessions`, {
-      method: "POST",
-      headers: {
-        "X-Agent-Token": uiAgent.token,
-      },
-      body: JSON.stringify({
-        adapter: "codex",
-        mode: "interactive",
-        prompt: "who are you",
-        requested_by_agent_id: uiAgent.agent_id,
-        cols: 120,
-        rows: 32,
-      }),
-    });
-
-    if (result?.session) {
-      upsertSession(result.session);
-      selectSession(result.session.id, threadId);
-      return result.session;
-    }
-
-    return null;
   }
 
   async function restartSelected(api) {
@@ -993,39 +1522,141 @@
     return null;
   }
 
-  async function sendComposerInput() {
-    const session = getSelectedSession();
-    if (!session || !isInteractiveSession(session)) {
+  async function stopSessionById(sessionId, api = window.AcbApi.api) {
+    const threadId = getActiveThreadId();
+    const session = getSessionsForThread(threadId).find((item) => item.id === sessionId);
+    if (!threadId || !session) {
       return null;
     }
 
-    const composeEl = getComposerEl();
-    const value = String(composeEl?.value || "");
-    if (!value.trim()) {
+    const uiAgent = await getUiAgent();
+    if (!uiAgent) {
       return null;
     }
 
-    if (composeEl) {
-      composeEl.value = "";
+    const result = await api(`/api/cli-sessions/${session.id}/stop`, {
+      method: "POST",
+      headers: {
+        "X-Agent-Token": uiAgent.token,
+      },
+      body: JSON.stringify({
+        requested_by_agent_id: uiAgent.agent_id,
+      }),
+    });
+
+    if (result?.session) {
+      upsertSession(result.session);
+      selectSession(result.session.id, threadId);
+      return result.session;
     }
 
-    await queueRawInput(session.id, value.endsWith("\n") ? value : `${value}\r`);
-    if (terminalState.terminal) {
-      terminalState.terminal.focus();
-    }
-    return true;
+    return null;
   }
 
-  function handleComposerKeydown(event) {
-    if (!event) {
-      return true;
+  async function sendSessionInputById(sessionId, text, api = window.AcbApi.api) {
+    const threadId = getActiveThreadId();
+    const session = getSessionsForThread(threadId).find((item) => item.id === sessionId);
+    if (!threadId || !session) {
+      return null;
     }
-    if (event.key === "Enter" && !event.shiftKey) {
-      event.preventDefault();
-      void sendComposerInput();
-      return false;
+
+    const uiAgent = await getUiAgent();
+    if (!uiAgent) {
+      return null;
     }
-    return true;
+
+    return await api(`/api/cli-sessions/${session.id}/input`, {
+      method: "POST",
+      headers: {
+        "X-Agent-Token": uiAgent.token,
+      },
+      body: JSON.stringify({
+        requested_by_agent_id: uiAgent.agent_id,
+        text,
+      }),
+    });
+  }
+
+  async function kickAgentById(agentId, api = window.AcbApi.api) {
+    if (!agentId) {
+      return null;
+    }
+    return await api(`/api/agents/${agentId}/kick`, {
+      method: "POST",
+    });
+  }
+
+  async function confirmAndStopSession(sessionId) {
+    const threadId = getActiveThreadId();
+    const session = getSessionsForThread(threadId).find((item) => item.id === sessionId);
+    if (!session) {
+      return null;
+    }
+
+    const confirmDialog = document.getElementById("confirm-dialog");
+    if (!confirmDialog || typeof confirmDialog.show !== "function") {
+      return null;
+    }
+
+    const confirmed = await confirmDialog.show({
+      title: "Stop CLI Session",
+      message: `
+        <strong>This will stop the CLI process for this session.</strong><br><br>
+        Session: <code>${escapeHtml(sessionDisplayName(session))}</code><br><br>
+        The thread stays open, but this agent will stop listening until you restart or relaunch it.
+      `,
+      confirmText: "Stop CLI",
+      confirmClass: "btn-destructive",
+    });
+
+    if (!confirmed) {
+      return null;
+    }
+
+    const result = await stopSessionById(sessionId);
+    renderThread(threadId);
+    return result;
+  }
+
+  async function confirmAndKickAgent(sessionId) {
+    const threadId = getActiveThreadId();
+    const session = getSessionsForThread(threadId).find((item) => item.id === sessionId);
+    const participantAgentId = String(session?.participant_agent_id || "").trim();
+    if (!session || !participantAgentId) {
+      return null;
+    }
+
+    const confirmDialog = document.getElementById("confirm-dialog");
+    if (!confirmDialog || typeof confirmDialog.show !== "function") {
+      return null;
+    }
+
+    const confirmed = await confirmDialog.show({
+      title: "Kick Agent",
+      message: `
+        <strong>This will forcibly disconnect the agent and interrupt its current wait state.</strong><br><br>
+        Agent: <code>${escapeHtml(sessionDisplayName(session))}</code><br><br>
+        Use this only when the agent is stuck, runaway, or should be forced offline immediately.
+      `,
+      confirmText: "Kick Agent",
+      confirmClass: "btn-destructive",
+    });
+
+    if (!confirmed) {
+      return null;
+    }
+
+    const result = await kickAgentById(participantAgentId);
+    await refreshThread(threadId, window.AcbApi.api);
+    return result;
+  }
+
+  async function sendEscapeToSession(sessionId) {
+    return await sendSessionInputById(sessionId, "\u001b");
+  }
+
+  async function sendEnterToSession(sessionId) {
+    return await sendSessionInputById(sessionId, "\r");
   }
 
   function handleSseEvent(event) {
@@ -1037,8 +1668,8 @@
     if (type === "cli.session.output") {
       const sessionId = event?.payload?.session_id;
       const entry = event?.payload?.entry;
-      if (terminalState.sessionId && sessionId === terminalState.sessionId) {
-        appendTerminalOutput(entry);
+      if (sessionId) {
+        appendTerminalOutput(sessionId, entry);
       }
       return;
     }
@@ -1054,17 +1685,20 @@
     renderThread,
     handleSseEvent,
     getDeliverySummaryForSeq,
+    getSessionForAgent,
     selectSession,
     selectSessionFromElement,
     toggleTerminalVisibility,
-    startCodexInteractive: () => startCodexInteractive(window.AcbApi.api),
+    stopSessionById,
+    sendSessionInputById,
+    kickAgentById,
+    confirmAndStopSession,
+    confirmAndKickAgent,
+    sendEscapeToSession,
+    sendEnterToSession,
     restartSelected: () => restartSelected(window.AcbApi.api),
     stopSelected: () => stopSelected(window.AcbApi.api),
     restartLatest: () => restartSelected(window.AcbApi.api),
     stopLatest: () => stopSelected(window.AcbApi.api),
-    sendComposerInput,
-    handleComposerKeydown,
   };
-
-  window.launchCodexPtySession = () => startCodexInteractive(window.AcbApi.api);
 })();
