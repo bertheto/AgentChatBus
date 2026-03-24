@@ -1049,6 +1049,10 @@ Note: Thread name is the topic label. Thread ID is the unique identifier.`;
         },
         resetThreadSelection,
         onSelectThread: selectThread,
+        onTogglePin: async (threadId, pinned) => {
+          window.AcbThreads.setThreadPinned(threadId, pinned);
+          await refreshThreads();
+        },
         onOpenContextMenu: openThreadContextMenu,
         esc,
         timeAgo,
@@ -1273,6 +1277,14 @@ Note: Thread name is the topic label. Thread ID is the unique identifier.`;
       const { id, topic } = contextMenuThread;
       hideThreadContextMenu();
       await window.AcbThreads.exportThread({ threadId: id, topic });
+    }
+
+    async function pinThreadFromMenu() {
+      return window.AcbThreads.pinThreadFromMenu({
+        getContextMenuThread: () => contextMenuThread,
+        hideThreadContextMenu,
+        refreshThreads,
+      });
     }
 
     async function copyThreadNameFromMenu() {

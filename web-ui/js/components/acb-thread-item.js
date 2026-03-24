@@ -8,6 +8,7 @@
       this._esc = null;
       this._boundClick = null;
       this._boundContextMenu = null;
+      this._boundPinClick = null;
     }
 
     connectedCallback() {
@@ -42,15 +43,34 @@
           );
         };
       }
+      if (!this._boundPinClick) {
+        this._boundPinClick = (e) => {
+          const pinBtn = e.target.closest(".ti-pin-btn");
+          if (!pinBtn || !this._thread) return;
+          e.preventDefault();
+          e.stopPropagation();
+          this.dispatchEvent(
+            new CustomEvent("thread-pin-toggle", {
+              bubbles: true,
+              detail: {
+                id: this._thread.id,
+                pinned: !Boolean(this._thread.isPinned),
+              },
+            })
+          );
+        };
+      }
 
       this.addEventListener("click", this._boundClick);
       this.addEventListener("contextmenu", this._boundContextMenu);
+      this.addEventListener("click", this._boundPinClick);
       this._render();
     }
 
     disconnectedCallback() {
       if (this._boundClick) this.removeEventListener("click", this._boundClick);
       if (this._boundContextMenu) this.removeEventListener("contextmenu", this._boundContextMenu);
+      if (this._boundPinClick) this.removeEventListener("click", this._boundPinClick);
     }
 
     setData({ thread, active, timeAgo, esc }) {
@@ -66,6 +86,7 @@
       const esc = this._esc || ((v) => String(v ?? ""));
       const timeAgo = this._timeAgo || (() => "");
       const activeClass = this._active ? " active" : "";
+      const pinned = Boolean(this._thread.isPinned);
       const waitingAgents = Array.isArray(this._thread.waiting_agents) ? this._thread.waiting_agents : [];
       const visibleAgents = waitingAgents.slice(0, 3);
       const overflowCount = Math.max(0, waitingAgents.length - visibleAgents.length);
@@ -73,17 +94,9 @@
         ? `
         <div class="ti-waiting-agents" aria-label="${esc(`${waitingAgents.length} waiting agents`)}">
           ${visibleAgents
-            .map((agent) => {
+            .map((agent, index) => {
               const label = esc(String(agent.display_name || agent.id || "Unknown"));
-              const emoji = esc(String(agent.emoji || "").trim() || "🤖");
-              const isDark = document.body.getAttribute('data-theme') !== 'light';
-              const styles = window.AcbUtils ? window.AcbUtils.getEmojiStyledBackground(emoji, isDark) : null;
-              
-              let style = "";
-              if (styles) {
-                style = `style="background: ${styles.bg}; border: 1px solid ${styles.border};"`;
-              }
-              return `<span class="ti-waiting-agent" ${style} title="${label}" aria-label="${label}" data-emoji="${emoji}">${emoji}</span>`;
+              return `<span class="ti-waiting-agent" title="${label}" aria-label="${label}">${index + 1}</span>`;
             })
             .join("")}
           ${overflowCount > 0 ? `<span class="ti-waiting-agent ti-waiting-agent--count" title="${esc(`${overflowCount} more waiting agents`)}">+${overflowCount}</span>` : ""}
@@ -95,6 +108,7 @@
       this.setAttribute('role', 'listitem');
       this.setAttribute('aria-current', this._active ? 'true' : 'false');
       this.innerHTML = `
+        <button class="ti-pin-btn${pinned ? " is-pinned" : ""}" type="button" aria-label="${pinned ? "Unpin thread" : "Pin thread"}" title="${pinned ? "Unpin thread" : "Pin thread"}">📌</button>
         ${waitingBadgeHtml}
         <div class="ti-topic">${esc(this._thread.topic)}</div>
         <div class="ti-meta">

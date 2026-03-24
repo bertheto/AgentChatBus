@@ -1,4 +1,70 @@
 (function () {
+  const PINNED_THREADS_STORAGE_KEY = "acb.pinnedThreads.v1";
+
+  function loadPinnedThreadIds() {
+    try {
+      const raw = window.localStorage?.getItem(PINNED_THREADS_STORAGE_KEY);
+      const parsed = raw ? JSON.parse(raw) : [];
+      return new Set(Array.isArray(parsed) ? parsed.map((id) => String(id || "").trim()).filter(Boolean) : []);
+    } catch {
+      return new Set();
+    }
+  }
+
+  function savePinnedThreadIds(ids) {
+    try {
+      const values = Array.from(ids).map((id) => String(id || "").trim()).filter(Boolean);
+      window.localStorage?.setItem(PINNED_THREADS_STORAGE_KEY, JSON.stringify(values));
+    } catch {
+      // Ignore storage write failures and keep the UI functional.
+    }
+  }
+
+  function isThreadPinned(threadId) {
+    return loadPinnedThreadIds().has(String(threadId || "").trim());
+  }
+
+  function setThreadPinned(threadId, pinned) {
+    const resolvedId = String(threadId || "").trim();
+    if (!resolvedId) {
+      return false;
+    }
+    const ids = loadPinnedThreadIds();
+    if (pinned) {
+      ids.add(resolvedId);
+    } else {
+      ids.delete(resolvedId);
+    }
+    savePinnedThreadIds(ids);
+    return ids.has(resolvedId);
+  }
+
+  function toggleThreadPinned(threadId) {
+    const resolvedId = String(threadId || "").trim();
+    const nextPinned = !isThreadPinned(resolvedId);
+    setThreadPinned(resolvedId, nextPinned);
+    return nextPinned;
+  }
+
+  function decorateThreads(threads) {
+    const pinnedIds = loadPinnedThreadIds();
+    return (Array.isArray(threads) ? threads : []).map((thread) => ({
+      ...thread,
+      isPinned: pinnedIds.has(String(thread?.id || "").trim()),
+    }));
+  }
+
+  function sortThreadsForDisplay(threads) {
+    return [...threads].sort((left, right) => {
+      const leftPinned = left?.isPinned ? 0 : 1;
+      const rightPinned = right?.isPinned ? 0 : 1;
+      if (leftPinned !== rightPinned) {
+        return leftPinned - rightPinned;
+      }
+      return String(right?.created_at || "").localeCompare(String(left?.created_at || ""));
+    });
+  }
+
   function toggleThreadFilterPanel(event) {
     if (event) event.stopPropagation();
     const panel = document.getElementById("thread-filter-panel");
@@ -42,6 +108,7 @@
     threads,
     activeThreadId,
     onSelectThread,
+    onTogglePin,
     onOpenContextMenu,
     esc,
     timeAgo,
@@ -74,6 +141,15 @@
           onOpenContextMenu(d.event, d.thread);
         }
       });
+      item.addEventListener("thread-pin-toggle", (e) => {
+        const d = e.detail || {};
+        if (!d.id) {
+          return;
+        }
+        if (typeof onTogglePin === "function") {
+          onTogglePin(d.id, d.pinned !== false);
+        }
+      });
       pane.appendChild(item);
     });
   }
@@ -85,13 +161,14 @@
     onActiveThreadStatus,
     resetThreadSelection,
     onSelectThread,
+    onTogglePin,
     onOpenContextMenu,
     esc,
     timeAgo,
     updateThreadFilterButton,
   }) {
     const response = (await api("/api/threads?include_archived=1")) || { threads: [] };
-    const allThreads = (response && response.threads) || [];
+    const allThreads = sortThreadsForDisplay(decorateThreads((response && response.threads) || []));
     const selectedStatuses = getSelectedStatuses();
     const activeThreadId = getActiveThreadId();
     const threads = allThreads.filter((t) => selectedStatuses.has(t.status));
@@ -109,6 +186,7 @@
       threads,
       activeThreadId,
       onSelectThread,
+      onTogglePin,
       onOpenContextMenu,
       esc,
       timeAgo,
@@ -129,22 +207,26 @@
     const archiveBtn = document.getElementById("ctx-archive");
     const unarchiveBtn = document.getElementById("ctx-unarchive");
     const closeBtn = document.getElementById("ctx-close");
+    const pinBtn = document.getElementById("ctx-pin");
     const deleteBtn = document.getElementById("ctx-delete");
-    if (!menu || !archiveBtn || !unarchiveBtn || !closeBtn || !deleteBtn) return thread;
+    if (!menu || !archiveBtn || !unarchiveBtn || !closeBtn || !pinBtn || !deleteBtn) return thread;
 
     const adModeEnabled = !!options.showAd;
 
     closeBtn.disabled = adModeEnabled;
-    closeBtn.textContent = adModeEnabled ? "Close (disabled by show_ad)" : "Close";
+    closeBtn.textContent = adModeEnabled ? "🔒 Close (disabled by show_ad)" : "🔒 Close";
     archiveBtn.disabled = false;
-    archiveBtn.textContent = "Archive";
+    archiveBtn.textContent = "🗄️ Archive";
+    pinBtn.disabled = false;
+    pinBtn.textContent = thread?.isPinned ? "📍 Unpin" : "📌 Pin";
     deleteBtn.disabled = adModeEnabled;
-    deleteBtn.textContent = adModeEnabled ? "Delete (disabled by show_ad)" : "Delete";
+    deleteBtn.textContent = adModeEnabled ? "🗑️ Delete (disabled by show_ad)" : "🗑️ Delete";
 
     if (thread.status === "archived") {
       archiveBtn.style.display = "none";
       unarchiveBtn.style.display = "block";
       unarchiveBtn.disabled = false;
+      unarchiveBtn.textContent = "📂 Unarchive";
     } else {
       archiveBtn.style.display = "block";
       unarchiveBtn.style.display = "none";
@@ -380,6 +462,18 @@ Task: After entering, stand by. Human programmers may need to publish requiremen
     }
   }
 
+  async function pinThreadFromMenu({
+    getContextMenuThread,
+    hideThreadContextMenu,
+    refreshThreads,
+  }) {
+    const ctx = getContextMenuThread();
+    if (!ctx?.id) return;
+    setThreadPinned(ctx.id, !Boolean(ctx.isPinned));
+    hideThreadContextMenu();
+    await refreshThreads();
+  }
+
   window.AcbThreads = {
     toggleThreadFilterPanel,
     hideThreadFilterPanel,
@@ -395,5 +489,9 @@ Task: After entering, stand by. Human programmers may need to publish requiremen
     exportThread,
     copyThreadNameFromMenu,
     copyJoinPromptFromMenu,
+    isThreadPinned,
+    setThreadPinned,
+    toggleThreadPinned,
+    pinThreadFromMenu,
   };
 })();

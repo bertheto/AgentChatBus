@@ -558,6 +558,7 @@ body[data-theme="light"] #search-toggle-btn.active {
   border-left: 3px solid transparent;
   transition: background .15s, border-color .15s;
   position: relative;
+  min-height: 62px;
 }
 
 .thread-item:hover {
@@ -577,6 +578,45 @@ body[data-theme="light"] #search-toggle-btn.active {
 body[data-theme="light"] .thread-item.context-highlight {
   background: rgba(245, 158, 11, .15);
   border-left-color: #d97706;
+}
+
+.thread-item .ti-pin-btn {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: #f59e0b;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  border-radius: 8px;
+  opacity: .9;
+  transition: background .15s, opacity .15s, transform .15s;
+}
+
+.thread-item .ti-pin-btn:not(.is-pinned) {
+  opacity: 0;
+  pointer-events: auto;
+}
+
+.thread-item:hover .ti-pin-btn:not(.is-pinned),
+.thread-item.active .ti-pin-btn:not(.is-pinned) {
+  opacity: .9;
+}
+
+.thread-item .ti-pin-btn:hover {
+  background: rgba(245, 158, 11, .14);
+  opacity: 1;
+}
+
+.thread-item .ti-pin-btn:active {
+  transform: scale(.95);
 }
 
 .thread-item .ti-topic {
@@ -599,7 +639,7 @@ body[data-theme="light"] .thread-item.context-highlight {
 
 .thread-item .ti-waiting-agents {
   position: absolute;
-  top: 10px;
+  top: 34px;
   right: 12px;
   display: inline-flex;
   align-items: center;
@@ -619,10 +659,12 @@ body[data-theme="light"] .thread-item.context-highlight {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: rgba(251, 191, 36, .9);
+  background: rgba(255, 251, 235, .9);
+  border: 1px solid rgba(245, 158, 11, .35);
+  color: #92400e;
   font-size: 10px;
+  font-weight: 700;
   line-height: 1;
-  filter: drop-shadow(0 0 0.5px rgba(255, 255, 255, 0.4));
 }
 
 .thread-item .ti-waiting-agent--count {
@@ -636,12 +678,16 @@ body[data-theme="light"] .thread-item.context-highlight {
 }
 
 .thread-item .ti-topic {
-  padding-right: 96px;
+  padding-right: 92px;
 }
 
 body[data-theme="light"] .thread-item .ti-waiting-agents {
   background: rgba(245, 158, 11, .22);
   border-color: rgba(217, 119, 6, .28);
+}
+
+body[data-theme="light"] .thread-item .ti-pin-btn {
+  color: #d97706;
 }
 
 .badge {
