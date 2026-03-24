@@ -457,6 +457,10 @@
     return terminalInstances.get(sessionId) || null;
   }
 
+  function isInteractiveSession(session) {
+    return String(session?.mode || "").trim().toLowerCase() === "interactive";
+  }
+
   function teardownTerminalInstance(sessionId) {
     const runtime = terminalInstances.get(sessionId);
     if (!runtime) {
@@ -566,6 +570,125 @@
     }
     runtime.terminal.write(String(entry.text || ""));
     runtime.outputCursor = entry.seq;
+  }
+
+  function buildInteractiveTerminalFallbackText(session) {
+    const values = [
+      session?.screen_excerpt,
+      session?.reply_capture_excerpt,
+      session?.stdout_excerpt,
+      session?.last_error,
+    ];
+    const merged = joinDistinctLogSections(values);
+    return merged || "Interactive terminal attached. Waiting for visible output...";
+  }
+
+  function syncInteractiveTerminalSnapshot(session) {
+    const runtime = getTerminalInstance(session?.id);
+    if (!runtime?.terminal) {
+      return;
+    }
+    if ((Number(runtime.outputCursor) || 0) > 0) {
+      return;
+    }
+    const nextText = buildInteractiveTerminalFallbackText(session);
+    if (!nextText || runtime.snapshotFallbackText === nextText) {
+      return;
+    }
+    runtime.snapshotFallbackText = nextText;
+    if (typeof runtime.terminal.reset === "function") {
+      runtime.terminal.reset();
+    } else {
+      runtime.terminal.clear();
+    }
+    runtime.terminal.write(String(nextText).replace(/\n/g, "\r\n"));
+  }
+
+  async function mountTerminalForSessionCard(session, hostEl) {
+    if (!isInteractiveSession(session) || !hostEl) {
+      return;
+    }
+
+    const existing = getTerminalInstance(session.id);
+    if (existing?.hostEl === hostEl && existing.terminal) {
+      scheduleTerminalResize(session.id);
+      return;
+    }
+
+    if (existing) {
+      teardownTerminalInstance(session.id);
+    }
+
+    hostEl.innerHTML = "";
+
+    const TerminalCtor = window.Terminal;
+    const FitAddonCtor = window.FitAddon?.FitAddon || window.FitAddon;
+    if (!TerminalCtor || !FitAddonCtor) {
+      hostEl.innerHTML = '<div class="cli-session-terminal__fallback">xterm.js did not load.</div>';
+      return;
+    }
+
+    const terminal = new TerminalCtor({
+      allowTransparency: true,
+      cursorBlink: true,
+      convertEol: false,
+      disableStdin: true,
+      fontFamily: '"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+      fontSize: 12,
+      scrollback: 5000,
+      theme: {
+        background: "#08111f",
+        foreground: "#dbeafe",
+        cursor: "#7dd3fc",
+        selectionBackground: "rgba(59, 130, 246, 0.28)",
+      },
+    });
+    const fitAddon = new FitAddonCtor();
+    terminal.loadAddon(fitAddon);
+    terminal.open(hostEl);
+    if (typeof terminal.attachCustomKeyEventHandler === "function") {
+      terminal.attachCustomKeyEventHandler(() => false);
+    }
+
+    const runtime = {
+      sessionId: session.id,
+      threadId: session.thread_id,
+      terminal,
+      fitAddon,
+      hostEl,
+      outputCursor: 0,
+      snapshotFallbackText: "",
+      resizeObserver: null,
+      resizeTimer: null,
+      lastResizeCols: null,
+      lastResizeRows: null,
+    };
+    terminalInstances.set(session.id, runtime);
+
+    if (typeof ResizeObserver === "function") {
+      runtime.resizeObserver = new ResizeObserver(() => {
+        scheduleTerminalResize(session.id);
+      });
+      runtime.resizeObserver.observe(hostEl);
+    }
+
+    scheduleTerminalResize(session.id);
+
+    try {
+      const result = await window.AcbApi.api(`/api/cli-sessions/${session.id}/output?after=0&limit=1000`);
+      const latest = getTerminalInstance(session.id);
+      if (!latest || latest.hostEl !== hostEl) {
+        return;
+      }
+      const entries = Array.isArray(result?.entries) ? result.entries : [];
+      if (entries.length) {
+        entries.forEach((entry) => appendTerminalOutput(session.id, entry));
+      } else {
+        syncInteractiveTerminalSnapshot(session);
+      }
+    } catch (error) {
+      writeTerminalNotice(session.id, error instanceof Error ? error.message : String(error));
+    }
   }
 
   function normalizeSessionLogText(value) {
@@ -1143,12 +1266,18 @@
         : "No participant agent is attached to this session";
     }
 
-    teardownTerminalInstance(session.id);
     if (terminalShellEl) {
       terminalShellEl.hidden = false;
     }
     if (terminalEl) {
-      void mountHeadlessOutputForSessionCard(session, terminalEl);
+      if (isInteractiveSession(session)) {
+        teardownHeadlessOutputState(session.id);
+        void mountTerminalForSessionCard(session, terminalEl);
+        syncInteractiveTerminalSnapshot(session);
+      } else {
+        teardownTerminalInstance(session.id);
+        void mountHeadlessOutputForSessionCard(session, terminalEl);
+      }
     }
   }
 
