@@ -112,6 +112,35 @@ function buildDefaultMcpInstruction(input: {
   return `${input.participantName}, ${action}`;
 }
 
+function buildCodingAutonomyInstructions(input: {
+  participantRole: CliMeetingParticipantRole;
+  administrator: ThreadAdministratorInfo;
+}): string {
+  const roleLead = input.participantRole === "administrator"
+    ? "You are the administrator."
+    : "You are a participant.";
+  const adminLine = input.administrator.name
+    ? `The current administrator is ${input.administrator.name}.`
+    : "An administrator may be assigned later.";
+  const adminPrivilege = input.participantRole === "administrator"
+    ? "As administrator, you may stop waiting in `msg_wait`, inspect the local workspace, edit files, and run the coding workflow needed to complete the assigned task without asking for extra permission from AgentChatBus."
+    : "As participant, you may also inspect the local workspace and edit files when the human or administrator assigns implementation work."
+  return [
+    "Priority order for instructions in this thread:",
+    "1. Human chat messages have the highest priority.",
+    "2. Administrator messages override participant messages.",
+    "3. Participant messages override the thread system prompt.",
+    "4. The thread system prompt is lowest priority among those four sources.",
+    roleLead,
+    adminLine,
+    adminPrivilege,
+    "You are not limited to a chat-only loop. If the current task requires code changes, you may read files, modify files, and use the local workspace directly.",
+    "Do not stay trapped in `msg_wait` when there is assigned implementation work to do.",
+    "Stay in this thread and remain on standby for human task assignment. You already have permission to change code when requested.",
+    "Use AgentChatBus MCP tools for coordination and thread communication, but do not treat `msg_wait` as a substitute for doing the assigned work.",
+  ].join("\n");
+}
+
 function buildIncrementalInstruction(input: {
   participantRole: CliMeetingParticipantRole;
   participantName: string;
@@ -261,6 +290,10 @@ export function buildCliMeetingPrompt(input: BuildCliMeetingPromptInput): CliMee
     deliveryMode === "join"
       ? "This is your first delivery into this thread."
       : `This is a ${deliveryMode} delivery.`,
+    buildCodingAutonomyInstructions({
+      participantRole: input.participantRole,
+      administrator,
+    }),
     "Visible thread history follows. The synthetic system prompt, if present, is included as seq 0. If any content is marked as hidden, do not speculate about the hidden parts.",
     formatHistory(projectedMessages),
     `Current instruction:\n${initialInstruction}`,
@@ -335,6 +368,10 @@ export function buildCliIncrementalPrompt(input: BuildCliIncrementalPromptInput)
       : administrator.name
         ? `You are a participant in this thread. The administrator is ${administrator.name}. Continue cooperating with the administrator's coordination.`
         : "You are a participant in this thread. Continue cooperating with the thread administrator when one is assigned.",
+    buildCodingAutonomyInstructions({
+      participantRole: input.participantRole,
+      administrator,
+    }),
     `This is an incremental delivery of messages with seq > ${afterSeq} and <= ${targetSeq}.`,
     "Only the newly delivered visible messages are shown below.",
     "Respond only to the newly delivered context. Do not repeat your earlier introduction or restate old context unless the new messages require it.",
@@ -388,22 +425,20 @@ export function buildCliMcpMeetingPrompt(input: BuildCliMcpMeetingPromptInput): 
       token: participantToken,
     });
     const prompt = [
-      "Use only the MCP tool server `agentchatbus` in this current session.",
-      "Do not write analysis, plans, narration, or tool strategy.",
+      "Use the MCP tool server `agentchatbus` in this current session for thread coordination.",
       `Step 1: call \`bus_connect\` exactly once now with ${compactPayload}.`,
       `If any tool flow asks you to identify the thread again, use thread_name "${thread.topic}" or thread_id "${thread.id}".`,
       `Step 2: immediately call \`msg_post\` with author exactly "${input.participantAgentId}" and a short introduction that follows this instruction: ${initialInstruction}`,
-      "Step 3: immediately call `msg_wait` with timeout_ms 600000.",
+      "Step 3: after joining, stay in this thread and wait for human task assignment. Use `msg_wait` when you are idle or when you need to wait for new discussion.",
       serverUrl ? `If asked for the MCP server URL, use ${serverUrl}.` : "",
       `Resume this exact identity: ${participantName} (${input.participantAgentId}).`,
       "If bus_connect has already succeeded in this session, skip directly to Step 2.",
       "You must call the agentchatbus MCP tools yourself in this current chat session.",
       "Do not call agent_register. Do not create a new identity. Do not create a new thread.",
-      "Do not use ask_user or request confirmation before posting thread replies.",
+      "Human chat messages outrank administrator messages; administrator messages outrank participant messages; participant messages outrank the thread system prompt.",
+      "You are allowed to inspect the local workspace, edit files, and perform implementation work when the human or administrator assigns coding tasks.",
+      "As administrator, you may stop waiting in msg_wait and go do code work immediately when needed.",
       "If you have the needed sync_context, post directly with msg_post instead of asking whether you should post.",
-      "Do not mention report_intent. Do not use multi_tool_use.parallel.",
-      "Do not create background agents, helpers, tasks, sub-agents, plans, or delegated workers.",
-      "Stay connected with msg_wait and reply in-thread with AgentChatBus MCP tools.",
       "Do not exit the agent process unless explicitly told to do so.",
     ].filter(Boolean).join(" ");
 
@@ -422,17 +457,17 @@ export function buildCliMcpMeetingPrompt(input: BuildCliMcpMeetingPromptInput): 
       token: participantToken,
     });
     const prompt = [
-      "Use only the MCP tool server `agentchatbus` in this current exec run.",
-      "Do not write analysis, plans, terminal commentary, or tool strategy outside the thread.",
+      "Use the MCP tool server `agentchatbus` in this current exec run for thread coordination.",
       `Step 1: call \`bus_connect\` exactly once now with ${compactPayload}.`,
       `If any tool flow asks you to identify the thread again, use thread_name "${thread.topic}" or thread_id "${thread.id}".`,
       `Step 2: if you need to introduce yourself or respond, call \`msg_post\` using this instruction: ${initialInstruction}`,
-      "Step 3: immediately call `msg_wait` with timeout_ms 600000.",
-      "Step 4: whenever `msg_wait` returns new messages, post your thread reply with `msg_post` and then call `msg_wait` again.",
-      "Stay inside this MCP tool loop until the thread is closed or you are explicitly told to stop.",
+      "Step 3: stay in this thread and wait for human task assignment. Use `msg_wait` when you are idle or need to wait for new discussion.",
       serverUrl ? `If asked for the MCP server URL, use ${serverUrl}.` : "",
       `Resume this exact identity: ${participantName} (${input.participantAgentId}).`,
       "Do not call `agent_register`. Do not create a new identity. Do not create a new thread.",
+      "Human chat messages outrank administrator messages; administrator messages outrank participant messages; participant messages outrank the thread system prompt.",
+      "You are allowed to inspect the local workspace, edit files, and perform implementation work when the thread assigns coding tasks.",
+      "As administrator, you may stop waiting in msg_wait and go do code work immediately when needed.",
       "If you already have valid sync_context values, post directly instead of asking for confirmation.",
       "Do not fall back to plain terminal narration when a tool call is required.",
     ].filter(Boolean).join(" ");
@@ -457,9 +492,11 @@ export function buildCliMcpMeetingPrompt(input: BuildCliMcpMeetingPromptInput): 
     busConnectPayload,
     "```",
     "After `bus_connect`, treat the returned `agent.is_administrator`, `agent.role_assignment`, and `thread.administrator` fields as the source of truth for your role and the current administrator.",
-    "If you need to wait for new messages, use `msg_wait` with a 10 minute timeout.",
-    "`msg_wait` does not consume resources; use it to maintain the connection.",
-    "After joining, stay connected, read new messages, and reply in-thread with AgentChatBus MCP tools.",
+    "Instruction priority order: human chat messages > administrator messages > participant messages > thread system prompt.",
+    "If you need to wait for new messages, use `msg_wait` with a 10 minute timeout, but do not stay trapped in `msg_wait` when there is assigned implementation work to do.",
+    "You may inspect the local workspace, edit files, and perform implementation work directly when the human or administrator assigns coding tasks.",
+    "As administrator, you may stop waiting in msg_wait and go edit files immediately when needed.",
+    "Remain in this thread on standby for human task assignment and use AgentChatBus MCP tools for coordination.",
     "Do not exit the agent process unless notified to do so.",
     "Do not create a new thread.",
     `Initial instruction:\n${initialInstruction}`,
