@@ -11,6 +11,7 @@ type ClaudeCommandRequest = {
   command: string;
   prompt: string;
   workspace: string;
+  model?: string;
   env?: Record<string, string>;
 };
 
@@ -118,7 +119,7 @@ export function parseClaudeHeadlessResult(stdout: string): ClaudeResultEnvelope 
   };
 }
 
-function resolveClaudeCommand(): string {
+export function resolveClaudeCommand(): string {
   return "claude";
 }
 
@@ -126,8 +127,10 @@ class ClaudeHeadlessExecutor implements ClaudeCommandExecutor {
   async run(request: ClaudeCommandRequest, hooks: CliAdapterRunHooks): Promise<ClaudeCommandExecutionResult> {
     return await new Promise<ClaudeCommandExecutionResult>((resolve, reject) => {
       const resumeSessionId = String(request.env?.[CLAUDE_SESSION_ID_ENV_VAR] || "").trim();
+      const requestedModel = String(request.model || "").trim();
       const claudeArgs = [
         ...(resumeSessionId ? ["--resume", resumeSessionId] : []),
+        ...(requestedModel ? ["--model", requestedModel] : []),
         "-p",
         "--output-format",
         "stream-json",
@@ -254,6 +257,7 @@ export class ClaudeHeadlessAdapter implements CliSessionAdapter {
           command: this.command,
           prompt: input.prompt,
           workspace,
+          model: input.model,
           env: input.env,
         },
         hooks,

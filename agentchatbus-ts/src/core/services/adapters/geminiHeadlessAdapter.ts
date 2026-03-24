@@ -13,6 +13,7 @@ type GeminiCommandRequest = {
   command: string;
   prompt: string;
   workspace: string;
+  model?: string;
   env?: Record<string, string>;
 };
 
@@ -121,7 +122,7 @@ export function parseGeminiHeadlessResult(stdout: string): GeminiResultEnvelope 
   };
 }
 
-function resolveGeminiHeadlessCommand(): string {
+export function resolveGeminiHeadlessCommand(): string {
   const configured = String(getConfig().geminiCommand || "").trim();
   if (configured) {
     return configured;
@@ -156,8 +157,10 @@ class GeminiHeadlessExecutor implements GeminiCommandExecutor {
   async run(request: GeminiCommandRequest, hooks: CliAdapterRunHooks): Promise<GeminiCommandExecutionResult> {
     return await new Promise<GeminiCommandExecutionResult>((resolve, reject) => {
       const resumeSessionId = String(request.env?.[GEMINI_SESSION_ID_ENV_VAR] || "").trim();
+      const requestedModel = String(request.model || "").trim();
       const geminiArgs = [
         ...(resumeSessionId ? ["--resume", resumeSessionId] : []),
+        ...(requestedModel ? ["-m", requestedModel] : []),
         "-p",
         "--output-format",
         "json",
@@ -284,6 +287,7 @@ export class GeminiHeadlessAdapter implements CliSessionAdapter {
           command: this.command,
           prompt: input.prompt,
           workspace,
+          model: input.model,
           env: input.env,
         },
         hooks,

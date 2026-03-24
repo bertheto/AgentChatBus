@@ -29,6 +29,7 @@ export interface CliSessionSnapshot {
   thread_id: string;
   adapter: CliSessionAdapterId;
   mode: CliSessionMode;
+  model?: string;
   state: CliSessionState;
   prompt: string;
   initial_instruction?: string;
@@ -101,6 +102,7 @@ export interface CreateCliSessionInput {
   threadId: string;
   adapter: CliSessionAdapterId;
   mode?: CliSessionMode;
+  model?: string;
   prompt?: string;
   initialInstruction?: string;
   workspace?: string;
@@ -1486,6 +1488,7 @@ export class CliSessionManager {
     const cols = adapter.supportsResize ? normalizeTerminalCols(input.cols) : undefined;
     const rows = adapter.supportsResize ? normalizeTerminalRows(input.rows) : undefined;
     const initialInstruction = String(input.initialInstruction || "").trim() || undefined;
+    const model = String(input.model || "").trim() || undefined;
     const participantAgentId = String(input.participantAgentId || "").trim() || undefined;
     const participantDisplayName = String(input.participantDisplayName || "").trim() || undefined;
     const participantRole = input.participantRole;
@@ -1499,6 +1502,7 @@ export class CliSessionManager {
       thread_id: input.threadId,
       adapter: adapterId,
       mode,
+      model,
       state: "created",
       prompt,
       initial_instruction: initialInstruction,
@@ -2007,6 +2011,7 @@ export class CliSessionManager {
           workspace: runtime.snapshot.workspace,
           cols: normalizeTerminalCols(runtime.snapshot.cols),
           rows: normalizeTerminalRows(runtime.snapshot.rows),
+          model: runtime.snapshot.model,
           env: runtime.launchEnv,
         },
         {

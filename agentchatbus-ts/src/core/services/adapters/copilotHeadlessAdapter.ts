@@ -13,6 +13,7 @@ type CopilotCommandRequest = {
   command: string;
   prompt: string;
   workspace: string;
+  model?: string;
   env?: Record<string, string>;
 };
 
@@ -126,7 +127,7 @@ export function parseCopilotHeadlessResult(stdout: string): CopilotResultEnvelop
   };
 }
 
-function resolveCopilotHeadlessCommand(): string {
+export function resolveCopilotHeadlessCommand(): string {
   const configured = String(getConfig().copilotCommand || "").trim();
   if (configured) {
     return configured;
@@ -161,9 +162,10 @@ class CopilotHeadlessExecutor implements CopilotCommandExecutor {
   async run(request: CopilotCommandRequest, hooks: CliAdapterRunHooks): Promise<CopilotCommandExecutionResult> {
     return await new Promise<CopilotCommandExecutionResult>((resolve, reject) => {
       const resumeSessionId = String(request.env?.[COPILOT_SESSION_ID_ENV_VAR] || "").trim();
+      const requestedModel = String(request.model || "").trim() || "gpt-5-mini";
       const copilotArgs = [
         "--model",
-        "gpt-5-mini",
+        requestedModel,
         "--output-format",
         "json",
         "--yolo",
@@ -294,6 +296,7 @@ export class CopilotHeadlessAdapter implements CliSessionAdapter {
           command: this.command,
           prompt: input.prompt,
           workspace,
+          model: input.model,
           env: input.env,
         },
         hooks,

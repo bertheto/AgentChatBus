@@ -93,6 +93,7 @@
   const DEFAULT_THREAD_LAUNCH_INTERVAL_SECONDS = 2;
   const MAX_THREAD_LAUNCH_AGENTS = 4;
   const THREAD_LAUNCH_ADAPTER_STORAGE_KEY = "acb.threadLaunchAdapters.v1";
+  const THREAD_LAUNCH_MODEL_CACHE_KEY = "acb.threadLaunchModels.v1";
   // Keep this list aligned with agentchatbus-ts/src/main.ts and src/main.py so
   // the launch picker matches the server-side deterministic emoji pool.
   const THREAD_LAUNCH_EMOJI_OPTIONS = [
@@ -117,6 +118,210 @@
   ];
   let _threadLaunchAgents = [];
   let _selectedThreadLaunchAgentId = "";
+  let _cliModelDiscovery = null;
+  let _cliModelDiscoveryLoading = false;
+
+  function createEmptyCliModelDiscovery() {
+    return {
+      fetched_at: null,
+      providers: {
+        codex: { adapter: "codex", status: "ready", strategy: "static", models: [], fetched_at: "", source_label: "Static fallback" },
+        cursor: { adapter: "cursor", status: "ready", strategy: "static", models: [], fetched_at: "", source_label: "Static fallback" },
+        claude: { adapter: "claude", status: "ready", strategy: "static", models: [], fetched_at: "", source_label: "Static fallback" },
+        gemini: { adapter: "gemini", status: "ready", strategy: "static", models: [], fetched_at: "", source_label: "Static fallback" },
+        copilot: { adapter: "copilot", status: "ready", strategy: "static", models: [], fetched_at: "", source_label: "Static fallback" },
+      },
+    };
+  }
+
+  function normalizeCliModelDiscovery(payload) {
+    const base = createEmptyCliModelDiscovery();
+    const providers = payload && typeof payload === "object" && payload.providers && typeof payload.providers === "object"
+      ? payload.providers
+      : {};
+    for (const adapter of Object.keys(base.providers)) {
+      const next = providers[adapter];
+      if (!next || typeof next !== "object") {
+        continue;
+      }
+      base.providers[adapter] = {
+        adapter,
+        status: String(next.status || "ready"),
+        strategy: String(next.strategy || "static"),
+        models: Array.isArray(next.models)
+          ? next.models
+            .map((model) => ({
+              id: String(model?.id || "").trim(),
+              label: String(model?.label || model?.id || "").trim(),
+            }))
+            .filter((model) => model.id)
+          : [],
+        fetched_at: String(next.fetched_at || ""),
+        source_label: String(next.source_label || "Static fallback"),
+        error: next.error ? String(next.error) : "",
+      };
+    }
+    base.fetched_at = payload && typeof payload === "object" && payload.fetched_at
+      ? String(payload.fetched_at)
+      : null;
+    return base;
+  }
+
+  function readCliModelDiscoveryCache() {
+    try {
+      const raw = globalThis.localStorage?.getItem(THREAD_LAUNCH_MODEL_CACHE_KEY);
+      if (!raw) {
+        return null;
+      }
+      return normalizeCliModelDiscovery(JSON.parse(raw));
+    } catch {
+      return null;
+    }
+  }
+
+  function writeCliModelDiscoveryCache(snapshot) {
+    try {
+      globalThis.localStorage?.setItem(
+        THREAD_LAUNCH_MODEL_CACHE_KEY,
+        JSON.stringify(snapshot),
+      );
+    } catch {
+      // Ignore storage failures and keep the modal usable.
+    }
+  }
+
+  function getCliModelDiscovery() {
+    if (!_cliModelDiscovery) {
+      _cliModelDiscovery = readCliModelDiscoveryCache() || createEmptyCliModelDiscovery();
+    }
+    return _cliModelDiscovery;
+  }
+
+  function getModelDiscoveryEntry(adapter) {
+    const snapshot = getCliModelDiscovery();
+    return snapshot.providers?.[adapter] || null;
+  }
+
+  function getThreadLaunchAgentModelOptions(agent) {
+    const entry = getModelDiscoveryEntry(String(agent?.adapter || "codex").trim() || "codex");
+    const models = Array.isArray(entry?.models) ? entry.models : [];
+    const currentModel = String(agent?.model || "").trim();
+    const normalized = models
+      .map((model) => ({
+        id: String(model?.id || "").trim(),
+        label: String(model?.label || model?.id || "").trim(),
+      }))
+      .filter((model) => model.id);
+    if (currentModel && !normalized.some((model) => model.id === currentModel)) {
+      normalized.unshift({
+        id: currentModel,
+        label: `${currentModel} (Custom)`,
+      });
+    }
+    return normalized;
+  }
+
+  function buildThreadLaunchModelOptionsHtml(agent) {
+    const options = getThreadLaunchAgentModelOptions(agent);
+    return options.map((model) => (
+      `<option value="${_escapeHtml(model.id)}">${_escapeHtml(model.label || model.id)}</option>`
+    )).join("");
+  }
+
+  function formatDiscoveryTime(isoString) {
+    const value = String(isoString || "").trim();
+    if (!value) {
+      return "";
+    }
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) {
+      return value;
+    }
+    return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  }
+
+  function buildModelDiscoveryStatusText() {
+    const snapshot = getCliModelDiscovery();
+    if (_cliModelDiscoveryLoading) {
+      return "Detecting models...";
+    }
+    if (!snapshot?.fetched_at) {
+      return "Never detected";
+    }
+    const entries = Object.values(snapshot.providers || {});
+    const readyCount = entries.filter((entry) => entry.status === "ready").length;
+    const runtimeCount = entries.filter((entry) => entry.strategy === "runtime").length;
+    const helpCount = entries.filter((entry) => entry.strategy === "help").length;
+    const staticCount = entries.filter((entry) => entry.strategy === "static").length;
+    return `Ready ${readyCount}/5 · Runtime ${runtimeCount} · Help ${helpCount} · Static ${staticCount} · ${formatDiscoveryTime(snapshot.fetched_at)}`;
+  }
+
+  function renderModelDiscoverySummary() {
+    const summaryEl = document.getElementById("thread-launch-model-summary");
+    if (!summaryEl) {
+      return;
+    }
+    const snapshot = getCliModelDiscovery();
+    const providers = ["cursor", "copilot", "claude", "codex", "gemini"];
+    summaryEl.innerHTML = providers.map((adapter) => {
+      const entry = snapshot.providers?.[adapter];
+      if (!entry) {
+        return "";
+      }
+      const label = adapter === "cursor" ? "Cursor"
+        : adapter === "claude" ? "Claude"
+        : adapter === "gemini" ? "Gemini"
+        : adapter === "copilot" ? "Copilot"
+        : "Codex";
+      const detail = `${entry.source_label} · ${Array.isArray(entry.models) ? entry.models.length : 0} models`;
+      const error = entry.error ? ` · ${entry.error}` : "";
+      return `<span class="thread-launch-model-summary__item">${_escapeHtml(label)}: ${_escapeHtml(detail)}${_escapeHtml(error)}</span>`;
+    }).filter(Boolean).join("");
+  }
+
+  function syncModelDiscoveryUi() {
+    const statusEl = document.getElementById("thread-launch-model-status");
+    const buttonEl = document.getElementById("thread-launch-detect-models");
+    if (statusEl) {
+      statusEl.textContent = buildModelDiscoveryStatusText();
+    }
+    if (buttonEl) {
+      buttonEl.disabled = _cliModelDiscoveryLoading;
+      buttonEl.textContent = _cliModelDiscoveryLoading ? "Detecting..." : (getCliModelDiscovery()?.fetched_at ? "Refresh Models" : "Detect Models");
+    }
+    renderModelDiscoverySummary();
+  }
+
+  async function loadCliModelDiscovery(api, options = {}) {
+    if (!_cliModelDiscovery) {
+      _cliModelDiscovery = readCliModelDiscoveryCache() || createEmptyCliModelDiscovery();
+    }
+    syncModelDiscoveryUi();
+    if (!api || _cliModelDiscoveryLoading) {
+      return _cliModelDiscovery;
+    }
+    _cliModelDiscoveryLoading = true;
+    syncModelDiscoveryUi();
+    try {
+      const path = options.force === true ? "/api/cli-models/discover" : "/api/cli-models";
+      const method = options.force === true ? "POST" : "GET";
+      const payload = await api(path, { method });
+      if (payload) {
+        const normalized = normalizeCliModelDiscovery(payload);
+        if (!normalized.fetched_at && _cliModelDiscovery?.fetched_at) {
+          // Preserve the last successful manual detection across server restarts.
+        } else {
+          _cliModelDiscovery = normalized;
+          writeCliModelDiscoveryCache(_cliModelDiscovery);
+        }
+      }
+    } finally {
+      _cliModelDiscoveryLoading = false;
+      syncModelDiscoveryUi();
+      renderThreadLaunchAgents();
+    }
+    return _cliModelDiscovery;
+  }
 
   function readThreadLaunchAdapterPreferences() {
     try {
@@ -389,6 +594,7 @@
     return {
       id: `thread-agent-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       adapter,
+      model: String(overrides.model || "").trim(),
       emoji,
       mode: getThreadLaunchModeForAdapter(adapter),
       meetingTransport: "agent_mcp",
@@ -406,6 +612,7 @@
   function getThreadLaunchAgentConfigs() {
     return _threadLaunchAgents.map((agent) => ({
       adapter: agent.adapter || "claude",
+      model: String(agent.model || "").trim(),
       emoji: String(agent.emoji || "").trim() || pickRandomThreadLaunchEmoji(agent.id),
       mode: String(agent.mode || getThreadLaunchModeForAdapter(agent.adapter || "claude")).trim()
         || getThreadLaunchModeForAdapter(agent.adapter || "claude"),
@@ -724,6 +931,44 @@
                 </select>
               </div>
             </div>
+            <div class="settings-field thread-launch-agent-field thread-launch-agent-field--model">
+              <label>Model</label>
+              <div class="thread-launch-model-row">
+                <input
+                  type="text"
+                  value="${_escapeHtml(String(agent.model || ""))}"
+                  data-agent-id="${_escapeHtml(agent.id)}"
+                  data-field="model"
+                  placeholder="Leave blank for adapter default, or type any model"
+                  onclick="event.stopPropagation(); window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')"
+                  onpointerdown="event.stopPropagation(); window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')"
+                  onfocus="event.stopPropagation(); window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')"
+                  oninput="window.AcbModals && window.AcbModals.updateThreadLaunchAgentField(this)"
+                  onchange="window.AcbModals && window.AcbModals.updateThreadLaunchAgentField(this)"
+                />
+                <select
+                  data-agent-id="${_escapeHtml(agent.id)}"
+                  data-field="modelSuggestion"
+                  onclick="event.stopPropagation(); window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')"
+                  onpointerdown="event.stopPropagation(); window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')"
+                  onchange="window.AcbModals && window.AcbModals.updateThreadLaunchAgentField(this)"
+                >
+                  <option value="">Suggestions</option>
+                  ${buildThreadLaunchModelOptionsHtml(agent)}
+                </select>
+              </div>
+              <div class="thread-launch-model-meta">${_escapeHtml((() => {
+                const entry = getModelDiscoveryEntry(agent.adapter);
+                if (!entry) {
+                  return "Type any model manually, or run Detect Models once and reuse the cache across agents.";
+                }
+                const count = Array.isArray(entry.models) ? entry.models.length : 0;
+                const when = formatDiscoveryTime(entry.fetched_at || getCliModelDiscovery()?.fetched_at || "");
+                const source = String(entry.source_label || "Static fallback").trim();
+                const error = entry.error ? ` · ${entry.error}` : "";
+                return `${source} · ${count} suggestions${when ? ` · ${when}` : ""}${error}`;
+              })())}</div>
+            </div>
             <div class="settings-field thread-launch-agent-field thread-launch-agent-field--instruction">
               <label>Instruction Override</label>
               <input
@@ -750,6 +995,7 @@
       addBtn.disabled = _threadLaunchAgents.length >= MAX_THREAD_LAUNCH_AGENTS;
     }
     writeThreadLaunchAdapterPreferences();
+    syncModelDiscoveryUi();
     syncThreadLaunchPromptPreview();
     syncThreadLaunchUi();
   }
@@ -762,6 +1008,7 @@
     if (intervalEl) {
       intervalEl.value = String(DEFAULT_THREAD_LAUNCH_INTERVAL_SECONDS);
     }
+    syncModelDiscoveryUi();
     renderThreadLaunchAgents();
   }
 
@@ -825,6 +1072,19 @@
         return;
       }
       agent.emoji = nextEmoji;
+      renderThreadLaunchAgents();
+      return;
+    }
+    if (field === "model") {
+      agent.model = String(element.value || "").trim();
+      syncThreadLaunchPromptPreview();
+      return;
+    }
+    if (field === "modelSuggestion") {
+      const suggestedModel = String(element.value || "").trim();
+      if (suggestedModel) {
+        agent.model = suggestedModel;
+      }
       renderThreadLaunchAgents();
       return;
     }
@@ -950,7 +1210,7 @@
       method: "POST",
       body: JSON.stringify({
         ide: adapterLabel,
-        model: modeLabel,
+        model: String(config.model || "").trim() || modeLabel,
         display_name: displayName,
         emoji: String(config.emoji || "").trim() || undefined,
       }),
@@ -974,6 +1234,7 @@
       },
       body: JSON.stringify({
         adapter: config.adapter,
+        model: String(config.model || "").trim() || undefined,
         mode: config.mode,
         meeting_transport: config.meetingTransport,
         initial_instruction: config.initialInstruction || "",
@@ -1018,8 +1279,10 @@
     setModalVisible("thread", true);
     resetThreadLaunchAgents();
     syncThreadLaunchUi();
+    syncModelDiscoveryUi();
     setTimeout(() => document.getElementById("modal-topic").focus(), 100);
     if (api) {
+      void loadCliModelDiscovery(api, { force: false });
       _loadTemplates(api).then((templates) => _populateTemplateDropdown(templates));
     }
   }
@@ -1660,6 +1923,13 @@
     }
   }
 
+  async function detectThreadLaunchModels(api) {
+    if (!api) {
+      return null;
+    }
+    return await loadCliModelDiscovery(api, { force: true });
+  }
+
   window.AcbModals = {
     positionDialogNearClick,
     openThreadModal,
@@ -1667,6 +1937,7 @@
     submitThreadModal,
     syncThreadLaunchUi,
     addThreadLaunchAgent,
+    detectThreadLaunchModels,
     removeThreadLaunchAgent,
     selectThreadLaunchAgent,
     updateThreadLaunchAgentField,

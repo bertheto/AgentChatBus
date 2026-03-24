@@ -176,8 +176,20 @@
                             <option value="5">5s</option>
                           </select>
                         </div>
+                        <div class="thread-launch-toolbar__models">
+                          <button
+                            id="thread-launch-detect-models"
+                            class="btn-secondary"
+                            type="button"
+                            onclick="window.AcbModals && window.AcbModals.detectThreadLaunchModels(window.AcbApi && window.AcbApi.api)"
+                          >
+                            Detect Models
+                          </button>
+                          <div id="thread-launch-model-status" class="thread-launch-model-status">Never detected</div>
+                        </div>
                         <button id="thread-launch-add-agent" class="btn-secondary thread-launch-toolbar__add" type="button" onclick="window.AcbModals && window.AcbModals.addThreadLaunchAgent()">Add Agent</button>
                       </div>
+                      <div id="thread-launch-model-summary" class="thread-launch-model-summary"></div>
                       <div id="thread-launch-agents-list" class="thread-launch-agents-list" data-agent-count="1"></div>
                       <div class="meeting-modal-hint">Agents launch sequentially. The first active agent becomes the administrator, and later agents join as participants.</div>
                     </div>

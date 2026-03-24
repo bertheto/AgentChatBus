@@ -15,6 +15,7 @@ type CodexCommandRequest = {
   command: string;
   prompt: string;
   workspace: string;
+  model?: string;
   env?: Record<string, string>;
 };
 
@@ -45,7 +46,7 @@ interface CodexCommandExecutor {
   run(request: CodexCommandRequest, hooks: CliAdapterRunHooks): Promise<CodexCommandExecutionResult>;
 }
 
-function resolveCodexHeadlessCommand(): string {
+export function resolveCodexHeadlessCommand(): string {
   const configured = String(getConfig().codexCommand || "").trim();
   if (configured) {
     return configured;
@@ -113,7 +114,7 @@ function resolveCodexHeadlessCommand(): string {
   return resolved;
 }
 
-function resolveCodexCommand(): string {
+export function resolveCodexCommand(): string {
   const configured = String(getConfig().codexCommand || "").trim();
   if (configured) {
     return configured;
@@ -261,9 +262,10 @@ class CodexHeadlessExecutor implements CodexCommandExecutor {
   async run(request: CodexCommandRequest, hooks: CliAdapterRunHooks): Promise<CodexCommandExecutionResult> {
     return await new Promise<CodexCommandExecutionResult>((resolve, reject) => {
       const resumeThreadId = String(request.env?.[CODEX_THREAD_ID_ENV_VAR] || "").trim();
+      const requestedModel = String(request.model || "").trim();
       const codexArgs = resumeThreadId
-        ? ["exec", "resume", "--json", "--skip-git-repo-check", resumeThreadId, "-"]
-        : ["exec", "--json", "--skip-git-repo-check", "-C", request.workspace, "-"];
+        ? ["exec", "resume", "--json", "--skip-git-repo-check", ...(requestedModel ? ["--model", requestedModel] : []), resumeThreadId, "-"]
+        : ["exec", "--json", "--skip-git-repo-check", ...(requestedModel ? ["--model", requestedModel] : []), "-C", request.workspace, "-"];
 
       const env = { ...process.env, ...(request.env || {}) };
       const isWindows = process.platform === "win32";
@@ -395,6 +397,7 @@ export class CodexHeadlessAdapter implements CliSessionAdapter {
           command,
           prompt: input.prompt,
           workspace,
+          model: input.model,
           env: input.env,
         },
         hooks,

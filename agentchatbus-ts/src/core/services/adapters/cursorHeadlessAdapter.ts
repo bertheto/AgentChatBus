@@ -13,6 +13,7 @@ type CursorCommandRequest = {
   command: string;
   prompt: string;
   workspace: string;
+  model?: string;
   env?: Record<string, string>;
 };
 
@@ -132,7 +133,7 @@ export function parseCursorHeadlessResult(stdout: string): CursorResultEnvelope 
   };
 }
 
-function resolveCursorAgentCommand(): string {
+export function resolveCursorAgentCommand(): string {
   const configured = String(getConfig().cursorAgentCommand || "").trim();
   if (configured) {
     return configured;
@@ -167,10 +168,12 @@ class CursorHeadlessExecutor implements CursorCommandExecutor {
   async run(request: CursorCommandRequest, hooks: CliAdapterRunHooks): Promise<CursorCommandExecutionResult> {
     return await new Promise<CursorCommandExecutionResult>((resolve, reject) => {
       const resumeSessionId = String(request.env?.[CURSOR_SESSION_ID_ENV_VAR] || "").trim();
+      const requestedModel = String(request.model || "").trim();
       const cursorArgs = [
         "--force",
         "--approve-mcps",
         ...(resumeSessionId ? ["--resume", resumeSessionId] : []),
+        ...(requestedModel ? ["--model", requestedModel] : []),
         "-p",
         "--output-format",
         "stream-json",
@@ -297,6 +300,7 @@ export class CursorHeadlessAdapter implements CliSessionAdapter {
           command: this.command,
           prompt: input.prompt,
           workspace,
+          model: input.model,
           env: input.env,
         },
         hooks

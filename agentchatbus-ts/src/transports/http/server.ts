@@ -17,6 +17,7 @@ import {
   saveConfigDict,
 } from "../../core/config/env.js";
 import { buildCliMcpMeetingPrompt } from "../../core/services/cliMeetingContextBuilder.js";
+import { CliModelDiscoveryService } from "../../core/services/cliModelDiscovery.js";
 import { CliSessionManager } from "../../core/services/cliSessionManager.js";
 import { CliMeetingOrchestrator } from "../../core/services/cliMeetingOrchestrator.js";
 import { MemoryStore, memoryStore } from "../../core/services/memoryStore.js";
@@ -127,6 +128,7 @@ export function createHttpServer() {
     store = getMemoryStore();
   }
   const cliSessionManager = new CliSessionManager();
+  const cliModelDiscovery = new CliModelDiscoveryService();
   const cliMeetingOrchestrator = new CliMeetingOrchestrator(store, cliSessionManager);
   const loopbackHost = cfg.host === "0.0.0.0" ? "127.0.0.1" : cfg.host;
   const serverUrl = `http://${loopbackHost}:${cfg.port}`;
@@ -784,6 +786,7 @@ export function createHttpServer() {
         threadId: params.threadId,
         adapter: String(body.adapter || "cursor").trim() as "cursor" | "codex" | "claude" | "gemini" | "copilot",
         mode: "headless",
+        model: typeof body.model === "string" ? body.model.trim() : undefined,
         prompt: finalPrompt,
         initialInstruction: promptSeed,
         workspace: typeof body.workspace === "string" ? body.workspace : undefined,
@@ -804,6 +807,14 @@ export function createHttpServer() {
       reply.code(400);
       return { detail: error instanceof Error ? error.message : String(error) };
     }
+  });
+
+  fastify.get("/api/cli-models", async () => {
+    return cliModelDiscovery.getSnapshot();
+  });
+
+  fastify.post("/api/cli-models/discover", async () => {
+    return await cliModelDiscovery.refreshAll();
   });
 
   fastify.post("/api/threads", async (request, reply) => {

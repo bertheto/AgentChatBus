@@ -8,6 +8,7 @@ export type CliAdapterRunInput = {
   workspace: string;
   cols: number;
   rows: number;
+  model?: string;
   env?: Record<string, string>;
 };
 

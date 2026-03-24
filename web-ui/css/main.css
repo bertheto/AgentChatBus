@@ -3158,7 +3158,7 @@ body[data-theme="light"] .meeting-modal-preview--collapsible {
 
 .thread-launch-toolbar {
   display: grid;
-  grid-template-columns: auto auto 1fr;
+  grid-template-columns: auto auto minmax(240px, 1fr) auto;
   gap: 12px;
   align-items: center;
 }
@@ -3221,9 +3221,45 @@ body[data-theme="light"] .meeting-modal-preview--collapsible {
   height: 36px;
 }
 
+.thread-launch-toolbar__models {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.thread-launch-model-status {
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .thread-launch-toolbar__add {
   justify-self: end;
   min-height: 36px;
+}
+
+.thread-launch-model-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+  margin-bottom: 6px;
+}
+
+.thread-launch-model-summary__item {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg-panel) 70%, var(--bg-input));
+  border: 1px solid var(--border);
+  color: var(--text-2);
+  font-size: 12px;
 }
 
 .thread-launch-agents-list {
@@ -3327,8 +3363,25 @@ body[data-theme="light"] .meeting-modal-preview--collapsible {
   max-width: 132px;
 }
 
+.thread-launch-agent-field--model {
+  min-width: 0;
+}
+
 .thread-launch-agent-field--instruction {
   grid-column: 2;
+}
+
+.thread-launch-model-meta {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.thread-launch-model-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 160px;
+  gap: 8px;
+  align-items: center;
 }
 
 .thread-launch-agent-row__fields .settings-field label {
@@ -3568,6 +3621,19 @@ body[data-theme="light"] .meeting-modal-placeholder {
 
   .thread-launch-toolbar__add {
     justify-self: stretch;
+  }
+
+  .thread-launch-toolbar__models {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .thread-launch-model-status {
+    white-space: normal;
+  }
+
+  .thread-launch-model-row {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .thread-launch-agent-row__header {
