@@ -3,6 +3,10 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { eventBus } from "../../shared/eventBus.js";
+import {
+  closeMeetingLikeHuman,
+  getThreadAdministratorIds,
+} from "../../core/services/meetingCloseService.js";
 import { getStore } from "../../core/services/storeSingleton.js";
 import {
   BusError,
@@ -143,6 +147,20 @@ const toolDefinitions: ToolDefinition[] = [
       required: ["thread_id"],
       properties: {
         thread_id: { type: "string", description: "Thread ID to close." },
+        summary: { type: "string", description: "Optional closing summary for the thread." }
+      }
+    }
+  },
+  {
+    name: "close_meeting",
+    description: "Close a meeting/thread as the thread administrator. Requires explicit `agent_id` and `token`, and follows the same close path as the human manual close flow by stopping the thread's managed CLI sessions before closing the thread.",
+    inputSchema: {
+      type: "object",
+      required: ["thread_id", "agent_id", "token"],
+      properties: {
+        thread_id: { type: "string", description: "Thread ID to close." },
+        agent_id: { type: "string", description: "Administrator agent ID performing the close." },
+        token: { type: "string", description: "Administrator agent token for authentication." },
         summary: { type: "string", description: "Optional closing summary for the thread." }
       }
     }
@@ -921,6 +939,46 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
         return { error: "Thread not found" };
       }
       return { ok: true, thread_id: threadId, status: "closed" };
+    }
+    case "close_meeting": {
+      const threadId = String(args.thread_id || "").trim();
+      const agentId = String(args.agent_id || "").trim();
+      const token = String(args.token || "");
+      const summary = typeof args.summary === "string" ? args.summary : undefined;
+
+      if (!agentId || !token) {
+        return {
+          error: "AUTHENTICATION_REQUIRED",
+          detail: "close_meeting requires explicit agent_id and token.",
+        };
+      }
+
+      const agent = getStore().getAgent(agentId);
+      if (!agent || !getStore().verifyAgentToken(agentId, token)) {
+        return {
+          error: "AUTHENTICATION_REQUIRED",
+          detail: "Invalid agent_id/token",
+        };
+      }
+
+      const thread = getStore().getThread(threadId);
+      if (!thread) {
+        return {
+          error: "THREAD_NOT_FOUND",
+          detail: `Thread '${threadId}' not found`,
+        };
+      }
+
+      const adminIds = getThreadAdministratorIds(getStore(), threadId);
+      if (!adminIds.includes(agentId)) {
+        return {
+          error: "FORBIDDEN",
+          detail: "Only the thread administrator can close this meeting.",
+        };
+      }
+
+      emitObservedCliToolCall(agentId, "close_meeting", threadId);
+      return await closeMeetingLikeHuman(getStore(), { threadId, summary });
     }
     case "thread_archive": {
       const threadId = String(args.thread_id || "");

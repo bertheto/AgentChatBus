@@ -375,7 +375,7 @@ export class MemoryStore {
   getThreads(includeArchived: boolean): ThreadRecord[] {
     const rows = this.persistenceDb.prepare(
       `
-        SELECT id, topic, status, created_at, updated_at, system_prompt, template_id, metadata
+        SELECT id, topic, status, created_at, updated_at, system_prompt, template_id, metadata, closed_at, summary
         FROM threads
         ${includeArchived ? "" : "WHERE status != 'archived'"}
         ORDER BY created_at DESC
@@ -638,7 +638,7 @@ export class MemoryStore {
 
   getThread(threadId: string): ThreadRecord | undefined {
     const row = this.persistenceDb.prepare(
-      "SELECT id, topic, status, created_at, updated_at, system_prompt, template_id, metadata FROM threads WHERE id = ?"
+      "SELECT id, topic, status, created_at, updated_at, system_prompt, template_id, metadata, closed_at, summary FROM threads WHERE id = ?"
     ).get(threadId) as Record<string, unknown> | undefined;
     return row ? this.rowToThreadRecord(row) : undefined;
   }
@@ -3521,6 +3521,8 @@ export class MemoryStore {
       status: row.status as ThreadStatus,
       created_at: createdAt,
       updated_at: row.updated_at ? String(row.updated_at) : createdAt,
+      closed_at: row.closed_at ? String(row.closed_at) : undefined,
+      summary: row.summary ? String(row.summary) : undefined,
       system_prompt: row.system_prompt ? String(row.system_prompt) : undefined,
       template_id: row.template_id ? String(row.template_id) : undefined,
       metadata
@@ -3536,7 +3538,7 @@ export class MemoryStore {
 
   getThreadByTopic(topic: string): ThreadRecord | undefined {
     const row = this.persistenceDb.prepare(
-      "SELECT id, topic, status, created_at, updated_at, system_prompt, template_id, metadata FROM threads WHERE topic = ?"
+      "SELECT id, topic, status, created_at, updated_at, system_prompt, template_id, metadata, closed_at, summary FROM threads WHERE topic = ?"
     ).get(topic) as Record<string, unknown> | undefined;
     return row ? this.rowToThreadRecord(row) : undefined;
   }

@@ -22,6 +22,16 @@ function findArrayWithoutItems(obj: unknown, path = ''): string[] {
 }
 
 describe('MCP tool inputSchema array-items validation', () => {
+  it('includes close_meeting with explicit admin credentials', () => {
+    const tools = listTools();
+    const closeMeeting = tools.find((tool) => tool.name === 'close_meeting');
+
+    expect(closeMeeting).toBeDefined();
+    expect(closeMeeting?.inputSchema).toMatchObject({
+      required: ['thread_id', 'agent_id', 'token'],
+    });
+  });
+
   it('all array typed schemas must include `items` (deep check)', () => {
     const tools = listTools();
     const failures: { tool: string; locations: string[] }[] = [];

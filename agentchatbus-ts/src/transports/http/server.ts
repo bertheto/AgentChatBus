@@ -17,6 +17,10 @@ import {
   saveConfigDict,
 } from "../../core/config/env.js";
 import { buildCliMcpMeetingPrompt } from "../../core/services/cliMeetingContextBuilder.js";
+import {
+  closeMeetingLikeHuman,
+  registerThreadSessionClearer,
+} from "../../core/services/meetingCloseService.js";
 import { CliModelDiscoveryService } from "../../core/services/cliModelDiscovery.js";
 import { CliSessionManager } from "../../core/services/cliSessionManager.js";
 import { CliMeetingOrchestrator } from "../../core/services/cliMeetingOrchestrator.js";
@@ -129,6 +133,9 @@ export function createHttpServer() {
     store = getMemoryStore();
   }
   const cliSessionManager = new CliSessionManager();
+  const unregisterThreadSessionClearer = registerThreadSessionClearer(async (threadId: string) =>
+    cliSessionManager.clearSessionsForThread(threadId)
+  );
   const cliModelDiscovery = new CliModelDiscoveryService();
   const cliMeetingOrchestrator = new CliMeetingOrchestrator(store, cliSessionManager);
   const loopbackHost = cfg.host === "0.0.0.0" ? "127.0.0.1" : cfg.host;
@@ -1399,13 +1406,12 @@ export function createHttpServer() {
     const params = request.params as { threadId: string };
     const body = (request.body || {}) as JsonBody;
     const summary = typeof body.summary === "string" ? body.summary : undefined;
-    await cliSessionManager.clearSessionsForThread(params.threadId);
-    const ok = store.closeThread(params.threadId, summary);
-    if (!ok) {
+    const result = await closeMeetingLikeHuman(store, { threadId: params.threadId, summary });
+    if (!result.ok) {
       reply.code(404);
       return { detail: "Thread not found" };
     }
-    return { ok: true, thread_id: params.threadId, status: "closed" };
+    return result;
   });
   fastify.post("/api/threads/:threadId/state", async (request, reply) => {
     const body = request.body as JsonBody;
@@ -2002,6 +2008,11 @@ export function createHttpServer() {
 
   // Ensure underlying persistence DB is closed when the server shuts down.
   fastify.addHook('onClose', async () => {
+    try {
+      unregisterThreadSessionClearer();
+    } catch {
+      // ignore
+    }
     try {
       await cliSessionManager.close();
     } catch {
