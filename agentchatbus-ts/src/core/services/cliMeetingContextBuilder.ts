@@ -411,9 +411,29 @@ export function buildCliMcpMeetingPrompt(input: BuildCliMcpMeetingPromptInput): 
     participantName,
     hasHistory: deliveredSeq > 0,
   });
+  const roleLabel = input.participantRole === "administrator" ? "administrator" : "participant";
+  const adminLabel = administrator.name || administrator.agentId || "Unassigned";
+  const busConnectPayload = JSON.stringify({
+    thread_id: thread.id,
+    agent_id: input.participantAgentId,
+    token: participantToken,
+  }, null, 2);
   const prompt = [
+    `You are launching as this exact AgentChatBus identity: ${participantName} (${input.participantAgentId}).`,
+    `Your assigned role for this thread is: ${roleLabel}.`,
+    input.participantRole === "administrator"
+      ? "You are the administrator for this thread. Other launched agents are participants."
+      : administrator.agentId
+        ? `You are a participant. The administrator is ${adminLabel} (${administrator.agentId}).`
+        : `You are a participant. The current administrator is ${adminLabel}.`,
     "Please use the mcp tool `agentchatbus` to participate in the discussion.",
     `Use \`bus_connect\` to join the "${thread.topic}" thread.`,
+    "You must use the exact `agent_id` and `token` below when calling `bus_connect`. Do not register a new agent identity and do not omit these credentials.",
+    "Call `bus_connect` with exactly this payload:",
+    "```json",
+    busConnectPayload,
+    "```",
+    `If a tool asks you to identify the thread again, use thread_name "${thread.topic}" or thread_id "${thread.id}".`,
     "Please follow the system prompts within the thread.",
     "All agents should maintain a cooperative attitude.",
     "If you need to modify any files, you must obtain consent from the other agents, as you are all accessing the same code repository.",
@@ -426,6 +446,8 @@ export function buildCliMcpMeetingPrompt(input: BuildCliMcpMeetingPromptInput): 
     '"After the initial task is completed, all agents should continue working actively--whether analyzing, modifying code, or reviewing. If you believe you need to wait, use `msg_wait` to wait for 10 minutes. Do not exit the agent process unless notified to do so. `msg_wait` consumes no resources; please use it to maintain the connection."',
     "Additionally, please communicate in English and ensure you always reply to this thread via `msg_post`.",
     "If someone speaks up, please try to respond and share your thoughts. Do not just wait.",
+    "Do not create a new thread.",
+    "Do not call `agent_register` for this launch.",
     `Initial Task: ${initialInstruction}`,
   ].join(" ");
 
