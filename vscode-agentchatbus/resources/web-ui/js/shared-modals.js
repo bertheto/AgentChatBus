@@ -863,35 +863,47 @@
   function buildLaunchPromptPreview({ topic, threadId, config, isFirstAgent }) {
     const participantName = buildDefaultParticipantName(config);
     const initialInstruction = getResolvedThreadLaunchInstruction({ topic, config, isFirstAgent });
-    const resolvedThreadTarget = threadId
-      ? `"${topic}" (${threadId})`
-      : `"${topic}"`;
+    const roleLabel = isFirstAgent ? "administrator" : "participant";
+    const administratorLabel = isFirstAgent
+      ? `${participantName} (<agent_id will be assigned at launch>)`
+      : "Agent 1 (<agent_id will be assigned at launch>)";
+    const previewBusConnectPayload = JSON.stringify({
+      thread_id: threadId || "<thread_id will be created at launch>",
+      agent_id: "<agent_id will be registered at launch>",
+      token: "<token will be issued at launch>",
+    }, null, 2);
     return [
-      "Please use the MCP tool `agentchatbus` to join the discussion.",
-      "",
-      `Use \`bus_connect\` to join the exact thread ${resolvedThreadTarget}.`,
-      "",
-      `Resume the provided participant identity exactly: ${participantName}.`,
-      "",
-      "Do not call `agent_register`. Do not create a new identity for this launch.",
-      "",
-      "At launch time, the real prompt will include the exact `thread_id`, `agent_id`, and `token` to pass into `bus_connect`.",
-      "",
-      "The launched CLI should call `bus_connect` once with those exact credentials.",
-      "",
-      "After `bus_connect`, treat the returned `agent.is_administrator`, `agent.role_assignment`, and `thread.administrator` fields as the source of truth for your role and the current administrator.",
-      "",
-      "If you need to wait for new messages, use `msg_wait` with a 10 minute timeout.",
-      "",
-      "`msg_wait` does not consume resources; use it to maintain the connection.",
-      "",
-      "After joining, stay connected, read new messages, and reply in-thread with AgentChatBus MCP tools.",
-      "",
-      "Do not exit the agent process unless notified to do so.",
-      "",
+      `You are launching as this exact AgentChatBus identity: ${participantName} (<agent_id will be registered at launch>).`,
+      `The current thread "${topic}" is newly created for this launch.`,
+      `Your assigned role for this thread is: ${roleLabel}.`,
+      isFirstAgent
+        ? "You are the administrator for this thread. Other launched agents are participants."
+        : `You are a participant. The administrator is ${administratorLabel}.`,
+      "Please use the mcp tool `agentchatbus` to participate in the discussion.",
+      `Use \`bus_connect\` to join the "${topic}" thread.`,
+      "You must use the exact `agent_id` and `token` below when calling `bus_connect`. Do not register a new agent identity and do not omit these credentials.",
+      "Call `bus_connect` with exactly this payload:",
+      "```json",
+      previewBusConnectPayload,
+      "```",
+      threadId
+        ? `If a tool asks you to identify the thread again, use thread_name "${topic}" or thread_id "${threadId}".`
+        : `If a tool asks you to identify the thread again, use thread_name "${topic}" or thread_id "<thread_id will be created at launch>".`,
+      "Please follow the system prompts within the thread.",
+      "All agents should maintain a cooperative attitude.",
+      "If you need to modify any files, you must obtain consent from the other agents, as you are all accessing the same code repository.",
+      "Everyone can view the source code.",
+      "Please remain courteous and avoid causing code conflicts.",
+      "Human programmers may also participate in the discussion and assist the agents, but the focus is on collaboration among the agents.",
+      "Administrators are responsible for coordinating the work.",
+      "After entering the thread, please introduce yourself.",
+      "You must adhere to the following rules:",
+      '"After the initial task is completed, all agents should continue working actively--whether analyzing, modifying code, or reviewing. If you believe you need to wait, use `msg_wait` to wait for 10 minutes. Do not exit the agent process unless notified to do so. `msg_wait` consumes no resources; please use it to maintain the connection."',
+      "Additionally, please communicate in English and ensure you always reply to this thread via `msg_post`.",
+      "If someone speaks up, please try to respond and share your thoughts. Do not just wait.",
       "Do not create a new thread.",
-      "",
-      `Initial instruction:\n${initialInstruction}`,
+      "Do not call `agent_register` for this launch.",
+      `Initial Task: ${initialInstruction}`,
     ].join("\n");
   }
 
