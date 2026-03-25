@@ -268,13 +268,6 @@
                       </select>
                     </div>
                     <div class="settings-field">
-                      <label for="agent-modal-mode">Mode</label>
-                      <select id="agent-modal-mode">
-                        <option value="interactive">Interactive PTY</option>
-                        <option value="headless">Headless JSON Resume</option>
-                      </select>
-                    </div>
-                    <div class="settings-field" style="grid-column:1 / -1;">
                       <label for="agent-modal-model">Model</label>
                       <div class="thread-launch-model-row">
                         <input id="agent-modal-model" type="text" placeholder="Leave blank for adapter default, or type any model" />
@@ -282,6 +275,13 @@
                           <option value="">Suggestions</option>
                         </select>
                       </div>
+                    </div>
+                    <div class="settings-field">
+                      <label for="agent-modal-mode">Mode</label>
+                      <select id="agent-modal-mode">
+                        <option value="interactive">Interactive PTY</option>
+                        <option value="headless">Headless JSON Resume</option>
+                      </select>
                     </div>
                     <div class="settings-field" style="grid-column:1 / -1;">
                       <label for="agent-modal-display-name">Display Name</label>

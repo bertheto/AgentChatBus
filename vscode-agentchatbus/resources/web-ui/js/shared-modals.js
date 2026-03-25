@@ -1092,19 +1092,6 @@
                 </select>
               </div>
             </div>
-            <div class="settings-field thread-launch-agent-field">
-              <label>Mode</label>
-              <select
-                data-agent-id="${_escapeHtml(agent.id)}"
-                data-field="mode"
-                onclick="event.stopPropagation(); window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')"
-                onpointerdown="event.stopPropagation(); window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')"
-                onchange="window.AcbModals && window.AcbModals.updateThreadLaunchAgentField(this)"
-              >
-                ${buildThreadLaunchModeOptionsHtml(agent.mode)}
-              </select>
-              <div class="thread-launch-model-meta">${_escapeHtml(getThreadLaunchModeLabel(agent.mode))}</div>
-            </div>
             <div class="settings-field thread-launch-agent-field thread-launch-agent-field--model">
               <label>Model</label>
               <div class="thread-launch-model-row">
@@ -1143,6 +1130,19 @@
                 const error = entry.error ? ` · ${entry.error}` : "";
                 return `${source} · ${count} suggestions${when ? ` · ${when}` : ""}${error}`;
               })())}</div>
+            </div>
+            <div class="settings-field thread-launch-agent-field">
+              <label>Mode</label>
+              <select
+                data-agent-id="${_escapeHtml(agent.id)}"
+                data-field="mode"
+                onclick="event.stopPropagation(); window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')"
+                onpointerdown="event.stopPropagation(); window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')"
+                onchange="window.AcbModals && window.AcbModals.updateThreadLaunchAgentField(this)"
+              >
+                ${buildThreadLaunchModeOptionsHtml(agent.mode)}
+              </select>
+              <div class="thread-launch-model-meta">${_escapeHtml(getThreadLaunchModeLabel(agent.mode))}</div>
             </div>
             <div class="settings-field thread-launch-agent-field thread-launch-agent-field--instruction">
               <label>Instruction Override</label>

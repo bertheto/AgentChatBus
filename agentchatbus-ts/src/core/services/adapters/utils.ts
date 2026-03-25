@@ -1,13 +1,56 @@
 import { execFile } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
+import { existsSync } from "node:fs";
+import { homedir } from "node:os";
+import { resolve } from "node:path";
+import { getConfig } from "../../config/registry.js";
 import { DEFAULT_TERMINAL_COLS, DEFAULT_TERMINAL_ROWS } from "./constants.js";
 
+function normalizePathCandidate(value: string | null | undefined): string | undefined {
+  const raw = String(value || "").trim();
+  if (!raw) {
+    return undefined;
+  }
+  try {
+    return resolve(raw);
+  } catch {
+    return undefined;
+  }
+}
+
+function isUsableWorkspacePath(value: string | undefined): boolean {
+  if (!value) {
+    return false;
+  }
+  try {
+    return existsSync(value);
+  } catch {
+    return false;
+  }
+}
+
+export function getDefaultWorkspacePathCandidates(): string[] {
+  const config = getConfig();
+  const candidates = [
+    normalizePathCandidate(config.cliWorkspace),
+    normalizePathCandidate(process.cwd()),
+    normalizePathCandidate(homedir()),
+  ].filter((value, index, list): value is string => Boolean(value) && list.indexOf(value) === index);
+  return candidates;
+}
+
+export function getDefaultWorkspacePath(): string {
+  const candidates = getDefaultWorkspacePathCandidates();
+  const resolved = candidates.find((candidate) => isUsableWorkspacePath(candidate));
+  return resolved || normalizePathCandidate(homedir()) || process.cwd();
+}
+
 export function normalizeWorkspacePath(explicitPath?: string): string {
-  const direct = String(explicitPath || "").trim();
-  if (direct) {
+  const direct = normalizePathCandidate(explicitPath);
+  if (direct && isUsableWorkspacePath(direct)) {
     return direct;
   }
-  return process.cwd();
+  return getDefaultWorkspacePath();
 }
 
 export function normalizeTerminalCols(value?: number): number {
