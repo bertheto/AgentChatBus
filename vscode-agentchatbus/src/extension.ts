@@ -236,7 +236,8 @@ export function activate(context: vscode.ExtensionContext) {
             if (!event.affectsConfiguration('agentchatbus.serverUrl') &&
                 !event.affectsConfiguration('agentchatbus.autoStartBusServer') &&
                 !event.affectsConfiguration('agentchatbus.msgWaitMinTimeoutMs') &&
-                !event.affectsConfiguration('agentchatbus.enforceMsgWaitMinTimeout')) {
+                !event.affectsConfiguration('agentchatbus.enforceMsgWaitMinTimeout') &&
+                !event.affectsConfiguration('agentchatbus.ptyUseConpty')) {
                 return;
             }
 

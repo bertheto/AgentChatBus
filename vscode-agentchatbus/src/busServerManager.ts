@@ -1104,6 +1104,7 @@ export class BusServerManager {
         const cliWorkspacePath = this.resolvePreferredCliWorkspace();
         const msgWaitMinTimeoutMs = Math.max(0, Math.floor(config.get<number>('msgWaitMinTimeoutMs', 60000)));
         const enforceMsgWaitMinTimeout = Boolean(config.get<boolean>('enforceMsgWaitMinTimeout', false));
+        const ptyUseConpty = Boolean(config.get<boolean>('ptyUseConpty', false));
         const parsedUrl = new URL(serverUrl);
         const port = Number(parsedUrl.port || (parsedUrl.protocol === 'https:' ? '443' : '80'));
         const dbPath = path.join(this.globalStoragePath, 'bus-ts.db');
@@ -1130,6 +1131,7 @@ export class BusServerManager {
             cliWorkspacePath,
             msgWaitMinTimeoutMs,
             enforceMsgWaitMinTimeout,
+            ptyUseConpty,
             processEnv: process.env,
         });
     }
@@ -1165,6 +1167,7 @@ export class BusServerManager {
         const cliWorkspacePath = this.resolvePreferredCliWorkspace();
         const msgWaitMinTimeoutMs = Math.max(0, Math.floor(config.get<number>('msgWaitMinTimeoutMs', 60000)));
         const enforceMsgWaitMinTimeout = Boolean(config.get<boolean>('enforceMsgWaitMinTimeout', false));
+        const ptyUseConpty = Boolean(config.get<boolean>('ptyUseConpty', false));
 
         this.recordResolutionAttempt(`Resolved workspace-dev repo root: ${workspaceDevContext.repoRoot}`);
         this.recordResolutionAttempt(`Resolved workspace-dev tsx CLI: ${workspaceDevContext.tsxCliEntrypoint}`);
@@ -1189,6 +1192,7 @@ export class BusServerManager {
             cliWorkspacePath,
             msgWaitMinTimeoutMs,
             enforceMsgWaitMinTimeout,
+            ptyUseConpty,
             processEnv: process.env,
         });
     }

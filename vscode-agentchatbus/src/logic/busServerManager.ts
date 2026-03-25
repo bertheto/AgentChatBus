@@ -247,6 +247,7 @@ export function buildBundledLaunchSpec(input: {
     cliWorkspacePath?: string;
     msgWaitMinTimeoutMs: number;
     enforceMsgWaitMinTimeout: boolean;
+    ptyUseConpty: boolean;
     processEnv?: NodeJS.ProcessEnv;
 }): BundledLaunchSpec {
     const parsedUrl = new URL(input.serverUrl);
@@ -271,6 +272,7 @@ export function buildBundledLaunchSpec(input: {
                 : {}),
             AGENTCHATBUS_WAIT_MIN_TIMEOUT_MS: String(input.msgWaitMinTimeoutMs),
             AGENTCHATBUS_ENFORCE_MSG_WAIT_MIN_TIMEOUT: input.enforceMsgWaitMinTimeout ? '1' : '0',
+            AGENTCHATBUS_PTY_USE_CONPTY: input.ptyUseConpty ? '1' : '0',
         },
         launchMode: 'bundled-ts-service',
         resolvedBy: BUNDLED_RUNTIME_RESOLVED_BY,
@@ -287,6 +289,7 @@ export function buildWorkspaceDevLaunchSpec(input: {
     cliWorkspacePath?: string;
     msgWaitMinTimeoutMs: number;
     enforceMsgWaitMinTimeout: boolean;
+    ptyUseConpty: boolean;
     processEnv?: NodeJS.ProcessEnv;
 }): BundledLaunchSpec {
     const parsedUrl = new URL(input.serverUrl);
@@ -311,6 +314,7 @@ export function buildWorkspaceDevLaunchSpec(input: {
                 : {}),
             AGENTCHATBUS_WAIT_MIN_TIMEOUT_MS: String(input.msgWaitMinTimeoutMs),
             AGENTCHATBUS_ENFORCE_MSG_WAIT_MIN_TIMEOUT: input.enforceMsgWaitMinTimeout ? '1' : '0',
+            AGENTCHATBUS_PTY_USE_CONPTY: input.ptyUseConpty ? '1' : '0',
             AGENTCHATBUS_RELOAD: '1',
             AGENTCHATBUS_WORKSPACE_DEV: '1',
         },

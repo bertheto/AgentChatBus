@@ -5,6 +5,7 @@ type AgentChatBusSettings = {
     autoStartBusServer: boolean;
     msgWaitMinTimeoutMs: number;
     enforceMsgWaitMinTimeout: boolean;
+    ptyUseConpty: boolean;
     scopeLabel: string;
 };
 
@@ -16,6 +17,7 @@ type WebviewMessage =
             autoStartBusServer?: boolean;
             msgWaitMinTimeoutMs?: number | string;
             enforceMsgWaitMinTimeout?: boolean;
+            ptyUseConpty?: boolean;
         };
     }
     | { command: 'openVscodeSettings' };
@@ -108,15 +110,21 @@ export class SettingsPanel {
             enforceMin,
             target
         );
+        const ptyUseConpty = Boolean(payload.ptyUseConpty);
+        await config.update(
+            'ptyUseConpty',
+            ptyUseConpty,
+            target
+        );
 
         void vscode.window.showInformationMessage(
-            `AgentChatBus settings saved. Strict minimum wait enforcement: ${enforceMin ? 'ON' : 'OFF'}.`
+            `AgentChatBus settings saved. Strict minimum wait enforcement: ${enforceMin ? 'ON' : 'OFF'}. Windows ConPTY: ${ptyUseConpty ? 'ON' : 'OFF'}.`
         );
         await this.render();
     }
 
     private resolveConfigurationTarget(
-        section: 'serverUrl' | 'autoStartBusServer' | 'msgWaitMinTimeoutMs' | 'enforceMsgWaitMinTimeout'
+        section: 'serverUrl' | 'autoStartBusServer' | 'msgWaitMinTimeoutMs' | 'enforceMsgWaitMinTimeout' | 'ptyUseConpty'
     ): vscode.ConfigurationTarget {
         const config = vscode.workspace.getConfiguration('agentchatbus');
         const inspected = config.inspect(section);
@@ -146,16 +154,19 @@ export class SettingsPanel {
         const autoStartInspect = config.inspect<boolean>('autoStartBusServer');
         const msgWaitMinInspect = config.inspect<number>('msgWaitMinTimeoutMs');
         const enforceMinInspect = config.inspect<boolean>('enforceMsgWaitMinTimeout');
+        const ptyUseConptyInspect = config.inspect<boolean>('ptyUseConpty');
 
         const scopeLabel = serverUrlInspect?.workspaceFolderValue !== undefined
             || autoStartInspect?.workspaceFolderValue !== undefined
             || msgWaitMinInspect?.workspaceFolderValue !== undefined
             || enforceMinInspect?.workspaceFolderValue !== undefined
+            || ptyUseConptyInspect?.workspaceFolderValue !== undefined
             ? 'Workspace Folder'
             : serverUrlInspect?.workspaceValue !== undefined
                 || autoStartInspect?.workspaceValue !== undefined
                 || msgWaitMinInspect?.workspaceValue !== undefined
                 || enforceMinInspect?.workspaceValue !== undefined
+                || ptyUseConptyInspect?.workspaceValue !== undefined
                 ? 'Workspace'
                 : 'User';
 
@@ -164,6 +175,7 @@ export class SettingsPanel {
             autoStartBusServer: config.get<boolean>('autoStartBusServer', true),
             msgWaitMinTimeoutMs: Math.max(0, Math.floor(config.get<number>('msgWaitMinTimeoutMs', 60000))),
             enforceMsgWaitMinTimeout: config.get<boolean>('enforceMsgWaitMinTimeout', false),
+            ptyUseConpty: config.get<boolean>('ptyUseConpty', false),
             scopeLabel,
         };
     }
@@ -178,6 +190,7 @@ export class SettingsPanel {
         const checked = settings.autoStartBusServer ? 'checked' : '';
         const msgWaitMinTimeoutMs = this.escapeHtml(String(settings.msgWaitMinTimeoutMs));
         const enforceMinChecked = settings.enforceMsgWaitMinTimeout ? 'checked' : '';
+        const ptyUseConptyChecked = settings.ptyUseConpty ? 'checked' : '';
 
         return `<!DOCTYPE html>
 <html lang="en">
@@ -292,6 +305,11 @@ export class SettingsPanel {
             <label for="enforceMsgWaitMinTimeout">Must enforce server minimum wait time</label>
         </div>
         <div class="hint">TS enhancement: when enabled, non-quick-return msg_wait calls below the minimum are rejected with a retry instruction (instead of being clamped).</div>
+        <div class="checkbox-row">
+            <input id="ptyUseConpty" type="checkbox" ${ptyUseConptyChecked} />
+            <label for="ptyUseConpty">Use Windows ConPTY for interactive PTY agents</label>
+        </div>
+        <div class="hint">Recommended OFF if interactive Codex/Cursor/Claude/Gemini/Copilot terminals flicker, freeze, drift, or render incorrectly. Bundled server restart required after change.</div>
         <div class="actions">
             <button class="primary" id="saveButton">Save to VS Code Settings</button>
             <button class="secondary" id="openButton">Open VS Code Settings</button>
@@ -307,7 +325,8 @@ export class SettingsPanel {
                     serverUrl: document.getElementById('serverUrl').value,
                     autoStartBusServer: document.getElementById('autoStartBusServer').checked,
                     msgWaitMinTimeoutMs: document.getElementById('msgWaitMinTimeoutMs').value,
-                    enforceMsgWaitMinTimeout: document.getElementById('enforceMsgWaitMinTimeout').checked
+                    enforceMsgWaitMinTimeout: document.getElementById('enforceMsgWaitMinTimeout').checked,
+                    ptyUseConpty: document.getElementById('ptyUseConpty').checked
                 }
             });
         });
