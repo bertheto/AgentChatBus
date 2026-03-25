@@ -3357,12 +3357,10 @@ body[data-theme="light"] .meeting-modal-preview--collapsible {
 
 .thread-launch-toolbar__interval {
   margin-bottom: 0;
-  min-width: 164px;
+  min-width: 110px;
   display: inline-flex;
-  flex-direction: row;
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
+  gap: 8px;
 }
 
 .thread-launch-toolbar__interval label {
@@ -3370,14 +3368,11 @@ body[data-theme="light"] .meeting-modal-preview--collapsible {
   font-size: 12px;
   line-height: 1;
   white-space: nowrap;
-  flex-shrink: 0;
 }
 
 .thread-launch-toolbar__interval select {
   min-width: 104px;
-  width: 104px;
   height: 36px;
-  flex: 0 0 auto;
 }
 
 .thread-launch-toolbar__models {

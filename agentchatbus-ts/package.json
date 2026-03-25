@@ -8,7 +8,8 @@
     "agentchatbus": "./dist/cli/index.js"
   },
   "scripts": {
-    "build": "npm run check && node ./scripts/build-bundle.mjs",
+    "sync:webui": "node ./scripts/sync-webui.mjs",
+    "build": "npm run sync:webui && npm run check && node ./scripts/build-bundle.mjs",
     "dev": "tsx src/cli/index.ts serve",
     "dev:stdio": "tsx src/cli/index.ts stdio",
     "check": "tsc -p tsconfig.json --noEmit",
