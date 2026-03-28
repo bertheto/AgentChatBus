@@ -14,6 +14,7 @@ import {
   PermissionError
 } from "../types/errors.js";
 import { eventBus } from "../../shared/eventBus.js";
+import { logError } from "../../shared/logger.js";
 import {
   buildAutoAgentDisplayName,
   buildLegacyAutoAgentDisplayNameCandidates,
@@ -768,13 +769,14 @@ export class MemoryStore {
       return false;
     }
     const now = new Date().toISOString();
-    this.persistenceDb.prepare(
-      "UPDATE threads SET status = 'closed', closed_at = ?, summary = ? WHERE id = ?"
-    ).run(now, summary || null, threadId);
     thread.status = "closed";
+    thread.closed_at = now;
+    thread.summary = summary;
+    thread.updated_at = now;
     this.threads.set(threadId, thread);
     this.appendLog(`thread closed: ${threadId}`);
     eventBus.emit({ type: "thread.closed", payload: { thread_id: threadId, summary } });
+    this.upsertThread(thread);
     this.persistState();
     return true;
   }
@@ -3794,8 +3796,9 @@ export class MemoryStore {
         }
       }
       this.hydrateFromRelationalTables();
-    } catch {
-      // Ignore invalid persisted state for the initial prototype.
+    } catch (error) {
+      const detail = error instanceof Error ? (error.stack || error.message) : String(error);
+      logError(`[memory-store] failed to load snapshot state; falling back to relational hydrate: ${detail}`);
       this.hydrateFromRelationalTables();
     }
   }
@@ -3826,8 +3829,9 @@ export class MemoryStore {
             updated_at = excluded.updated_at
         `
       ).run(JSON.stringify(state), new Date().toISOString());
-    } catch {
-      // Ignore persistence failures for the initial prototype.
+    } catch (error) {
+      const detail = error instanceof Error ? (error.stack || error.message) : String(error);
+      logError(`[memory-store] failed to persist state snapshot: ${detail}`);
     }
   }
 
@@ -3841,7 +3845,7 @@ export class MemoryStore {
     this.messageEditHistory.clear();
 
     const threads = this.persistenceDb.prepare(
-      "SELECT id, topic, status, created_at, updated_at, system_prompt, template_id, metadata FROM threads"
+      "SELECT id, topic, status, created_at, updated_at, system_prompt, template_id, metadata, closed_at, summary FROM threads"
     ).all() as Array<Record<string, unknown>>;
     for (const row of threads) {
       const thread = this.rowToThreadRecord(row);
@@ -4136,8 +4140,10 @@ export class MemoryStore {
     const updatedAt = thread.updated_at || new Date().toISOString();
     this.persistenceDb.prepare(
       `
-        INSERT INTO threads (id, topic, status, created_at, updated_at, system_prompt, template_id, metadata)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO threads (
+          id, topic, status, created_at, updated_at, system_prompt, template_id, metadata, closed_at, summary
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           topic = excluded.topic,
           status = excluded.status,
@@ -4145,7 +4151,9 @@ export class MemoryStore {
           updated_at = excluded.updated_at,
           system_prompt = excluded.system_prompt,
           template_id = excluded.template_id,
-          metadata = excluded.metadata
+          metadata = excluded.metadata,
+          closed_at = excluded.closed_at,
+          summary = excluded.summary
       `
     ).run(
       thread.id,
@@ -4155,7 +4163,9 @@ export class MemoryStore {
       updatedAt,
       thread.system_prompt || null,
       thread.template_id || null,
-      thread.metadata ? JSON.stringify(thread.metadata) : null
+      thread.metadata ? JSON.stringify(thread.metadata) : null,
+      thread.closed_at || null,
+      thread.summary || null
     );
   }
 

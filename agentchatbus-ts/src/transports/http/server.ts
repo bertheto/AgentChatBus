@@ -1440,6 +1440,20 @@ export function createHttpServer() {
     return { ok: true, force };
   });
 
+  const setThreadStatus = async (
+    request: FastifyRequest,
+    reply: FastifyReply,
+    status: string,
+  ) => {
+    const params = request.params as { threadId: string };
+    const ok = store.setThreadStatus(params.threadId, status as never);
+    if (!ok) {
+      reply.code(404);
+      return { detail: "Thread not found" };
+    }
+    return { ok: true };
+  };
+
   fastify.post("/api/threads/:threadId/archive", async (request, reply) => setThreadStatus(request, reply, "archived"));
   fastify.post("/api/threads/:threadId/unarchive", async (request, reply) => setThreadStatus(request, reply, "discuss"));
   fastify.post("/api/threads/:threadId/rename", async (request, reply) => {
@@ -2120,16 +2134,6 @@ export function createHttpServer() {
   });
 
   return fastify;
-}
-
-async function setThreadStatus(request: FastifyRequest, reply: FastifyReply, status: string) {
-  const params = request.params as { threadId: string };
-  const ok = getMemoryStore().setThreadStatus(params.threadId, status as never);
-  if (!ok) {
-    reply.code(404);
-    return { detail: "Thread not found" };
-  }
-  return { ok: true };
 }
 
 export async function startHttpServer() {
