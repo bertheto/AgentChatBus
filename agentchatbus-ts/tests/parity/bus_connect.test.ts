@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { randomUUID } from 'crypto';
 import type { FastifyInstance } from 'fastify';
-import { createHttpServer } from '../../src/transports/http/server.js';
+import { createHttpServer, memoryStoreInstance } from '../../src/transports/http/server.js';
 
 let BASE_URL = '';
 
@@ -1155,6 +1155,40 @@ describe('Bus Connect Parity Tests', () => {
         expect(second.thread.created).toBe(false);
         expect(second.thread.status).toBe("archived");
         expect(second.thread.administrator.agent_id).toBe(first.agent.agent_id);
+    });
+
+    it('bus_connect prefers auto-assigned admin over creator admin and records join membership', async () => {
+        const threadName = "Auto Admin Priority-" + randomUUID().slice(0, 8);
+        const creator = await callMcpTool('bus_connect', {
+            thread_name: threadName,
+            ide: "CreatorIDE",
+            model: "CreatorModel"
+        });
+
+        const joiner = await callMcpTool('bus_connect', {
+            thread_name: threadName,
+            ide: "JoinerIDE",
+            model: "JoinerModel"
+        });
+
+        const store = memoryStoreInstance!;
+        store.assignAdmin(
+            creator.thread.thread_id,
+            joiner.agent.agent_id,
+            joiner.agent.name
+        );
+
+        const refreshed = await callMcpTool('bus_connect', {
+            thread_name: threadName,
+            agent_id: joiner.agent.agent_id,
+            token: joiner.agent.token
+        });
+
+        expect(refreshed.thread.administrator.agent_id).toBe(joiner.agent.agent_id);
+        expect(refreshed.agent.is_administrator).toBe(true);
+
+        const threadAgents = store.getThreadAgents(creator.thread.thread_id);
+        expect(threadAgents.some((agent) => agent.id === joiner.agent.agent_id)).toBe(true);
     });
 
     it('bus_connect rejects missing templates like Python', async () => {

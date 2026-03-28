@@ -1834,6 +1834,10 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
         threadCreated = true;
       }
 
+      // In TS we track explicit participant membership, so a successful join
+      // should become durable even before the agent posts a message.
+      getStore().addThreadParticipant(thread.id, agent.id);
+
       getStore().updateAgentActivity(agent.id, "bus_connect", true);
       emitObservedCliToolCall(agent.id, "bus_connect", thread.id);
 
@@ -1847,8 +1851,8 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
 
       // Phase 4: Identify Administrator Role
       const settings = getStore().getThreadSettings(thread.id);
-      const adminId = (settings as any)?.creator_admin_id || (settings as any)?.auto_assigned_admin_id;
-      const adminName = (settings as any)?.creator_admin_name || (settings as any)?.auto_assigned_admin_name;
+      const adminId = (settings as any)?.auto_assigned_admin_id || (settings as any)?.creator_admin_id;
+      const adminName = (settings as any)?.auto_assigned_admin_name || (settings as any)?.creator_admin_name;
 
       const isAdmin = adminId === agent.id;
       let roleAssignment = "You are a PARTICIPANT in this thread. Please wait for the administrator to coordinate or assign you tasks.";
