@@ -76,3 +76,6 @@ vscode-agentchatbus/.vscode-test/
 AGENTS.md
 .history/
 CLAUDE.md
+.serena/
+.cursorignore
+.cursorindexingignore
