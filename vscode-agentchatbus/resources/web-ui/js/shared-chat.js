@@ -1,4 +1,484 @@
 (function () {
+  const cliActivityConfig = {
+    getActiveThreadId: null,
+    scrollBottom: null,
+    resolveActivityIdentity: null,
+    hideTyping: null,
+  };
+  const cliActivityCards = new Map();
+  const cliActivityPendingRows = new Map();
+  const cliActivitySessionsByThread = new Map();
+
+  function escapeHtml(value) {
+    return String(value ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+
+  function getThreadActivityCache(threadId) {
+    const key = String(threadId || "").trim();
+    if (!key) {
+      return null;
+    }
+    let bucket = cliActivitySessionsByThread.get(key);
+    if (!bucket) {
+      bucket = new Map();
+      cliActivitySessionsByThread.set(key, bucket);
+    }
+    return bucket;
+  }
+
+  function setCliActivityConfig(config = {}) {
+    Object.assign(cliActivityConfig, config || {});
+  }
+
+  function getNativeCard(sessionId) {
+    const card = cliActivityCards.get(String(sessionId || ""));
+    if (card && card.isConnected) {
+      return card;
+    }
+    if (card) {
+      cliActivityCards.delete(String(sessionId || ""));
+    }
+    return null;
+  }
+
+  function getPendingRow(sessionId) {
+    const row = cliActivityPendingRows.get(String(sessionId || ""));
+    if (row && row.isConnected) {
+      return row;
+    }
+    if (row) {
+      cliActivityPendingRows.delete(String(sessionId || ""));
+    }
+    return null;
+  }
+
+  function clearCliActivityRows(threadId = null, clearCache = true) {
+    const normalizedThreadId = String(threadId || "").trim();
+    for (const [sessionId, card] of cliActivityCards.entries()) {
+      if (!card) continue;
+      if (!normalizedThreadId || String(card.dataset.threadId || "") === normalizedThreadId) {
+        card.remove();
+        cliActivityCards.delete(sessionId);
+      }
+    }
+    for (const [sessionId, row] of cliActivityPendingRows.entries()) {
+      if (!row) continue;
+      if (!normalizedThreadId || String(row.dataset.threadId || "") === normalizedThreadId) {
+        row.remove();
+        cliActivityPendingRows.delete(sessionId);
+      }
+    }
+    if (!normalizedThreadId) {
+      if (!clearCache) {
+        return;
+      }
+      cliActivitySessionsByThread.clear();
+      return;
+    }
+    if (clearCache) {
+      cliActivitySessionsByThread.delete(normalizedThreadId);
+    }
+  }
+
+  function clearCliActivityForAuthor(authorId) {
+    const targetAuthorId = String(authorId || "").trim();
+    if (!targetAuthorId) {
+      return;
+    }
+    const activeThreadId = typeof cliActivityConfig.getActiveThreadId === "function"
+      ? String(cliActivityConfig.getActiveThreadId() || "").trim()
+      : "";
+    const cache = getThreadActivityCache(activeThreadId);
+    if (!cache) {
+      return;
+    }
+    for (const session of cache.values()) {
+      const sessionAuthorId = String(session?.participant_agent_id || session?.id || "").trim();
+      if (sessionAuthorId !== targetAuthorId) {
+        continue;
+      }
+      renderCliActivitySession(session, false);
+    }
+  }
+
+  function cssEscape(value) {
+    if (window.CSS && typeof window.CSS.escape === "function") {
+      return window.CSS.escape(String(value || ""));
+    }
+    return String(value || "").replace(/[^a-zA-Z0-9_-]/g, "\\$&");
+  }
+
+  function formatActivityTime(value) {
+    const stamp = String(value || "").trim();
+    if (!stamp) {
+      return "";
+    }
+    const parsed = new Date(stamp);
+    if (Number.isNaN(parsed.getTime())) {
+      return stamp;
+    }
+    return parsed.toLocaleTimeString([], {
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    });
+  }
+
+  function normalizeShellStatusText(session) {
+    const card = session?.native_activity_card;
+    if (card?.shell_status_text) {
+      return String(card.shell_status_text).trim();
+    }
+    const state = String(session?.state || "").trim().toLowerCase();
+    if (state === "failed") return "Failed";
+    if (state === "stopped") return "Stopped";
+    if (state === "completed") return "Completed";
+    if (state === "starting" || state === "created") return "Starting Codex";
+    if (session?.connected_at) return "Connected";
+    return "Running";
+  }
+
+  function buildFallbackNativeCard(session) {
+    const shellStatusText = normalizeShellStatusText(session);
+    const shellStatus = String(session?.state || "").trim().toLowerCase();
+    return {
+      anchor_message_id: String(session?.last_posted_message_id || "").trim() || "",
+      shell_status: (
+        shellStatus === "failed"
+          ? "failed"
+          : shellStatus === "stopped"
+            ? "stopped"
+            : shellStatus === "completed"
+              ? "completed"
+              : session?.connected_at
+                ? "connected"
+                : shellStatus === "starting" || shellStatus === "created"
+                  ? "starting"
+                  : "running"
+      ),
+      shell_status_text: shellStatusText,
+      updated_at: String(
+        session?.updated_at
+        || session?.last_output_at
+        || session?.last_tool_call_at
+        || session?.created_at
+        || "",
+      ),
+      placeholder_visible: true,
+      content_sections: [
+        {
+          kind: "placeholder",
+          title: "Activity",
+          summary: "No active Codex activity to display.",
+          status: "placeholder",
+          meta: shellStatusText,
+        },
+      ],
+    };
+  }
+
+  function getNativeCardModel(session) {
+    if (!session || !session.id) {
+      return null;
+    }
+    const card = session.native_activity_card && typeof session.native_activity_card === "object"
+      ? session.native_activity_card
+      : buildFallbackNativeCard(session);
+    const sections = Array.isArray(card.content_sections) ? card.content_sections : [];
+    if (!sections.length) {
+      return buildFallbackNativeCard(session);
+    }
+    return {
+      ...card,
+      shell_status_text: String(card.shell_status_text || normalizeShellStatusText(session)).trim(),
+      updated_at: String(
+        card.updated_at
+        || session.updated_at
+        || session.last_output_at
+        || session.last_tool_call_at
+        || session.created_at
+        || "",
+      ).trim(),
+      content_sections: sections,
+    };
+  }
+
+  function buildSectionItemsHtml(section) {
+    const items = Array.isArray(section?.items) ? section.items : [];
+    if (!items.length) {
+      return "";
+    }
+    if (section.kind === "files") {
+      return `
+        <div class="msg-native-card__chips">
+          ${items.map((item) => `
+            <span class="msg-native-card__chip" data-kind="${escapeHtml(item.kind || "update")}">${escapeHtml(item.label || "")}</span>
+          `).join("")}
+        </div>
+      `;
+    }
+    if (section.kind === "plan") {
+      return `
+        <div class="msg-native-card__plan">
+          ${items.map((item) => `
+            <div class="msg-native-card__plan-step" data-status="${escapeHtml(item.status || "")}">
+              <span class="msg-native-card__plan-dot"></span>
+              <span>${escapeHtml(item.label || "")}</span>
+            </div>
+          `).join("")}
+        </div>
+      `;
+    }
+    return `
+      <div class="msg-native-card__items">
+        ${items.map((item) => `
+          <div class="msg-native-card__item">
+            <span class="msg-native-card__item-label">${escapeHtml(item.label || "")}</span>
+            ${item.value ? `<span class="msg-native-card__item-value">${escapeHtml(item.value)}</span>` : ""}
+          </div>
+        `).join("")}
+      </div>
+    `;
+  }
+
+  function buildSectionHtml(section) {
+    if (!section || typeof section !== "object") {
+      return "";
+    }
+    const summary = String(section.summary || "").trim();
+    const meta = String(section.meta || "").trim();
+    return `
+      <section class="msg-native-card__section" data-kind="${escapeHtml(section.kind || "placeholder")}" data-status="${escapeHtml(section.status || "placeholder")}">
+        <div class="msg-native-card__section-title">${escapeHtml(section.title || "Activity")}</div>
+        <div class="msg-native-card__section-summary">${escapeHtml(summary || "No active Codex activity to display.")}</div>
+        ${meta ? `<div class="msg-native-card__section-meta">${escapeHtml(meta)}</div>` : ""}
+        ${section.kind === "diff" ? `<pre class="msg-native-card__diff">${escapeHtml(summary || "")}</pre>` : ""}
+        ${buildSectionItemsHtml(section)}
+      </section>
+    `;
+  }
+
+  function buildNativeCardHtml(model) {
+    return `
+      <div class="msg-native-card__header">
+        <span class="msg-native-card__status">${escapeHtml(model.shell_status_text || "Connected")}</span>
+        <span class="msg-native-card__time">${escapeHtml(model.updated_at ? formatActivityTime(model.updated_at) : "")}</span>
+      </div>
+      <div class="msg-native-card__body">
+        ${model.content_sections.map((section) => buildSectionHtml(section)).join("")}
+      </div>
+    `;
+  }
+
+  function resolveActivityIdentity(session) {
+    return typeof cliActivityConfig.resolveActivityIdentity === "function"
+      ? cliActivityConfig.resolveActivityIdentity(session) || {}
+      : {};
+  }
+
+  function getLatestMessageRow(threadId, authorId, anchorMessageId) {
+    const activeThreadId = typeof cliActivityConfig.getActiveThreadId === "function"
+      ? String(cliActivityConfig.getActiveThreadId() || "").trim()
+      : "";
+    const normalizedThreadId = String(threadId || "").trim();
+    if (!normalizedThreadId || normalizedThreadId !== activeThreadId) {
+      return null;
+    }
+    const anchorId = String(anchorMessageId || "").trim();
+    if (anchorId) {
+      const anchoredRow = document.querySelector(`#messages .msg-row[data-msg-id="${cssEscape(anchorId)}"]`);
+      if (anchoredRow) {
+        return anchoredRow;
+      }
+    }
+    const normalizedAuthorId = String(authorId || "").trim();
+    if (!normalizedAuthorId) {
+      return null;
+    }
+    const rows = Array.from(document.querySelectorAll(`#messages .msg-row[data-seq][data-author-id="${cssEscape(normalizedAuthorId)}"]`));
+    return rows.length ? rows[rows.length - 1] : null;
+  }
+
+  function ensurePendingRow(session, identity) {
+    const existing = getPendingRow(session.id);
+    if (existing) {
+      return existing;
+    }
+    const box = document.getElementById("messages");
+    if (!box) {
+      return null;
+    }
+    const color = String(identity.color || "var(--accent)").trim() || "var(--accent)";
+    const avatarEmoji = String(identity.avatarEmoji || "🤖").trim() || "🤖";
+    const authorLabel = String(identity.authorLabel || session?.participant_display_name || "Agent").trim() || "Agent";
+    const authorId = String(identity.authorId || session?.participant_agent_id || session?.id || "").trim();
+    const row = document.createElement("div");
+    row.className = "msg-row msg-row-left msg-row-cli-native-pending";
+    row.dataset.threadId = String(session?.thread_id || "").trim();
+    row.dataset.sessionId = String(session?.id || "").trim();
+    row.dataset.authorId = authorId;
+    row.innerHTML = `
+      <div class="msg-avatar" style="background:${escapeHtml(color)}22;color:${escapeHtml(color)};border:1px solid ${escapeHtml(color)}44">${escapeHtml(avatarEmoji)}</div>
+      <div class="msg-col">
+        <div class="msg-header">
+          <span class="msg-author-label" style="color:${escapeHtml(color)}">${escapeHtml(authorLabel)}</span>
+          <span class="msg-time-label">connected</span>
+        </div>
+      </div>
+    `;
+    box.appendChild(row);
+    cliActivityPendingRows.set(String(session.id), row);
+    return row;
+  }
+
+  function resolveAnchorRow(session, identity, model) {
+    const authorId = String(identity.authorId || session?.participant_agent_id || session?.id || "").trim();
+    const messageRow = getLatestMessageRow(session?.thread_id, authorId, model?.anchor_message_id);
+    if (messageRow) {
+      const pendingRow = getPendingRow(session.id);
+      if (pendingRow) {
+        pendingRow.remove();
+        cliActivityPendingRows.delete(String(session.id));
+      }
+      if (authorId && typeof cliActivityConfig.hideTyping === "function") {
+        cliActivityConfig.hideTyping(authorId);
+      }
+      return messageRow;
+    }
+    const typingRow = authorId ? document.getElementById(`typing-${authorId}`) : null;
+    if (typingRow) {
+      return typingRow;
+    }
+    return ensurePendingRow(session, identity);
+  }
+
+  function attachCardToRow(row, cardEl) {
+    if (!row || !cardEl) {
+      return;
+    }
+    const col = row.querySelector(".msg-col");
+    if (!col) {
+      return;
+    }
+    const anchor = col.querySelector(".bubble-v2, .typing-bubble");
+    if (cardEl.parentElement === col) {
+      if (!anchor) {
+        col.appendChild(cardEl);
+      }
+      return;
+    }
+    if (cardEl.parentElement) {
+      cardEl.parentElement.removeChild(cardEl);
+    }
+    if (!anchor) {
+      col.appendChild(cardEl);
+      return;
+    }
+    const nextSibling = anchor.nextSibling;
+    if (nextSibling) {
+      col.insertBefore(cardEl, nextSibling);
+    } else {
+      col.appendChild(cardEl);
+    }
+  }
+
+  function renderCliActivitySession(session, shouldAutoscroll = false) {
+    const threadId = String(session?.thread_id || "").trim();
+    const activeThreadId = typeof cliActivityConfig.getActiveThreadId === "function"
+      ? String(cliActivityConfig.getActiveThreadId() || "").trim()
+      : "";
+    if (!threadId || !activeThreadId || threadId !== activeThreadId) {
+      return;
+    }
+
+    const model = getNativeCardModel(session);
+    if (!model) {
+      return;
+    }
+
+    const identity = resolveActivityIdentity(session);
+    const row = resolveAnchorRow(session, identity, model);
+    if (!row) {
+      return;
+    }
+
+    const cardEl = getNativeCard(session.id) || document.createElement("div");
+    cardEl.className = "msg-native-card";
+    cardEl.dataset.sessionId = String(session.id);
+    cardEl.dataset.threadId = threadId;
+    cardEl.dataset.authorId = String(identity.authorId || session?.participant_agent_id || session?.id || "").trim();
+    cardEl.dataset.shellStatus = String(model.shell_status || "connected");
+    cardEl.innerHTML = buildNativeCardHtml(model);
+    attachCardToRow(row, cardEl);
+    cliActivityCards.set(String(session.id), cardEl);
+
+    if (shouldAutoscroll && typeof cliActivityConfig.scrollBottom === "function") {
+      cliActivityConfig.scrollBottom(true);
+    }
+  }
+
+  function syncThreadCliSessions(threadId, sessions) {
+    const cache = getThreadActivityCache(threadId);
+    if (!cache) {
+      clearCliActivityRows();
+      return;
+    }
+    cache.clear();
+    (Array.isArray(sessions) ? sessions : []).forEach((session) => {
+      if (session?.id) {
+        cache.set(String(session.id), session);
+      }
+    });
+    clearCliActivityRows(threadId, false);
+    for (const session of cache.values()) {
+      renderCliActivitySession(session, false);
+    }
+  }
+
+  function handleCliSessionEvent(event) {
+    const payload = event?.payload || {};
+    const type = String(event?.type || "");
+    if (!type.startsWith("cli.session.") || type === "cli.session.output") {
+      return;
+    }
+    const session = payload?.session;
+    if (!session || typeof session !== "object" || !session.id || !session.thread_id) {
+      return;
+    }
+    const cache = getThreadActivityCache(session.thread_id);
+    if (!cache) {
+      return;
+    }
+    cache.set(String(session.id), session);
+    renderCliActivitySession(session, type === "cli.session.activity" || type === "cli.session.native_card");
+  }
+
+  function refreshCliCardsForAuthor(authorId) {
+    const targetAuthorId = String(authorId || "").trim();
+    if (!targetAuthorId) {
+      return;
+    }
+    const activeThreadId = typeof cliActivityConfig.getActiveThreadId === "function"
+      ? String(cliActivityConfig.getActiveThreadId() || "").trim()
+      : "";
+    const cache = getThreadActivityCache(activeThreadId);
+    if (!cache) {
+      return;
+    }
+    for (const session of cache.values()) {
+      const sessionAuthorId = String(session?.participant_agent_id || session?.id || "").trim();
+      if (sessionAuthorId !== targetAuthorId) {
+        continue;
+      }
+      renderCliActivitySession(session, false);
+    }
+  }
+
   function setActiveThreadAdminCache(admin) {
     try {
       window.__acbActiveThreadAdmin = admin && typeof admin === "object" ? { ...admin } : null;
@@ -77,6 +557,7 @@
 
     const box = document.getElementById("messages");
     box.innerHTML = "";
+    clearCliActivityRows(id);
     const sysPromptAreaEl = document.getElementById("sys-prompt-area");
     if (sysPromptAreaEl) sysPromptAreaEl.innerHTML = "";
     box.classList.add("loading-history");
@@ -302,6 +783,12 @@
   }
 
   window.AcbChat = {
+    configureCliActivity: setCliActivityConfig,
+    handleCliSessionEvent,
+    syncThreadCliSessions,
+    clearCliActivityForAuthor,
+    refreshCliCardsForAuthor,
+    clearCliActivityRows,
     refreshThreadAdmin,
     selectThread,
     loadNewMessages,

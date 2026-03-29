@@ -1750,10 +1750,6 @@ Note: Thread name is the topic label. Thread ID is the unique identifier.`;
       const isAgentMessage = !isHuman && !isSystem;
       const sentAtLabel = fmtTime(m.created_at);
 
-      if (isAgentMessage && window.AcbChat?.clearCliActivityForAuthor) {
-        window.AcbChat.clearCliActivityForAuthor(String(m.author_id ?? m.author ?? ''));
-      }
-
       const row = document.createElement('div');
       row.className = `msg-row ${isHuman ? 'msg-row-right' : 'msg-row-left'}`;
       row.setAttribute('data-author-id', String(m.author_id ?? authorLabel));
@@ -1900,6 +1896,9 @@ Note: Thread name is the topic label. Thread ID is the unique identifier.`;
       }
 
       box.appendChild(row);
+      if (isAgentMessage && window.AcbChat?.refreshCliCardsForAuthor) {
+        window.AcbChat.refreshCliCardsForAuthor(String(m.author_id ?? m.author ?? ''));
+      }
       if (isHuman && window.AcbChat?.refreshHumanDeliveryIndicators) {
         window.AcbChat.refreshHumanDeliveryIndicators(window.currentThreadId || null);
       }

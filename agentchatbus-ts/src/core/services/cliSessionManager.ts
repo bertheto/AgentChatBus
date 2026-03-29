@@ -29,6 +29,47 @@ export type CliSessionState =
   | "failed"
   | "stopped";
 export type CliSessionStream = "stdout" | "stderr";
+export type CliNativeActivityCardShellStatus =
+  | "starting"
+  | "connected"
+  | "running"
+  | "completed"
+  | "stopped"
+  | "failed";
+export type CliNativeActivityCardSectionKind =
+  | "thinking"
+  | "tool"
+  | "command"
+  | "files"
+  | "plan"
+  | "diff"
+  | "task"
+  | "placeholder";
+
+export interface CliNativeActivityCardSectionItem {
+  label: string;
+  value?: string;
+  status?: string;
+  kind?: string;
+}
+
+export interface CliNativeActivityCardSection {
+  kind: CliNativeActivityCardSectionKind;
+  title: string;
+  summary: string;
+  status: "in_progress" | "completed" | "failed" | "placeholder";
+  meta?: string;
+  items?: CliNativeActivityCardSectionItem[];
+}
+
+export interface CliNativeActivityCard {
+  anchor_message_id?: string;
+  shell_status: CliNativeActivityCardShellStatus;
+  shell_status_text: string;
+  updated_at: string;
+  placeholder_visible: boolean;
+  content_sections: CliNativeActivityCardSection[];
+}
 
 export interface CliSessionSnapshot {
   id: string;
@@ -101,6 +142,7 @@ export interface CliSessionSnapshot {
     stream: CliSessionStream;
   }>;
   recent_activity_events?: CliAdapterActivityEvent[];
+  native_activity_card?: CliNativeActivityCard;
 }
 
 export interface CliSessionOutputEntry {
@@ -294,6 +336,235 @@ const KNOWN_MCP_TOOL_NAMES = new Set([
 
 function nowIso(): string {
   return new Date().toISOString();
+}
+
+function clipNativeCardText(value: unknown, maxLength = 240): string {
+  const normalized = String(value || "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!normalized) {
+    return "";
+  }
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+  return `${normalized.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
+}
+
+function getLatestActivityEntry(
+  entries: CliAdapterActivityEvent[] | undefined,
+  predicate: (entry: CliAdapterActivityEvent) => boolean,
+  status?: CliAdapterActivityEvent["status"],
+): CliAdapterActivityEvent | undefined {
+  if (!Array.isArray(entries) || !entries.length) {
+    return undefined;
+  }
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index];
+    if (!entry || (status && entry.status !== status)) {
+      continue;
+    }
+    if (predicate(entry)) {
+      return entry;
+    }
+  }
+  return undefined;
+}
+
+function getPreferredActivityEntry(
+  entries: CliAdapterActivityEvent[] | undefined,
+  predicate: (entry: CliAdapterActivityEvent) => boolean,
+): CliAdapterActivityEvent | undefined {
+  return getLatestActivityEntry(entries, predicate, "in_progress")
+    || getLatestActivityEntry(entries, predicate);
+}
+
+function mapActivityStatusToCardStatus(
+  status: CliAdapterActivityEvent["status"] | undefined,
+): CliNativeActivityCardSection["status"] {
+  switch (status) {
+    case "completed":
+      return "completed";
+    case "failed":
+    case "declined":
+      return "failed";
+    default:
+      return "in_progress";
+  }
+}
+
+function summarizeShellStatus(snapshot: CliSessionSnapshot): {
+  status: CliNativeActivityCardShellStatus;
+  text: string;
+} {
+  const state = String(snapshot.state || "").trim().toLowerCase();
+  if (state === "failed") {
+    return { status: "failed", text: "Failed" };
+  }
+  if (state === "stopped") {
+    return { status: "stopped", text: "Stopped" };
+  }
+  if (state === "completed") {
+    return { status: "completed", text: "Completed" };
+  }
+  if (state === "starting" || state === "created") {
+    return { status: "starting", text: "Starting Codex" };
+  }
+  if (snapshot.connected_at) {
+    return { status: "connected", text: "Connected" };
+  }
+  return { status: "running", text: "Running" };
+}
+
+function pickNativeCardUpdatedAt(snapshot: CliSessionSnapshot, sections: CliNativeActivityCardSection[]): string {
+  const activityEntries = Array.isArray(snapshot.recent_activity_events) ? snapshot.recent_activity_events : [];
+  const latestActivityAt = activityEntries.length ? String(activityEntries[activityEntries.length - 1]?.at || "") : "";
+  const latestSectionSummary = sections.find((section) => section.status === "in_progress");
+  if (latestSectionSummary && latestActivityAt) {
+    return latestActivityAt;
+  }
+  return String(
+    latestActivityAt
+    || snapshot.last_output_at
+    || snapshot.last_tool_call_at
+    || snapshot.updated_at
+    || snapshot.created_at
+    || nowIso(),
+  ).trim() || nowIso();
+}
+
+function buildNativeActivityCard(snapshot: CliSessionSnapshot): CliNativeActivityCard {
+  const events = Array.isArray(snapshot.recent_activity_events) ? snapshot.recent_activity_events : [];
+  const sections: CliNativeActivityCardSection[] = [];
+  const shell = summarizeShellStatus(snapshot);
+
+  const thinkingEvent = getPreferredActivityEntry(events, (entry) => entry.kind === "thinking");
+  const toolEvent = getPreferredActivityEntry(
+    events,
+    (entry) => entry.kind === "mcp_tool_call" || entry.kind === "dynamic_tool_call",
+  );
+  const commandEvent = getPreferredActivityEntry(events, (entry) => entry.kind === "command_execution");
+  const fileEvent = getPreferredActivityEntry(events, (entry) => entry.kind === "file_change");
+  const planEvent = getPreferredActivityEntry(events, (entry) => entry.kind === "plan");
+
+  if (thinkingEvent?.summary) {
+    sections.push({
+      kind: "thinking",
+      title: "Thinking",
+      summary: clipNativeCardText(thinkingEvent.summary, 280),
+      status: mapActivityStatusToCardStatus(thinkingEvent.status),
+    });
+  }
+
+  if (toolEvent) {
+    const meta = [toolEvent.server, toolEvent.tool].filter(Boolean).join(" / ");
+    sections.push({
+      kind: "tool",
+      title: "Tool",
+      summary: clipNativeCardText(toolEvent.summary || meta || toolEvent.label, 260) || "Using tool",
+      status: mapActivityStatusToCardStatus(toolEvent.status),
+      meta: clipNativeCardText(meta, 180) || undefined,
+    });
+  }
+
+  if (commandEvent) {
+    sections.push({
+      kind: "command",
+      title: "Command",
+      summary: clipNativeCardText(
+        commandEvent.summary || commandEvent.command || commandEvent.label,
+        280,
+      ) || "Running command",
+      status: mapActivityStatusToCardStatus(commandEvent.status),
+      meta: clipNativeCardText(
+        [commandEvent.command, commandEvent.cwd].filter(Boolean).join(" @ "),
+        220,
+      ) || undefined,
+    });
+  }
+
+  if (fileEvent) {
+    sections.push({
+      kind: "files",
+      title: "Files",
+      summary: clipNativeCardText(fileEvent.summary || fileEvent.label, 240) || "Editing files",
+      status: mapActivityStatusToCardStatus(fileEvent.status),
+      items: Array.isArray(fileEvent.files)
+        ? fileEvent.files
+          .slice(0, 8)
+          .map((file) => ({
+            label: file.path,
+            kind: file.change_type || "update",
+          }))
+        : undefined,
+    });
+
+    if (fileEvent.diff) {
+      sections.push({
+        kind: "diff",
+        title: "Diff",
+        summary: clipNativeCardText(fileEvent.diff, 320) || "Diff updated",
+        status: mapActivityStatusToCardStatus(fileEvent.status),
+      });
+    }
+  }
+
+  if (planEvent) {
+    sections.push({
+      kind: "plan",
+      title: "Plan",
+      summary: clipNativeCardText(planEvent.summary || planEvent.label, 240) || "Plan updated",
+      status: mapActivityStatusToCardStatus(planEvent.status),
+      items: Array.isArray(planEvent.plan_steps)
+        ? planEvent.plan_steps
+          .slice(0, 5)
+          .map((step) => ({
+            label: step.step,
+            status: step.status,
+          }))
+        : undefined,
+    });
+  }
+
+  if (
+    (snapshot.state === "completed" || snapshot.state === "failed")
+    && (snapshot.raw_result?.turn_status || snapshot.last_result || snapshot.last_error)
+  ) {
+    sections.push({
+      kind: "task",
+      title: "Task",
+      summary: clipNativeCardText(
+        snapshot.last_error
+          || snapshot.last_result
+          || String(snapshot.raw_result?.turn_status || ""),
+        240,
+      ) || (snapshot.state === "failed" ? "Task failed" : "Task completed"),
+      status: snapshot.state === "failed" ? "failed" : "completed",
+      meta: clipNativeCardText(String(snapshot.raw_result?.turn_status || ""), 80) || undefined,
+    });
+  }
+
+  if (!sections.length) {
+    sections.push({
+      kind: "placeholder",
+      title: "Activity",
+      summary: "No active Codex activity to display.",
+      status: "placeholder",
+      meta: shell.text,
+    });
+  }
+
+  const activeSection = sections.find((section) => section.status === "in_progress");
+  const shellStatusText = activeSection?.title ? clipNativeCardText(activeSection.title, 60) : shell.text;
+
+  return {
+    anchor_message_id: String(snapshot.last_posted_message_id || "").trim() || undefined,
+    shell_status: shell.status,
+    shell_status_text: shellStatusText,
+    updated_at: pickNativeCardUpdatedAt(snapshot, sections),
+    placeholder_visible: sections.length === 1 && sections[0].kind === "placeholder",
+    content_sections: sections,
+  };
 }
 
 function normalizeToolNameCandidate(value: string | undefined): string | undefined {
@@ -4247,12 +4518,22 @@ export class CliSessionManager {
   }
 
   private emitSessionEvent(type: string, runtime: CliSessionRuntime): void {
+    const session = this.cloneSnapshot(runtime.snapshot);
     eventBus.emit({
       type,
       payload: {
         thread_id: runtime.snapshot.thread_id,
         session_id: runtime.snapshot.id,
-        session: this.cloneSnapshot(runtime.snapshot),
+        session,
+      },
+    });
+    eventBus.emit({
+      type: "cli.session.native_card",
+      payload: {
+        thread_id: runtime.snapshot.thread_id,
+        session_id: runtime.snapshot.id,
+        card: session.native_activity_card || null,
+        session,
       },
     });
   }
@@ -4279,6 +4560,7 @@ export class CliSessionManager {
             : entry.plan_steps,
         }))
         : snapshot.recent_activity_events,
+      native_activity_card: buildNativeActivityCard(snapshot),
     };
   }
 

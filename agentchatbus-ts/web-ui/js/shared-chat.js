@@ -5,7 +5,8 @@
     resolveActivityIdentity: null,
     hideTyping: null,
   };
-  const cliActivityRows = new Map();
+  const cliActivityCards = new Map();
+  const cliActivityPendingRows = new Map();
   const cliActivitySessionsByThread = new Map();
 
   function escapeHtml(value) {
@@ -34,31 +35,54 @@
     Object.assign(cliActivityConfig, config || {});
   }
 
-  function getActivityRow(sessionId) {
-    const row = cliActivityRows.get(String(sessionId || ""));
-    if (row && row.isConnected) {
-      return row;
+  function getNativeCard(sessionId) {
+    const card = cliActivityCards.get(String(sessionId || ""));
+    if (card && card.isConnected) {
+      return card;
     }
-    if (row) {
-      cliActivityRows.delete(String(sessionId || ""));
+    if (card) {
+      cliActivityCards.delete(String(sessionId || ""));
     }
     return null;
   }
 
-  function clearCliActivityRows(threadId = null) {
+  function getPendingRow(sessionId) {
+    const row = cliActivityPendingRows.get(String(sessionId || ""));
+    if (row && row.isConnected) {
+      return row;
+    }
+    if (row) {
+      cliActivityPendingRows.delete(String(sessionId || ""));
+    }
+    return null;
+  }
+
+  function clearCliActivityRows(threadId = null, clearCache = true) {
     const normalizedThreadId = String(threadId || "").trim();
-    for (const [sessionId, row] of cliActivityRows.entries()) {
+    for (const [sessionId, card] of cliActivityCards.entries()) {
+      if (!card) continue;
+      if (!normalizedThreadId || String(card.dataset.threadId || "") === normalizedThreadId) {
+        card.remove();
+        cliActivityCards.delete(sessionId);
+      }
+    }
+    for (const [sessionId, row] of cliActivityPendingRows.entries()) {
       if (!row) continue;
       if (!normalizedThreadId || String(row.dataset.threadId || "") === normalizedThreadId) {
         row.remove();
-        cliActivityRows.delete(sessionId);
+        cliActivityPendingRows.delete(sessionId);
       }
     }
     if (!normalizedThreadId) {
+      if (!clearCache) {
+        return;
+      }
       cliActivitySessionsByThread.clear();
       return;
     }
-    cliActivitySessionsByThread.delete(normalizedThreadId);
+    if (clearCache) {
+      cliActivitySessionsByThread.delete(normalizedThreadId);
+    }
   }
 
   function clearCliActivityForAuthor(authorId) {
@@ -66,40 +90,27 @@
     if (!targetAuthorId) {
       return;
     }
-    for (const [sessionId, row] of cliActivityRows.entries()) {
-      if (String(row?.dataset.authorId || "") !== targetAuthorId) {
+    const activeThreadId = typeof cliActivityConfig.getActiveThreadId === "function"
+      ? String(cliActivityConfig.getActiveThreadId() || "").trim()
+      : "";
+    const cache = getThreadActivityCache(activeThreadId);
+    if (!cache) {
+      return;
+    }
+    for (const session of cache.values()) {
+      const sessionAuthorId = String(session?.participant_agent_id || session?.id || "").trim();
+      if (sessionAuthorId !== targetAuthorId) {
         continue;
       }
-      row?.remove();
-      cliActivityRows.delete(sessionId);
+      renderCliActivitySession(session, false);
     }
   }
 
-  function isCliSessionBusy(session) {
-    const interactive = String(session?.interactive_work_state || "").trim().toLowerCase();
-    const replyCapture = String(session?.reply_capture_state || "").trim().toLowerCase();
-    const automation = String(session?.automation_state || "").trim().toLowerCase();
-    return interactive === "busy"
-      || replyCapture === "waiting_for_reply"
-      || replyCapture === "working"
-      || replyCapture === "streaming"
-      || automation.includes("delivery_prompt")
-      || automation.includes("wake_prompt")
-      || automation.includes("working");
-  }
-
-  function pickLatestActivity(events, predicate) {
-    const matching = events.filter((entry) => predicate(entry));
-    return matching.length ? matching[matching.length - 1] : null;
-  }
-
-  function parseActivityTime(value) {
-    const stamp = String(value || "").trim();
-    if (!stamp) {
-      return 0;
+  function cssEscape(value) {
+    if (window.CSS && typeof window.CSS.escape === "function") {
+      return window.CSS.escape(String(value || ""));
     }
-    const millis = Date.parse(stamp);
-    return Number.isFinite(millis) ? millis : 0;
+    return String(value || "").replace(/[^a-zA-Z0-9_-]/g, "\\$&");
   }
 
   function formatActivityTime(value) {
@@ -118,245 +129,262 @@
     });
   }
 
-  function getSessionAuthorId(session) {
-    return String(session?.participant_agent_id || session?.id || "").trim();
-  }
-
-  function getLatestVisibleThreadMessage(threadId) {
-    const normalizedThreadId = String(threadId || "").trim();
-    const activeThreadId = typeof cliActivityConfig.getActiveThreadId === "function"
-      ? String(cliActivityConfig.getActiveThreadId() || "").trim()
-      : "";
-    if (!normalizedThreadId || !activeThreadId || normalizedThreadId !== activeThreadId) {
-      return null;
+  function normalizeShellStatusText(session) {
+    const card = session?.native_activity_card;
+    if (card?.shell_status_text) {
+      return String(card.shell_status_text).trim();
     }
-    const rows = Array.from(document.querySelectorAll("#messages .msg-row[data-seq]"));
-    for (let index = rows.length - 1; index >= 0; index -= 1) {
-      const row = rows[index];
-      if (!row || row.classList.contains("msg-row-cli-activity")) {
-        continue;
-      }
-      const authorId = String(row.getAttribute("data-author-id") || "").trim();
-      const authorLabel = String(row.querySelector(".msg-author-label")?.textContent || "").trim();
-      return {
-        authorId,
-        authorLabel,
-        isHuman: row.getAttribute("data-is-human") === "1",
-      };
-    }
-    return null;
-  }
-
-  function deriveWaitSection(session, waitMarkerAt) {
-    const latestToolEvents = Array.isArray(session?.recent_tool_events) ? session.recent_tool_events : [];
-    const lastToolEvent = latestToolEvents.length ? latestToolEvents[latestToolEvents.length - 1] : null;
-    const lastToolName = String(lastToolEvent?.tool_name || "").trim().toLowerCase();
     const state = String(session?.state || "").trim().toLowerCase();
-    if (lastToolName !== "msg_wait" || (state !== "running" && state !== "starting")) {
-      return null;
-    }
+    if (state === "failed") return "Failed";
+    if (state === "stopped") return "Stopped";
+    if (state === "completed") return "Completed";
+    if (state === "starting" || state === "created") return "Starting Codex";
+    if (session?.connected_at) return "Connected";
+    return "Running";
+  }
 
-    const latestMessage = getLatestVisibleThreadMessage(session?.thread_id);
-    const sessionAuthorId = getSessionAuthorId(session);
-    let summary = "Connected and waiting for the next visible message";
-    if (latestMessage?.isHuman) {
-      summary = `Waiting for ${latestMessage.authorLabel || "the human"} to reply`;
-    } else if (latestMessage?.authorId && latestMessage.authorId === sessionAuthorId) {
-      summary = "Waiting for a reply in the thread";
-    }
-
-    const afterSeqCandidates = [
-      Number(session?.last_posted_seq),
-      Number(session?.last_acknowledged_seq),
-      Number(session?.last_delivered_seq),
-    ].filter((value) => Number.isFinite(value) && value > 0);
-    const afterSeq = afterSeqCandidates.length ? afterSeqCandidates[0] : null;
-    const metaParts = ["msg_wait"];
-    if (afterSeq !== null) {
-      metaParts.push(`after seq ${afterSeq}`);
-    }
-    if (waitMarkerAt) {
-      metaParts.push(`live since ${formatActivityTime(waitMarkerAt)}`);
-    }
-
+  function buildFallbackNativeCard(session) {
+    const shellStatusText = normalizeShellStatusText(session);
+    const shellStatus = String(session?.state || "").trim().toLowerCase();
     return {
-      key: "waiting",
-      title: "Waiting",
-      summary,
-      meta: metaParts.join(" · "),
-      tone: "waiting",
+      anchor_message_id: String(session?.last_posted_message_id || "").trim() || "",
+      shell_status: (
+        shellStatus === "failed"
+          ? "failed"
+          : shellStatus === "stopped"
+            ? "stopped"
+            : shellStatus === "completed"
+              ? "completed"
+              : session?.connected_at
+                ? "connected"
+                : shellStatus === "starting" || shellStatus === "created"
+                  ? "starting"
+                  : "running"
+      ),
+      shell_status_text: shellStatusText,
+      updated_at: String(
+        session?.updated_at
+        || session?.last_output_at
+        || session?.last_tool_call_at
+        || session?.created_at
+        || "",
+      ),
+      placeholder_visible: true,
+      content_sections: [
+        {
+          kind: "placeholder",
+          title: "Activity",
+          summary: "No active Codex activity to display.",
+          status: "placeholder",
+          meta: shellStatusText,
+        },
+      ],
     };
   }
 
-  function deriveCliActivityModel(session) {
+  function getNativeCardModel(session) {
     if (!session || !session.id) {
       return null;
     }
-    const state = String(session.state || "").trim().toLowerCase();
-    const latestByItem = new Map();
-    const events = Array.isArray(session.recent_activity_events) ? session.recent_activity_events : [];
-    events.forEach((entry) => {
-      if (entry?.item_id) {
-        latestByItem.set(String(entry.item_id), entry);
-      }
-    });
-    const activeEvents = Array.from(latestByItem.values()).filter((entry) => entry?.status === "in_progress");
-    const latestToolEvents = Array.isArray(session?.recent_tool_events) ? session.recent_tool_events : [];
-    const lastToolEvent = latestToolEvents.length ? latestToolEvents[latestToolEvents.length - 1] : null;
-    const lastToolName = String(lastToolEvent?.tool_name || "").trim().toLowerCase();
-    const activeWaitEvent = pickLatestActivity(
-      activeEvents,
-      (entry) => (
-        entry?.kind === "mcp_tool_call"
-        || entry?.kind === "dynamic_tool_call"
-      ) && String(entry?.tool || "").trim().toLowerCase() === "msg_wait",
-    );
-    const waitMarkerAt = parseActivityTime(activeWaitEvent?.at) || (
-      lastToolName === "msg_wait" ? parseActivityTime(session?.last_tool_call_at || lastToolEvent?.at) : 0
-    );
-    const isStaleBeforeWait = (entry) => {
-      if (!entry || !waitMarkerAt) {
-        return false;
-      }
-      return parseActivityTime(entry.at) < waitMarkerAt;
-    };
-    const planEvent = pickLatestActivity(
-      activeEvents,
-      (entry) => entry?.kind === "plan" && !isStaleBeforeWait(entry),
-    );
-    const thinkingEvent = pickLatestActivity(
-      activeEvents,
-      (entry) => entry?.kind === "thinking" && !isStaleBeforeWait(entry),
-    );
-    const toolEvent = pickLatestActivity(
-      activeEvents,
-      (entry) => (
-        entry?.kind === "mcp_tool_call" || entry?.kind === "dynamic_tool_call"
-      ) && String(entry?.tool || "").trim().toLowerCase() !== "msg_wait" && !isStaleBeforeWait(entry),
-    );
-    const commandEvent = pickLatestActivity(
-      activeEvents,
-      (entry) => entry?.kind === "command_execution" && !isStaleBeforeWait(entry),
-    );
-    const fileEvent = pickLatestActivity(
-      activeEvents,
-      (entry) => entry?.kind === "file_change" && !isStaleBeforeWait(entry),
-    );
-    const sections = [];
-
-    if (thinkingEvent || planEvent || (isCliSessionBusy(session) && !waitMarkerAt)) {
-      const lines = [];
-      if (thinkingEvent?.summary) {
-        lines.push(thinkingEvent.summary);
-      } else if (planEvent?.summary) {
-        lines.push(planEvent.summary);
-      } else {
-        lines.push("Working through the next response");
-      }
-      sections.push({
-        key: "thinking",
-        title: "Thinking",
-        summary: lines[0],
-        planSteps: Array.isArray(planEvent?.plan_steps) ? planEvent.plan_steps : [],
-      });
-    }
-
-    if (toolEvent) {
-      const detailParts = [];
-      if (toolEvent.server) detailParts.push(toolEvent.server);
-      if (toolEvent.tool) detailParts.push(toolEvent.tool);
-      sections.push({
-        key: "tool",
-        title: "Using tool",
-        summary: toolEvent.summary || detailParts.join(" / ") || "Calling a tool",
-        meta: detailParts.join(" / "),
-      });
-    }
-
-    if (commandEvent) {
-      sections.push({
-        key: "command",
-        title: "Running command",
-        summary: commandEvent.summary || commandEvent.command || "Running a command",
-        meta: [commandEvent.command, commandEvent.cwd].filter(Boolean).join(" @ "),
-      });
-    }
-
-    if (fileEvent) {
-      sections.push({
-        key: "files",
-        title: "Editing files",
-        summary: fileEvent.summary || "Updating files",
-        files: Array.isArray(fileEvent.files) ? fileEvent.files : [],
-        diff: fileEvent.diff || "",
-      });
-    }
-
-    const waitSection = deriveWaitSection(session, waitMarkerAt ? new Date(waitMarkerAt).toISOString() : "");
-    if (waitSection && !toolEvent && !commandEvent && !fileEvent) {
-      sections.push(waitSection);
-    }
-
+    const card = session.native_activity_card && typeof session.native_activity_card === "object"
+      ? session.native_activity_card
+      : buildFallbackNativeCard(session);
+    const sections = Array.isArray(card.content_sections) ? card.content_sections : [];
     if (!sections.length) {
-      if (state === "running" || state === "starting") {
-        return null;
-      }
-      return null;
+      return buildFallbackNativeCard(session);
     }
-
     return {
-      updatedAt: formatActivityTime(
-        session.last_tool_call_at || session.updated_at || session.last_output_at || session.created_at || "",
-      ),
-      sections,
+      ...card,
+      shell_status_text: String(card.shell_status_text || normalizeShellStatusText(session)).trim(),
+      updated_at: String(
+        card.updated_at
+        || session.updated_at
+        || session.last_output_at
+        || session.last_tool_call_at
+        || session.created_at
+        || "",
+      ).trim(),
+      content_sections: sections,
     };
   }
 
-  function buildPlanStepsHtml(steps) {
-    if (!Array.isArray(steps) || !steps.length) {
+  function buildSectionItemsHtml(section) {
+    const items = Array.isArray(section?.items) ? section.items : [];
+    if (!items.length) {
       return "";
     }
+    if (section.kind === "files") {
+      return `
+        <div class="msg-native-card__chips">
+          ${items.map((item) => `
+            <span class="msg-native-card__chip" data-kind="${escapeHtml(item.kind || "update")}">${escapeHtml(item.label || "")}</span>
+          `).join("")}
+        </div>
+      `;
+    }
+    if (section.kind === "plan") {
+      return `
+        <div class="msg-native-card__plan">
+          ${items.map((item) => `
+            <div class="msg-native-card__plan-step" data-status="${escapeHtml(item.status || "")}">
+              <span class="msg-native-card__plan-dot"></span>
+              <span>${escapeHtml(item.label || "")}</span>
+            </div>
+          `).join("")}
+        </div>
+      `;
+    }
     return `
-      <div class="msg-cli-activity__plan">
-        ${steps.slice(0, 4).map((step) => `
-          <div class="msg-cli-activity__plan-step" data-status="${escapeHtml(step.status)}">
-            <span class="msg-cli-activity__plan-dot"></span>
-            <span>${escapeHtml(step.step)}</span>
+      <div class="msg-native-card__items">
+        ${items.map((item) => `
+          <div class="msg-native-card__item">
+            <span class="msg-native-card__item-label">${escapeHtml(item.label || "")}</span>
+            ${item.value ? `<span class="msg-native-card__item-value">${escapeHtml(item.value)}</span>` : ""}
           </div>
         `).join("")}
       </div>
     `;
   }
 
-  function buildFileChipsHtml(files) {
-    if (!Array.isArray(files) || !files.length) {
+  function buildSectionHtml(section) {
+    if (!section || typeof section !== "object") {
       return "";
     }
+    const summary = String(section.summary || "").trim();
+    const meta = String(section.meta || "").trim();
     return `
-      <div class="msg-cli-activity__chips">
-        ${files.slice(0, 6).map((file) => {
-          const status = String(file?.change_type || "update").trim() || "update";
-          return `<span class="msg-cli-activity__chip" data-kind="${escapeHtml(status)}">${escapeHtml(file.path)}</span>`;
-        }).join("")}
+      <section class="msg-native-card__section" data-kind="${escapeHtml(section.kind || "placeholder")}" data-status="${escapeHtml(section.status || "placeholder")}">
+        <div class="msg-native-card__section-title">${escapeHtml(section.title || "Activity")}</div>
+        <div class="msg-native-card__section-summary">${escapeHtml(summary || "No active Codex activity to display.")}</div>
+        ${meta ? `<div class="msg-native-card__section-meta">${escapeHtml(meta)}</div>` : ""}
+        ${section.kind === "diff" ? `<pre class="msg-native-card__diff">${escapeHtml(summary || "")}</pre>` : ""}
+        ${buildSectionItemsHtml(section)}
+      </section>
+    `;
+  }
+
+  function buildNativeCardHtml(model) {
+    return `
+      <div class="msg-native-card__header">
+        <span class="msg-native-card__status">${escapeHtml(model.shell_status_text || "Connected")}</span>
+        <span class="msg-native-card__time">${escapeHtml(model.updated_at ? formatActivityTime(model.updated_at) : "")}</span>
+      </div>
+      <div class="msg-native-card__body">
+        ${model.content_sections.map((section) => buildSectionHtml(section)).join("")}
       </div>
     `;
   }
 
-  function buildCliActivityBubbleHtml(model) {
-    return `
-      <div class="msg-cli-activity__bubble">
-        ${model.sections.map((section) => `
-          <section class="msg-cli-activity__section" data-section="${escapeHtml(section.key)}" ${section.tone ? `data-tone="${escapeHtml(section.tone)}"` : ""}>
-            <div class="msg-cli-activity__title">${escapeHtml(section.title)}</div>
-            <div class="msg-cli-activity__summary">${escapeHtml(section.summary || "")}</div>
-            ${section.meta ? `<div class="msg-cli-activity__meta">${escapeHtml(section.meta)}</div>` : ""}
-            ${buildPlanStepsHtml(section.planSteps)}
-            ${buildFileChipsHtml(section.files)}
-            ${section.diff ? `<pre class="msg-cli-activity__diff">${escapeHtml(section.diff)}</pre>` : ""}
-          </section>
-        `).join("")}
+  function resolveActivityIdentity(session) {
+    return typeof cliActivityConfig.resolveActivityIdentity === "function"
+      ? cliActivityConfig.resolveActivityIdentity(session) || {}
+      : {};
+  }
+
+  function getLatestMessageRow(threadId, authorId, anchorMessageId) {
+    const activeThreadId = typeof cliActivityConfig.getActiveThreadId === "function"
+      ? String(cliActivityConfig.getActiveThreadId() || "").trim()
+      : "";
+    const normalizedThreadId = String(threadId || "").trim();
+    if (!normalizedThreadId || normalizedThreadId !== activeThreadId) {
+      return null;
+    }
+    const anchorId = String(anchorMessageId || "").trim();
+    if (anchorId) {
+      const anchoredRow = document.querySelector(`#messages .msg-row[data-msg-id="${cssEscape(anchorId)}"]`);
+      if (anchoredRow) {
+        return anchoredRow;
+      }
+    }
+    const normalizedAuthorId = String(authorId || "").trim();
+    if (!normalizedAuthorId) {
+      return null;
+    }
+    const rows = Array.from(document.querySelectorAll(`#messages .msg-row[data-seq][data-author-id="${cssEscape(normalizedAuthorId)}"]`));
+    return rows.length ? rows[rows.length - 1] : null;
+  }
+
+  function ensurePendingRow(session, identity) {
+    const existing = getPendingRow(session.id);
+    if (existing) {
+      return existing;
+    }
+    const box = document.getElementById("messages");
+    if (!box) {
+      return null;
+    }
+    const color = String(identity.color || "var(--accent)").trim() || "var(--accent)";
+    const avatarEmoji = String(identity.avatarEmoji || "🤖").trim() || "🤖";
+    const authorLabel = String(identity.authorLabel || session?.participant_display_name || "Agent").trim() || "Agent";
+    const authorId = String(identity.authorId || session?.participant_agent_id || session?.id || "").trim();
+    const row = document.createElement("div");
+    row.className = "msg-row msg-row-left msg-row-cli-native-pending";
+    row.dataset.threadId = String(session?.thread_id || "").trim();
+    row.dataset.sessionId = String(session?.id || "").trim();
+    row.dataset.authorId = authorId;
+    row.innerHTML = `
+      <div class="msg-avatar" style="background:${escapeHtml(color)}22;color:${escapeHtml(color)};border:1px solid ${escapeHtml(color)}44">${escapeHtml(avatarEmoji)}</div>
+      <div class="msg-col">
+        <div class="msg-header">
+          <span class="msg-author-label" style="color:${escapeHtml(color)}">${escapeHtml(authorLabel)}</span>
+          <span class="msg-time-label">connected</span>
+        </div>
       </div>
     `;
+    box.appendChild(row);
+    cliActivityPendingRows.set(String(session.id), row);
+    return row;
+  }
+
+  function resolveAnchorRow(session, identity, model) {
+    const authorId = String(identity.authorId || session?.participant_agent_id || session?.id || "").trim();
+    const messageRow = getLatestMessageRow(session?.thread_id, authorId, model?.anchor_message_id);
+    if (messageRow) {
+      const pendingRow = getPendingRow(session.id);
+      if (pendingRow) {
+        pendingRow.remove();
+        cliActivityPendingRows.delete(String(session.id));
+      }
+      if (authorId && typeof cliActivityConfig.hideTyping === "function") {
+        cliActivityConfig.hideTyping(authorId);
+      }
+      return messageRow;
+    }
+    const typingRow = authorId ? document.getElementById(`typing-${authorId}`) : null;
+    if (typingRow) {
+      return typingRow;
+    }
+    return ensurePendingRow(session, identity);
+  }
+
+  function attachCardToRow(row, cardEl) {
+    if (!row || !cardEl) {
+      return;
+    }
+    const col = row.querySelector(".msg-col");
+    if (!col) {
+      return;
+    }
+    const anchor = col.querySelector(".bubble-v2, .typing-bubble");
+    if (cardEl.parentElement === col) {
+      if (!anchor) {
+        col.appendChild(cardEl);
+      }
+      return;
+    }
+    if (cardEl.parentElement) {
+      cardEl.parentElement.removeChild(cardEl);
+    }
+    if (!anchor) {
+      col.appendChild(cardEl);
+      return;
+    }
+    const nextSibling = anchor.nextSibling;
+    if (nextSibling) {
+      col.insertBefore(cardEl, nextSibling);
+    } else {
+      col.appendChild(cardEl);
+    }
   }
 
   function renderCliActivitySession(session, shouldAutoscroll = false) {
@@ -368,49 +396,26 @@
       return;
     }
 
-    const model = deriveCliActivityModel(session);
-    const existingRow = getActivityRow(session.id);
+    const model = getNativeCardModel(session);
     if (!model) {
-      if (existingRow) {
-        existingRow.remove();
-        cliActivityRows.delete(String(session.id));
-      }
       return;
     }
 
-    const identity = typeof cliActivityConfig.resolveActivityIdentity === "function"
-      ? cliActivityConfig.resolveActivityIdentity(session) || {}
-      : {};
-    const authorId = String(identity.authorId || session.participant_agent_id || session.id || "").trim();
-    if (authorId && typeof cliActivityConfig.hideTyping === "function") {
-      cliActivityConfig.hideTyping(authorId);
+    const identity = resolveActivityIdentity(session);
+    const row = resolveAnchorRow(session, identity, model);
+    if (!row) {
+      return;
     }
-    const authorLabel = String(identity.authorLabel || session.participant_display_name || "Agent").trim();
-    const avatarEmoji = String(identity.avatarEmoji || "🤖").trim() || "🤖";
-    const color = String(identity.color || "var(--accent)").trim() || "var(--accent)";
 
-    const row = existingRow || document.createElement("div");
-    row.className = "msg-row msg-row-left msg-row-cli-activity";
-    row.dataset.sessionId = String(session.id);
-    row.dataset.threadId = threadId;
-    row.dataset.authorId = authorId;
-    row.innerHTML = `
-      <div class="msg-avatar" style="background:${escapeHtml(color)}22;color:${escapeHtml(color)};border:1px solid ${escapeHtml(color)}44">${escapeHtml(avatarEmoji)}</div>
-      <div class="msg-col">
-        <div class="msg-header">
-          <span class="msg-author-label" style="color:${escapeHtml(color)}">${escapeHtml(authorLabel)}</span>
-          <span class="msg-time-label">${escapeHtml(model.updatedAt ? `working · ${model.updatedAt}` : "working")}</span>
-        </div>
-        ${buildCliActivityBubbleHtml(model)}
-      </div>
-    `;
-
-    if (!existingRow) {
-      const box = document.getElementById("messages");
-      if (!box) return;
-      box.appendChild(row);
-      cliActivityRows.set(String(session.id), row);
-    }
+    const cardEl = getNativeCard(session.id) || document.createElement("div");
+    cardEl.className = "msg-native-card";
+    cardEl.dataset.sessionId = String(session.id);
+    cardEl.dataset.threadId = threadId;
+    cardEl.dataset.authorId = String(identity.authorId || session?.participant_agent_id || session?.id || "").trim();
+    cardEl.dataset.shellStatus = String(model.shell_status || "connected");
+    cardEl.innerHTML = buildNativeCardHtml(model);
+    attachCardToRow(row, cardEl);
+    cliActivityCards.set(String(session.id), cardEl);
 
     if (shouldAutoscroll && typeof cliActivityConfig.scrollBottom === "function") {
       cliActivityConfig.scrollBottom(true);
@@ -429,7 +434,7 @@
         cache.set(String(session.id), session);
       }
     });
-    clearCliActivityRows(threadId);
+    clearCliActivityRows(threadId, false);
     for (const session of cache.values()) {
       renderCliActivitySession(session, false);
     }
@@ -450,7 +455,28 @@
       return;
     }
     cache.set(String(session.id), session);
-    renderCliActivitySession(session, type === "cli.session.activity");
+    renderCliActivitySession(session, type === "cli.session.activity" || type === "cli.session.native_card");
+  }
+
+  function refreshCliCardsForAuthor(authorId) {
+    const targetAuthorId = String(authorId || "").trim();
+    if (!targetAuthorId) {
+      return;
+    }
+    const activeThreadId = typeof cliActivityConfig.getActiveThreadId === "function"
+      ? String(cliActivityConfig.getActiveThreadId() || "").trim()
+      : "";
+    const cache = getThreadActivityCache(activeThreadId);
+    if (!cache) {
+      return;
+    }
+    for (const session of cache.values()) {
+      const sessionAuthorId = String(session?.participant_agent_id || session?.id || "").trim();
+      if (sessionAuthorId !== targetAuthorId) {
+        continue;
+      }
+      renderCliActivitySession(session, false);
+    }
   }
 
   function setActiveThreadAdminCache(admin) {
@@ -761,6 +787,7 @@
     handleCliSessionEvent,
     syncThreadCliSessions,
     clearCliActivityForAuthor,
+    refreshCliCardsForAuthor,
     clearCliActivityRows,
     refreshThreadAdmin,
     selectThread,
