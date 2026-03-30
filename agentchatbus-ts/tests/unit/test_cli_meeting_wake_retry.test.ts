@@ -10,10 +10,13 @@ function makeInteractiveSession(
   return {
     id: overrides.id || "session",
     thread_id: overrides.thread_id || "thread",
+    thread_display_name: overrides.thread_display_name,
+    reentry_prompt_override: overrides.reentry_prompt_override,
     adapter: overrides.adapter || "copilot",
     mode: "interactive",
     state: overrides.state || "running",
     prompt: overrides.prompt || "",
+    prompt_history: overrides.prompt_history,
     initial_instruction: overrides.initial_instruction,
     workspace: overrides.workspace || "C:\\workspace",
     requested_by_agent_id: overrides.requested_by_agent_id || "human-owner",
@@ -116,6 +119,12 @@ function postWithSync(
 class FakeCliSessionManager {
   readonly wakeCalls: Array<{ sessionId: string; prompt: string }> = [];
   readonly restartCalls: string[] = [];
+  readonly restartRequests: Array<{
+    sessionId: string;
+    prompt?: string;
+    promptHistoryKind?: string;
+    contextDeliveryMode?: string;
+  }> = [];
   readonly stopCalls: string[] = [];
   private readonly sessions = new Map<string, CliSessionSnapshot>();
 
@@ -140,14 +149,29 @@ class FakeCliSessionManager {
     return null;
   }
 
-  async restartSession(sessionId: string): Promise<CliSessionSnapshot | null> {
+  async restartSession(
+    sessionId: string,
+    options?: {
+      prompt?: string;
+      promptHistoryKind?: "initial" | "update" | "wake" | "delivery";
+      contextDeliveryMode?: CliSessionSnapshot["context_delivery_mode"];
+    },
+  ): Promise<CliSessionSnapshot | null> {
     this.restartCalls.push(sessionId);
+    this.restartRequests.push({
+      sessionId,
+      prompt: options?.prompt,
+      promptHistoryKind: options?.promptHistoryKind,
+      contextDeliveryMode: options?.contextDeliveryMode,
+    });
     const session = this.sessions.get(sessionId);
     if (!session) {
       return null;
     }
     const next = {
       ...session,
+      prompt: String(options?.prompt || "").trim() || session.prompt,
+      context_delivery_mode: options?.contextDeliveryMode || session.context_delivery_mode,
       state: "running",
       run_count: (session.run_count || 0) + 1,
       updated_at: "2026-03-23T12:00:01.000Z",
@@ -541,6 +565,8 @@ describe("CliMeetingOrchestrator agent_mcp wake handling", () => {
       makeHeadlessSession({
         id: "session-a",
         thread_id: thread.id,
+        thread_display_name: thread.topic,
+        reentry_prompt_override: "Resume quietly and process new thread messages with msg_wait before replying.",
         participant_agent_id: agentA.id,
         participant_display_name: agentA.display_name,
         participant_role: "administrator",
@@ -561,6 +587,11 @@ describe("CliMeetingOrchestrator agent_mcp wake handling", () => {
     await Promise.resolve();
 
     expect(fakeManager.restartCalls).toEqual(["session-a"]);
+    expect(fakeManager.restartRequests[0]?.prompt).toBe(
+      "Resume quietly and process new thread messages with msg_wait before replying.",
+    );
+    expect(fakeManager.restartRequests[0]?.promptHistoryKind).toBe("wake");
+    expect(fakeManager.restartRequests[0]?.contextDeliveryMode).toBe("resume");
     expect(fakeManager.wakeCalls).toHaveLength(0);
     expect(fakeManager.getSession("session-a")?.state).toBe("running");
 
@@ -582,6 +613,8 @@ describe("CliMeetingOrchestrator agent_mcp wake handling", () => {
       makeDirectSession({
         id: "session-a",
         thread_id: thread.id,
+        thread_display_name: thread.topic,
+        reentry_prompt_override: "Resume this existing meeting directly. Do not bus_connect again.",
         participant_agent_id: agentA.id,
         participant_display_name: agentA.display_name,
         participant_role: "administrator",
@@ -648,6 +681,11 @@ describe("CliMeetingOrchestrator agent_mcp wake handling", () => {
 
     expect(fakeManager.stopCalls).toEqual(["session-a"]);
     expect(fakeManager.restartCalls).toEqual(["session-a"]);
+    expect(fakeManager.restartRequests[0]?.prompt).toBe(
+      "Resume this existing meeting directly. Do not bus_connect again.",
+    );
+    expect(fakeManager.restartRequests[0]?.promptHistoryKind).toBe("wake");
+    expect(fakeManager.restartRequests[0]?.contextDeliveryMode).toBe("resume");
     expect(fakeManager.wakeCalls).toHaveLength(0);
     expect(fakeManager.getSession("session-a")?.state).toBe("running");
 

@@ -1178,39 +1178,38 @@ export function createHttpServer() {
           participantDisplayName: existingSession.participant_display_name,
           initialInstruction: existingSession.initial_instruction,
         });
-        const nextPrompt = buildCliMcpMeetingPrompt({
-          store,
-          threadId: existingSession.thread_id,
-          participantAgentId: existingSession.participant_agent_id,
-          participantDisplayName: existingSession.participant_display_name,
-          participantRole: prepared.participantRole,
-          initialInstruction: existingSession.initial_instruction,
-          serverUrl,
-          adapter: existingSession.adapter,
-        }).prompt;
+        const threadName = store.getThread(existingSession.thread_id)?.topic || existingSession.thread_id;
+        const reentryPrompt = String(existingSession.reentry_prompt_override || "").trim()
+          || buildCliMeetingWakePrompt(threadName);
         cliSessionManager.updateSessionLaunchEnv(
           params.sessionId,
           buildCliMcpLaunchEnv({
             threadId: existingSession.thread_id,
-            threadName: store.getThread(existingSession.thread_id)?.topic || existingSession.thread_id,
+            threadName,
             participantAgentId: existingSession.participant_agent_id,
             participantDisplayName: existingSession.participant_display_name,
           }),
         );
         cliSessionManager.updateSessionThreadDisplayName(
           params.sessionId,
-          store.getThread(existingSession.thread_id)?.topic || existingSession.thread_id,
+          threadName,
         );
-        cliSessionManager.updateSessionPrompt(params.sessionId, {
-          prompt: nextPrompt,
-        });
         cliSessionManager.updateMeetingState(params.sessionId, {
           participant_role: prepared.participantRole,
-          context_delivery_mode: prepared.contextDeliveryMode,
-          last_delivered_seq: prepared.lastDeliveredSeq,
+          context_delivery_mode: "resume",
           meeting_post_state: "pending",
           meeting_post_error: "",
         });
+        const session = await cliSessionManager.restartSession(params.sessionId, {
+          prompt: reentryPrompt,
+          promptHistoryKind: "wake",
+          contextDeliveryMode: "resume",
+        });
+        if (!session) {
+          reply.code(404);
+          return { detail: "CLI session not found" };
+        }
+        return { session, requested_by_agent_id: agentId };
       }
       const session = await cliSessionManager.restartSession(params.sessionId);
       if (!session) {

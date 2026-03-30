@@ -2171,7 +2171,14 @@ export class CliSessionManager {
     };
   }
 
-  async restartSession(sessionId: string): Promise<CliSessionSnapshot | null> {
+  async restartSession(
+    sessionId: string,
+    options?: {
+      prompt?: string;
+      promptHistoryKind?: "initial" | "update" | "wake" | "delivery";
+      contextDeliveryMode?: CliSessionSnapshot["context_delivery_mode"];
+    },
+  ): Promise<CliSessionSnapshot | null> {
     const runtime = this.runtimes.get(sessionId);
     if (!runtime) {
       return null;
@@ -2185,6 +2192,19 @@ export class CliSessionManager {
       await runtime.runPromise.catch(() => {
         // Ignore errors from previous run
       });
+    }
+
+    const nextPrompt = String(options?.prompt || "").trim();
+    if (nextPrompt) {
+      runtime.snapshot.prompt = nextPrompt;
+      this.recordPromptHistory(
+        runtime,
+        nextPrompt,
+        options?.promptHistoryKind || "update",
+      );
+    }
+    if (options?.contextDeliveryMode) {
+      runtime.snapshot.context_delivery_mode = options.contextDeliveryMode;
     }
 
     runtime.stopRequested = false;

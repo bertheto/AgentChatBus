@@ -954,7 +954,7 @@ export class CliMeetingOrchestrator {
         return false;
       }
 
-      const restarted = await this.cliSessionManager.restartSession(session.id);
+      const restarted = await this.restartSessionForReentry(latestSession);
       if (!restarted) {
         return false;
       }
@@ -968,6 +968,24 @@ export class CliMeetingOrchestrator {
     } finally {
       this.directRecoveryInFlight.delete(session.id);
     }
+  }
+
+  private resolveSessionReentryPrompt(session: CliSessionSnapshot): string {
+    const thread = this.store.getThread(session.thread_id);
+    const threadName = String(thread?.topic || session.thread_display_name || session.thread_id).trim()
+      || session.thread_id;
+    return String(session.reentry_prompt_override || "").trim()
+      || buildCliMeetingWakePrompt(threadName);
+  }
+
+  private async restartSessionForReentry(
+    session: CliSessionSnapshot,
+  ): Promise<CliSessionSnapshot | null> {
+    return await this.cliSessionManager.restartSession(session.id, {
+      prompt: this.resolveSessionReentryPrompt(session),
+      promptHistoryKind: "wake",
+      contextDeliveryMode: "resume",
+    });
   }
 
   private isMultiParticipantThread(threadId: string): boolean {
@@ -1120,7 +1138,7 @@ export class CliMeetingOrchestrator {
         && session.supports_restart
       ) {
         try {
-          const restarted = await this.cliSessionManager.restartSession(session.id);
+          const restarted = await this.restartSessionForReentry(session);
           if (restarted) {
             this.pendingDeliverySeqBySession.delete(session.id);
             this.clearWakeRetry(session.id);
@@ -1226,10 +1244,7 @@ export class CliMeetingOrchestrator {
         return;
       }
 
-      const thread = this.store.getThread(session.thread_id);
-      const threadName = String(thread?.topic || session.thread_id).trim() || session.thread_id;
-      const resolvedWakePrompt = String(session.reentry_prompt_override || "").trim()
-        || buildCliMeetingWakePrompt(threadName);
+      const resolvedWakePrompt = this.resolveSessionReentryPrompt(session);
       const result = await this.cliSessionManager.deliverWakePrompt(
         session.id,
         resolvedWakePrompt,
