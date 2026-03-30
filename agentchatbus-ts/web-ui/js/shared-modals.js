@@ -796,6 +796,7 @@
       meetingTransport: "agent_mcp",
       displayName: "",
       initialInstruction: "",
+      promptOverride: "",
       ...overrides,
       adapter,
     };
@@ -818,6 +819,7 @@
       meetingTransport: agent.meetingTransport || "agent_mcp",
       displayName: "",
       initialInstruction: String(agent.initialInstruction || "").trim(),
+      promptOverride: String(agent.promptOverride || ""),
     }));
   }
 
@@ -1027,6 +1029,18 @@
       : "server-resolved";
   }
 
+  function syncThreadLaunchPromptOverrideField() {
+    const overrideEl = document.getElementById("thread-agent-prompt-override");
+    if (!overrideEl) {
+      return;
+    }
+    const selectedAgent = getThreadLaunchAgentById(_selectedThreadLaunchAgentId) || _threadLaunchAgents[0] || null;
+    const nextValue = String(selectedAgent?.promptOverride || "");
+    if (overrideEl.value !== nextValue) {
+      overrideEl.value = nextValue;
+    }
+  }
+
   async function syncThreadLaunchPromptPreview() {
     const previewEl = document.getElementById("thread-agent-prompt-preview");
     const metaEl = document.getElementById("thread-agent-prompt-meta");
@@ -1068,6 +1082,7 @@
       isFirstAgent,
     });
     const fallbackReentryPrompt = getResolvedThreadLaunchReentryPrompt({ topic });
+    const exactPromptOverride = String(selectedAgent.promptOverride || "");
     const previewRequestId = ++_threadLaunchPromptPreviewRequestId;
     previewEl.textContent = SERVER_PROMPT_PREVIEW_PENDING_TEXT;
     if (reentryPreviewEl) {
@@ -1084,6 +1099,19 @@
     }
     if (detailsEl) {
       detailsEl.classList.remove("meeting-modal-hidden");
+    }
+    if (exactPromptOverride.trim()) {
+      previewEl.textContent = exactPromptOverride;
+      if (reentryPreviewEl) {
+        reentryPreviewEl.textContent = fallbackReentryPrompt;
+      }
+      if (metaEl) {
+        metaEl.textContent = `Previewing Agent ${index + 1} · ${roleLabel} · ${buildDefaultParticipantName(selectedAgent)} · manual exact launch prompt`;
+      }
+      if (reentryMetaEl) {
+        reentryMetaEl.textContent = "Shared re-entry prompt · server-resolved";
+      }
+      return;
     }
     try {
       const firstAgent = _threadLaunchAgents[0] || selectedAgent;
@@ -1360,6 +1388,7 @@
     writeThreadLaunchAdapterPreferences();
     writeThreadLaunchSelectionPreferences();
     syncModelDiscoveryUi();
+    syncThreadLaunchPromptOverrideField();
     syncThreadLaunchPromptPreview();
     syncThreadLaunchUi();
   }
@@ -1648,6 +1677,7 @@
         model: String(config.model || "").trim() || undefined,
         mode: config.mode,
         meeting_transport: config.meetingTransport,
+        prompt: String(config.promptOverride || "").trim() || undefined,
         initial_instruction: config.initialInstruction || "",
         reentry_prompt_override: config.reentryPrompt || "",
         requested_by_agent_id: uiAgent.agent_id,
@@ -1709,6 +1739,18 @@
         syncThreadLaunchPromptPreview();
       });
     }
+    const promptOverrideEl = document.getElementById("thread-agent-prompt-override");
+    if (promptOverrideEl && promptOverrideEl.dataset.threadLaunchBound !== "1") {
+      promptOverrideEl.dataset.threadLaunchBound = "1";
+      promptOverrideEl.addEventListener("input", () => {
+        const selectedAgent = getThreadLaunchAgentById(_selectedThreadLaunchAgentId) || _threadLaunchAgents[0] || null;
+        if (!selectedAgent) {
+          return;
+        }
+        selectedAgent.promptOverride = String(promptOverrideEl.value || "");
+        syncThreadLaunchPromptPreview();
+      });
+    }
     setModalVisible("thread", true);
     resetThreadLaunchAgents();
     syncThreadLaunchUi();
@@ -1752,6 +1794,7 @@
           isFirstAgent: index === 0,
         }),
         reentryPrompt: getResolvedThreadLaunchReentryPrompt({ topic }),
+        promptOverride: String(config.promptOverride || ""),
       }))
       : [];
     const firstAgentConfig = shouldLaunchFirstAgent ? launchAgentConfigs[0] || null : null;

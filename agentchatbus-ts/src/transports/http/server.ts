@@ -890,12 +890,15 @@ export function createHttpServer() {
 
     const promptSeed = typeof body.initial_instruction === "string"
       ? body.initial_instruction
-      : String(body.prompt || "");
+      : "";
+    const exactPromptOverride = typeof body.prompt === "string" && body.prompt.trim().length > 0
+      ? String(body.prompt)
+      : "";
     const reentryPromptOverride = typeof body.reentry_prompt_override === "string"
       ? body.reentry_prompt_override.trim()
       : "";
     try {
-      let finalPrompt = promptSeed;
+      let finalPrompt = exactPromptOverride || promptSeed;
       let participantRole: "administrator" | "participant" | undefined;
       let contextDeliveryMode: "join" | "resume" | "incremental" | undefined;
       let lastDeliveredSeq: number | undefined;
@@ -914,17 +917,19 @@ export function createHttpServer() {
         contextDeliveryMode = prepared.contextDeliveryMode;
         lastDeliveredSeq = prepared.lastDeliveredSeq;
         finalParticipantDisplayName = prepared.participantDisplayName;
-        finalPrompt = buildCliMcpMeetingPrompt({
-          store,
-          threadId: params.threadId,
-          participantAgentId,
-          participantDisplayName: finalParticipantDisplayName,
-          participantRole: prepared.participantRole,
-          initialInstruction: promptSeed,
-          serverUrl,
-          adapter: String(body.adapter || "cursor").trim(),
-          mode: typeof body.mode === "string" ? body.mode.trim() : undefined,
-        }).prompt;
+        if (!exactPromptOverride) {
+          finalPrompt = buildCliMcpMeetingPrompt({
+            store,
+            threadId: params.threadId,
+            participantAgentId,
+            participantDisplayName: finalParticipantDisplayName,
+            participantRole: prepared.participantRole,
+            initialInstruction: promptSeed,
+            serverUrl,
+            adapter: String(body.adapter || "cursor").trim(),
+            mode: typeof body.mode === "string" ? body.mode.trim() : undefined,
+          }).prompt;
+        }
         launchEnv = buildCliMcpLaunchEnv({
           threadId: params.threadId,
           threadName: thread.topic,
