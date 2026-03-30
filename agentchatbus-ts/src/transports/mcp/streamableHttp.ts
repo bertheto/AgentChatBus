@@ -48,10 +48,14 @@ export function createMcpServer(sessionId?: string): Server {
   });
 
   // Call tool handler
-  server.setRequestHandler(CallToolRequestSchema, async (request) => {
+  server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
     const args = request.params || {};
-    const result = await withToolCallContext({ sessionId }, () =>
-      callTool(args.name || "", args.arguments || {})
+    const result = await withToolCallContext(
+      {
+        sessionId: extra.sessionId || sessionId,
+        abortSignal: extra.signal,
+      },
+      () => callTool(args.name || "", args.arguments || {})
     );
 
     // Convert result to MCP content blocks format
