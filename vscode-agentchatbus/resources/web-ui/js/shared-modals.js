@@ -157,8 +157,21 @@
             .map((model) => ({
               id: normalizeThreadLaunchModelValue(adapter, model?.id),
               label: String(model?.label || model?.id || "").trim(),
+              description: String(model?.description || "").trim(),
+              hidden: model?.hidden === true,
+              is_default: model?.is_default === true,
+              default_reasoning_effort: String(model?.default_reasoning_effort || "").trim().toLowerCase(),
+              supported_reasoning_efforts: Array.isArray(model?.supported_reasoning_efforts)
+                ? model.supported_reasoning_efforts
+                  .map((option) => ({
+                    id: String(option?.id || "").trim().toLowerCase(),
+                    label: String(option?.label || option?.id || "").trim(),
+                  }))
+                  .filter((option) => option.id)
+                : [],
             }))
             .filter((model) => model.id)
+            .filter((model) => adapter !== "codex" || model.hidden !== true)
           : [],
         fetched_at: String(next.fetched_at || ""),
         source_label: String(next.source_label || "Static fallback"),
@@ -223,6 +236,16 @@
       });
     }
     return normalized;
+  }
+
+  function getThreadLaunchSelectedModelEntry(agent) {
+    const entry = getModelDiscoveryEntry(String(agent?.adapter || "codex").trim() || "codex");
+    const models = Array.isArray(entry?.models) ? entry.models : [];
+    const currentModel = getRequiredThreadLaunchModel(agent?.adapter, agent?.model);
+    return models.find((model) => (
+      String(model?.id || "").trim() === currentModel
+      && !(String(agent?.adapter || "").trim().toLowerCase() === "codex" && model?.hidden === true)
+    )) || null;
   }
 
   function buildThreadLaunchModelOptionsHtml(agent) {
@@ -367,6 +390,7 @@
           return {
             adapter,
             model: normalizeThreadLaunchModelValue(adapter, model),
+            reasoning_effort: normalizeThreadLaunchReasoningEffort(adapter, entry?.reasoning_effort),
           };
         })
         .filter((entry) => Boolean(entry));
@@ -394,6 +418,7 @@
       const selections = _threadLaunchAgents.map((agent) => ({
         adapter: String(agent?.adapter || "").trim().toLowerCase() || "claude",
         model: normalizeThreadLaunchModelValue(agent?.adapter, agent?.model),
+        reasoning_effort: normalizeThreadLaunchReasoningEffort(agent?.adapter, agent?.reasoningEffort),
       }));
       globalThis.localStorage?.setItem(
         THREAD_LAUNCH_SELECTIONS_STORAGE_KEY,
@@ -410,6 +435,7 @@
       const nextEntry = {
         adapter: String(config?.adapter || "").trim().toLowerCase() || "claude",
         model: normalizeThreadLaunchModelValue(config?.adapter, config?.model),
+        reasoning_effort: normalizeThreadLaunchReasoningEffort(config?.adapter, config?.reasoningEffort),
       };
       const nextSelections = [nextEntry, ...existing.slice(1)];
       globalThis.localStorage?.setItem(
@@ -439,6 +465,11 @@
     return String(preferences[slotIndex]?.model || "").trim();
   }
 
+  function getPreferredThreadLaunchReasoningEffort(slotIndex) {
+    const preferences = readThreadLaunchSelectionPreferences();
+    return String(preferences[slotIndex]?.reasoning_effort || "").trim();
+  }
+
   function normalizeThreadLaunchModelValue(adapter, model) {
     const normalizedAdapter = String(adapter || "").trim().toLowerCase();
     const normalizedModel = String(model || "").trim();
@@ -450,6 +481,84 @@
 
   function getRequiredThreadLaunchModel(adapter, model) {
     return normalizeThreadLaunchModelValue(adapter, model);
+  }
+
+  function normalizeThreadLaunchReasoningEffort(adapter, reasoningEffort) {
+    const normalizedAdapter = String(adapter || "").trim().toLowerCase();
+    if (normalizedAdapter !== "codex") {
+      return "";
+    }
+    const normalized = String(reasoningEffort || "").trim().toLowerCase();
+    if (normalized === "minimal" || normalized === "low" || normalized === "medium" || normalized === "high" || normalized === "xhigh") {
+      return normalized;
+    }
+    return "";
+  }
+
+  function getThreadLaunchAgentReasoningOptions(agent) {
+    if (String(agent?.adapter || "").trim().toLowerCase() !== "codex") {
+      return [];
+    }
+    const selectedModel = getThreadLaunchSelectedModelEntry(agent);
+    const supported = Array.isArray(selectedModel?.supported_reasoning_efforts)
+      ? selectedModel.supported_reasoning_efforts
+      : [];
+    const normalizedSupported = supported
+      .map((option) => ({
+        id: normalizeThreadLaunchReasoningEffort("codex", option?.id),
+        label: String(option?.label || option?.id || "").trim(),
+      }))
+      .filter((option) => option.id);
+    if (normalizedSupported.length > 0) {
+      return normalizedSupported;
+    }
+    return [
+      { id: "minimal", label: "Minimal" },
+      { id: "low", label: "Low" },
+      { id: "medium", label: "Medium" },
+      { id: "high", label: "High" },
+      { id: "xhigh", label: "Extra High" },
+    ];
+  }
+
+  function buildThreadLaunchReasoningOptionsHtml(agent) {
+    if (String(agent?.adapter || "").trim().toLowerCase() !== "codex") {
+      return '<option value="">Not supported for this adapter</option>';
+    }
+    const normalized = normalizeThreadLaunchReasoningEffort(agent.adapter, agent.reasoningEffort);
+    const selectedModel = getThreadLaunchSelectedModelEntry(agent);
+    const defaultReasoning = normalizeThreadLaunchReasoningEffort(
+      agent.adapter,
+      selectedModel?.default_reasoning_effort,
+    );
+    const options = getThreadLaunchAgentReasoningOptions(agent);
+    const defaultLabel = defaultReasoning
+      ? `Use Codex default (${defaultReasoning})`
+      : "Use Codex default";
+    return [
+      `<option value="" ${!normalized ? "selected" : ""}>${_escapeHtml(defaultLabel)}</option>`,
+      ...options.map((option) => (
+        `<option value="${_escapeHtml(option.id)}" ${normalized === option.id ? "selected" : ""}>${_escapeHtml(option.label || option.id)}</option>`
+      )),
+    ].join("");
+  }
+
+  function getThreadLaunchReasoningMeta(agent) {
+    if (String(agent?.adapter || "").trim().toLowerCase() !== "codex") {
+      return "Official reasoning level is currently only wired for Codex.";
+    }
+    const normalized = normalizeThreadLaunchReasoningEffort(agent.adapter, agent.reasoningEffort);
+    const selectedModel = getThreadLaunchSelectedModelEntry(agent);
+    const defaultReasoning = normalizeThreadLaunchReasoningEffort(
+      agent.adapter,
+      selectedModel?.default_reasoning_effort,
+    );
+    const optionCount = getThreadLaunchAgentReasoningOptions(agent).length;
+    return normalized
+      ? `Codex reasoning override: ${normalized}`
+      : (defaultReasoning
+        ? `Using ${selectedModel?.label || selectedModel?.id || "Codex"} default: ${defaultReasoning} · ${optionCount} supported`
+        : "Use Codex default reasoning from CLI/app-server configuration.");
   }
 
   async function _loadTemplates(api) {
@@ -536,6 +645,7 @@
     const modeEl = document.getElementById(`${prefix}-mode`);
     const modelEl = document.getElementById(`${prefix}-model`);
     const modelSuggestionEl = document.getElementById(`${prefix}-model-suggestion`);
+    const reasoningEl = document.getElementById(`${prefix}-reasoning-effort`);
     const displayNameEl = document.getElementById(`${prefix}-display-name`);
     const emojiEl = document.getElementById(`${prefix}-emoji`);
     const emojiPreviewEl = document.getElementById(`${prefix}-emoji-preview`);
@@ -545,11 +655,16 @@
       preferredAdapter,
       getPreferredThreadLaunchModel(0),
     );
+    const preferredReasoningEffort = normalizeThreadLaunchReasoningEffort(
+      preferredAdapter,
+      getPreferredThreadLaunchReasoningEffort(0),
+    );
     const preferredEmoji = pickRandomThreadLaunchEmoji();
     if (adapterEl) adapterEl.value = preferredAdapter;
     if (modeEl) modeEl.value = getThreadLaunchModeForAdapter(preferredAdapter);
     if (modelEl) modelEl.value = preferredModel;
     if (modelSuggestionEl) modelSuggestionEl.value = "";
+    if (reasoningEl) reasoningEl.value = preferredReasoningEffort;
     if (displayNameEl) displayNameEl.value = "";
     if (emojiEl) {
       emojiEl.innerHTML = THREAD_LAUNCH_EMOJI_OPTIONS.map((emoji) => (
@@ -626,12 +741,17 @@
       adapter,
       String(document.getElementById(`${prefix}-model`)?.value || "").trim(),
     );
+    const reasoningEffort = normalizeThreadLaunchReasoningEffort(
+      adapter,
+      String(document.getElementById(`${prefix}-reasoning-effort`)?.value || "").trim(),
+    );
     const displayName = String(document.getElementById(`${prefix}-display-name`)?.value || "").trim();
     const emoji = String(document.getElementById(`${prefix}-emoji`)?.value || "").trim();
     const initialInstruction = String(document.getElementById(`${prefix}-instruction`)?.value || "").trim();
     return {
       adapter,
       model,
+      reasoningEffort,
       mode,
       meetingTransport: "agent_mcp",
       displayName,
@@ -654,6 +774,7 @@
     const adapterEl = document.getElementById(`${prefix}-adapter`);
     const modelEl = document.getElementById(`${prefix}-model`);
     const suggestionEl = document.getElementById(`${prefix}-model-suggestion`);
+    const reasoningEl = document.getElementById(`${prefix}-reasoning-effort`);
     const modeEl = document.getElementById(`${prefix}-mode`);
     const emojiEl = document.getElementById(`${prefix}-emoji`);
     const emojiPreviewEl = document.getElementById(`${prefix}-emoji-preview`);
@@ -674,6 +795,11 @@
       const currentModel = String(modelEl?.value || "").trim();
       suggestionEl.innerHTML = `<option value="">Suggestions</option>${buildAddAgentModelOptionsHtml(adapter, currentModel)}`;
       suggestionEl.value = "";
+    }
+    if (reasoningEl) {
+      reasoningEl.innerHTML = buildThreadLaunchReasoningOptionsHtml(adapter, reasoningEl.value);
+      reasoningEl.value = normalizeThreadLaunchReasoningEffort(adapter, reasoningEl.value);
+      reasoningEl.disabled = adapter !== "codex";
     }
     if (emojiEl && emojiPreviewEl) {
       emojiPreviewEl.textContent = String(emojiEl.value || "").trim() || "🤖";
@@ -782,6 +908,10 @@
       adapter,
       String(overrides.model || "").trim() || getPreferredThreadLaunchModel(slotIndex),
     );
+    const preferredReasoningEffort = normalizeThreadLaunchReasoningEffort(
+      adapter,
+      String(overrides.reasoningEffort || "").trim() || getPreferredThreadLaunchReasoningEffort(slotIndex),
+    );
     const requestedEmoji = String(overrides.emoji || "").trim();
     const fallbackEmoji = pickRandomThreadLaunchEmoji();
     const emoji = THREAD_LAUNCH_EMOJI_OPTIONS.includes(requestedEmoji)
@@ -791,11 +921,13 @@
       id: `thread-agent-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       adapter,
       model: preferredModel,
+      reasoningEffort: preferredReasoningEffort,
       emoji,
       mode: getThreadLaunchModeForAdapter(adapter),
       meetingTransport: "agent_mcp",
       displayName: "",
       initialInstruction: "",
+      promptOverride: "",
       ...overrides,
       adapter,
     };
@@ -809,6 +941,7 @@
     return _threadLaunchAgents.map((agent) => ({
       adapter: agent.adapter || "claude",
       model: String(agent.model || "").trim(),
+      reasoningEffort: normalizeThreadLaunchReasoningEffort(agent.adapter, agent.reasoningEffort),
       emoji: String(agent.emoji || "").trim() || pickRandomThreadLaunchEmoji(agent.id),
       mode: normalizeThreadLaunchMode(
         agent.adapter || "claude",
@@ -818,6 +951,7 @@
       meetingTransport: agent.meetingTransport || "agent_mcp",
       displayName: "",
       initialInstruction: String(agent.initialInstruction || "").trim(),
+      promptOverride: String(agent.promptOverride || ""),
     }));
   }
 
@@ -976,7 +1110,7 @@
       "After entering the thread, please introduce yourself.",
       "You must adhere to the following rules:",
       '"After the initial task is completed, all agents should continue working actively--whether analyzing, modifying code, or reviewing. If you believe you need to wait, use `msg_wait` to wait for 10 minutes. Do not exit the agent process unless notified to do so. `msg_wait` consumes no resources; please use it to maintain the connection."',
-      "Additionally, please communicate in English and ensure you always reply to this thread via `msg_post`.",
+      "Ensure you always reply to this thread via `msg_post`.",
       "If someone speaks up, please try to respond and share your thoughts. Do not just wait.",
       "Do not create a new thread.",
       "Do not call `agent_register` for this launch.",
@@ -1027,6 +1161,18 @@
       : "server-resolved";
   }
 
+  function syncThreadLaunchPromptOverrideField() {
+    const overrideEl = document.getElementById("thread-agent-prompt-override");
+    if (!overrideEl) {
+      return;
+    }
+    const selectedAgent = getThreadLaunchAgentById(_selectedThreadLaunchAgentId) || _threadLaunchAgents[0] || null;
+    const nextValue = String(selectedAgent?.promptOverride || "");
+    if (overrideEl.value !== nextValue) {
+      overrideEl.value = nextValue;
+    }
+  }
+
   async function syncThreadLaunchPromptPreview() {
     const previewEl = document.getElementById("thread-agent-prompt-preview");
     const metaEl = document.getElementById("thread-agent-prompt-meta");
@@ -1068,6 +1214,7 @@
       isFirstAgent,
     });
     const fallbackReentryPrompt = getResolvedThreadLaunchReentryPrompt({ topic });
+    const exactPromptOverride = String(selectedAgent.promptOverride || "");
     const previewRequestId = ++_threadLaunchPromptPreviewRequestId;
     previewEl.textContent = SERVER_PROMPT_PREVIEW_PENDING_TEXT;
     if (reentryPreviewEl) {
@@ -1084,6 +1231,19 @@
     }
     if (detailsEl) {
       detailsEl.classList.remove("meeting-modal-hidden");
+    }
+    if (exactPromptOverride.trim()) {
+      previewEl.textContent = exactPromptOverride;
+      if (reentryPreviewEl) {
+        reentryPreviewEl.textContent = fallbackReentryPrompt;
+      }
+      if (metaEl) {
+        metaEl.textContent = `Previewing Agent ${index + 1} · ${roleLabel} · ${buildDefaultParticipantName(selectedAgent)} · manual exact launch prompt`;
+      }
+      if (reentryMetaEl) {
+        reentryMetaEl.textContent = "Shared re-entry prompt · server-resolved";
+      }
+      return;
     }
     try {
       const firstAgent = _threadLaunchAgents[0] || selectedAgent;
@@ -1320,6 +1480,20 @@
               })())}</div>
             </div>
             <div class="settings-field thread-launch-agent-field">
+              <label>Reasoning Level</label>
+              <select
+                data-agent-id="${_escapeHtml(agent.id)}"
+                data-field="reasoningEffort"
+                ${agent.adapter === "codex" ? "" : "disabled"}
+                onclick="event.stopPropagation(); window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')"
+                onpointerdown="event.stopPropagation(); window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')"
+                onchange="window.AcbModals && window.AcbModals.updateThreadLaunchAgentField(this)"
+              >
+                ${buildThreadLaunchReasoningOptionsHtml(agent)}
+              </select>
+              <div class="thread-launch-model-meta">${_escapeHtml(getThreadLaunchReasoningMeta(agent))}</div>
+            </div>
+            <div class="settings-field thread-launch-agent-field">
               <label>Mode</label>
               <select
                 data-agent-id="${_escapeHtml(agent.id)}"
@@ -1360,6 +1534,7 @@
     writeThreadLaunchAdapterPreferences();
     writeThreadLaunchSelectionPreferences();
     syncModelDiscoveryUi();
+    syncThreadLaunchPromptOverrideField();
     syncThreadLaunchPromptPreview();
     syncThreadLaunchUi();
   }
@@ -1425,6 +1600,7 @@
       agent.adapter = String(element.value || "claude").trim() || "claude";
       agent.mode = getThreadLaunchModeForAdapter(agent.adapter);
       agent.meetingTransport = "agent_mcp";
+      agent.reasoningEffort = normalizeThreadLaunchReasoningEffort(agent.adapter, agent.reasoningEffort);
       if (agent.adapter === "cursor" || agent.adapter === "gemini") {
         agent.model = getRequiredThreadLaunchModel(agent.adapter, agent.model);
       } else if (previousAdapter === "cursor" && String(agent.model || "").trim() === "auto") {
@@ -1466,6 +1642,12 @@
       if (suggestedModel) {
         agent.model = getRequiredThreadLaunchModel(agent.adapter, suggestedModel);
       }
+      renderThreadLaunchAgents();
+      return;
+    }
+    if (field === "reasoningEffort") {
+      agent.reasoningEffort = normalizeThreadLaunchReasoningEffort(agent.adapter, element.value);
+      syncThreadLaunchPromptPreview();
       renderThreadLaunchAgents();
       return;
     }
@@ -1646,8 +1828,10 @@
       body: JSON.stringify({
         adapter: config.adapter,
         model: String(config.model || "").trim() || undefined,
+        reasoning_effort: normalizeThreadLaunchReasoningEffort(config.adapter, config.reasoningEffort) || undefined,
         mode: config.mode,
         meeting_transport: config.meetingTransport,
+        prompt: String(config.promptOverride || "").trim() || undefined,
         initial_instruction: config.initialInstruction || "",
         reentry_prompt_override: config.reentryPrompt || "",
         requested_by_agent_id: uiAgent.agent_id,
@@ -1709,6 +1893,18 @@
         syncThreadLaunchPromptPreview();
       });
     }
+    const promptOverrideEl = document.getElementById("thread-agent-prompt-override");
+    if (promptOverrideEl && promptOverrideEl.dataset.threadLaunchBound !== "1") {
+      promptOverrideEl.dataset.threadLaunchBound = "1";
+      promptOverrideEl.addEventListener("input", () => {
+        const selectedAgent = getThreadLaunchAgentById(_selectedThreadLaunchAgentId) || _threadLaunchAgents[0] || null;
+        if (!selectedAgent) {
+          return;
+        }
+        selectedAgent.promptOverride = String(promptOverrideEl.value || "");
+        syncThreadLaunchPromptPreview();
+      });
+    }
     setModalVisible("thread", true);
     resetThreadLaunchAgents();
     syncThreadLaunchUi();
@@ -1752,6 +1948,7 @@
           isFirstAgent: index === 0,
         }),
         reentryPrompt: getResolvedThreadLaunchReentryPrompt({ topic }),
+        promptOverride: String(config.promptOverride || ""),
       }))
       : [];
     const firstAgentConfig = shouldLaunchFirstAgent ? launchAgentConfigs[0] || null : null;

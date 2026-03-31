@@ -146,6 +146,15 @@
   function buildFallbackNativeCard(session) {
     const shellStatusText = normalizeShellStatusText(session);
     const shellStatus = String(session?.state || "").trim().toLowerCase();
+    const placeholderSummary = shellStatus === "starting" || shellStatus === "created"
+      ? "Codex is starting."
+      : shellStatus === "failed"
+        ? "Codex stopped after an error."
+        : shellStatus === "stopped"
+          ? "Codex session stopped."
+          : shellStatus === "completed"
+            ? "Last Codex task completed."
+            : "Connected and waiting for the next Codex task.";
     return {
       anchor_message_id: String(session?.last_posted_message_id || "").trim() || "",
       shell_status: (
@@ -174,7 +183,7 @@
         {
           kind: "placeholder",
           title: "Activity",
-          summary: "No active Codex activity to display.",
+          summary: placeholderSummary,
           status: "placeholder",
           meta: shellStatusText,
         },

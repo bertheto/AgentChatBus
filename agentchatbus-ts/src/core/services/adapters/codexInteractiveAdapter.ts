@@ -68,6 +68,10 @@ export class CodexInteractiveAdapter implements CliSessionAdapter {
   ): Promise<CliAdapterRunResult> {
     const commandParts = [
       `& ${toPowerShellSingleQuoted(this.codexCommand)}`,
+      ...(String(input.model || "").trim() ? ["-m", toPowerShellSingleQuoted(String(input.model).trim())] : []),
+      ...(String(input.reasoningEffort || "").trim()
+        ? ["-c", toPowerShellSingleQuoted(`model_reasoning_effort="${String(input.reasoningEffort).trim()}"`)]
+        : []),
       "--no-alt-screen",
       "-C",
       toPowerShellSingleQuoted(input.workspace),

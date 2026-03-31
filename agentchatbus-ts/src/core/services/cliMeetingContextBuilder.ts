@@ -203,7 +203,7 @@ function renderCliMcpMeetingPrompt(input: {
     isCodexDirect
       ? '"After the initial task is completed, stay connected with `msg_wait`, but do not narrate that you are entering or resuming `msg_wait`. When a human posts a visible message, respond directly and promptly with `msg_post` instead of explaining your waiting state first."'
       : '"After the initial task is completed, all agents should continue working actively--whether analyzing, modifying code, or reviewing. If you believe you need to wait, use `msg_wait` to wait for 10 minutes. Do not exit the agent process unless notified to do so. `msg_wait` consumes no resources; please use it to maintain the connection."',
-    "Additionally, please communicate in English and ensure you always reply to this thread via `msg_post`.",
+    "Additionally, please ensure you always reply to this thread via `msg_post`.",
     "If someone speaks up, please try to respond and share your thoughts. Do not just wait.",
     "Do not create a new thread.",
     "Do not call `agent_register`.",

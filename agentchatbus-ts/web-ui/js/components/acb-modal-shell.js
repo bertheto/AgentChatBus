@@ -300,6 +300,15 @@
                       </div>
                     </div>
                     <div class="settings-field">
+                      <label for="agent-modal-reasoning-effort">Reasoning Level</label>
+                      <select id="agent-modal-reasoning-effort">
+                        <option value="">Use Codex default</option>
+                        <option value="low">Low</option>
+                        <option value="medium">Medium</option>
+                        <option value="high">High</option>
+                      </select>
+                    </div>
+                    <div class="settings-field">
                       <label for="agent-modal-mode">Mode</label>
                       <select id="agent-modal-mode">
                         <option value="direct">Codex Direct (App Server)</option>

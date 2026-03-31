@@ -24,6 +24,7 @@ type CodexDirectCommandRequest = {
   prompt: string;
   workspace: string;
   model?: string;
+  reasoningEffort?: string;
   env?: Record<string, string>;
 };
 
@@ -92,8 +93,20 @@ function extractThreadIdFromPayload(value: unknown): string | undefined {
   if (typeof value.threadId === "string" && value.threadId.trim()) {
     return value.threadId.trim();
   }
+  if (typeof value.thread_id === "string" && value.thread_id.trim()) {
+    return value.thread_id.trim();
+  }
+  if (typeof value.conversationId === "string" && value.conversationId.trim()) {
+    return value.conversationId.trim();
+  }
+  if (typeof value.conversation_id === "string" && value.conversation_id.trim()) {
+    return value.conversation_id.trim();
+  }
   if (isObjectRecord(value.thread) && typeof value.thread.id === "string" && value.thread.id.trim()) {
     return value.thread.id.trim();
+  }
+  if (isObjectRecord(value.conversation) && typeof value.conversation.id === "string" && value.conversation.id.trim()) {
+    return value.conversation.id.trim();
   }
   return undefined;
 }
@@ -104,6 +117,9 @@ function extractTurnIdFromPayload(value: unknown): string | undefined {
   }
   if (typeof value.turnId === "string" && value.turnId.trim()) {
     return value.turnId.trim();
+  }
+  if (typeof value.turn_id === "string" && value.turn_id.trim()) {
+    return value.turn_id.trim();
   }
   if (isObjectRecord(value.turn) && typeof value.turn.id === "string" && value.turn.id.trim()) {
     return value.turn.id.trim();
@@ -122,10 +138,19 @@ function extractItemText(value: unknown): string | undefined {
 }
 
 function extractItemId(value: unknown): string | undefined {
-  if (!isObjectRecord(value) || typeof value.id !== "string" || !value.id.trim()) {
+  if (!isObjectRecord(value)) {
     return undefined;
   }
-  return value.id.trim();
+  if (typeof value.id === "string" && value.id.trim()) {
+    return value.id.trim();
+  }
+  if (typeof value.itemId === "string" && value.itemId.trim()) {
+    return value.itemId.trim();
+  }
+  if (typeof value.item_id === "string" && value.item_id.trim()) {
+    return value.item_id.trim();
+  }
+  return undefined;
 }
 
 function nowIso(): string {
@@ -158,6 +183,96 @@ function appendActivityDelta(previous: string | undefined, delta: string | undef
     return current;
   }
   return clipActivityText(`${current} ${addition}`, maxLength);
+}
+
+function extractDirectString(
+  value: Record<string, unknown>,
+  keys: string[],
+): string | undefined {
+  for (const key of keys) {
+    const candidate = value[key];
+    if (typeof candidate === "string" && candidate.trim()) {
+      return candidate.trim();
+    }
+    if (
+      (typeof candidate === "number" || typeof candidate === "boolean")
+      && String(candidate).trim()
+    ) {
+      return String(candidate).trim();
+    }
+  }
+  return undefined;
+}
+
+function extractCodexEventActivityItemId(
+  params: Record<string, unknown>,
+  prefix: string,
+  fallbackTurnId?: string,
+  fallbackThreadId?: string,
+): string {
+  return extractItemId(params)
+    || `${prefix}:${extractTurnIdFromPayload(params) || fallbackTurnId || extractThreadIdFromPayload(params) || fallbackThreadId || "unknown"}`;
+}
+
+function extractCodexEventSummary(
+  params: Record<string, unknown>,
+  maxLength = 260,
+): string | undefined {
+  return clipActivityText(
+    extractDirectString(params, [
+      "summary",
+      "message",
+      "text",
+      "delta",
+      "content",
+      "description",
+      "detail",
+      "statusText",
+      "reason",
+    ]),
+    maxLength,
+  );
+}
+
+function extractCodexEventToolServer(params: Record<string, unknown>): string | undefined {
+  return extractDirectString(params, ["server", "serverName", "mcpServer", "mcp_server"]);
+}
+
+function extractCodexEventToolName(params: Record<string, unknown>): string | undefined {
+  return extractDirectString(params, ["tool", "toolName", "name", "functionName", "method"]);
+}
+
+function extractCodexEventCommand(params: Record<string, unknown>): string | undefined {
+  return extractDirectString(params, ["command", "cmd"]);
+}
+
+function extractCodexEventCwd(params: Record<string, unknown>): string | undefined {
+  return extractDirectString(params, ["cwd", "workingDirectory", "working_directory"]);
+}
+
+function extractCodexEventError(params: Record<string, unknown>, fallbackMethod?: string): string | undefined {
+  if (params.error !== undefined && params.error !== null) {
+    return formatCodexErrorSummary(params.error, fallbackMethod);
+  }
+  const direct = extractDirectString(params, ["message", "errorMessage", "reason", "detail"]);
+  return direct ? clipActivityText(direct, 260) : undefined;
+}
+
+function extractCodexEventActivityStatus(
+  params: Record<string, unknown>,
+  fallback: CliAdapterActivityEvent["status"] = "completed",
+): CliAdapterActivityEvent["status"] {
+  if (params.status !== undefined) {
+    return normalizeActivityStatus(params.status);
+  }
+  if (params.success === false || params.error !== undefined && params.error !== null) {
+    return "failed";
+  }
+  return fallback;
+}
+
+function extractCodexEventOutputDelta(params: Record<string, unknown>): string | undefined {
+  return extractDirectString(params, ["delta", "text", "output", "content"]);
 }
 
 function normalizeActivityStatus(value: unknown): CliAdapterActivityEvent["status"] {
@@ -740,6 +855,10 @@ export function parseCodexDirectAppServerResult(stdout: string): CodexDirectResu
         continue;
       }
 
+      const codexEventMethod = method.startsWith("codex/event/")
+        ? method.slice("codex/event/".length)
+        : "";
+
       if (method === "thread/started") {
         const nextThreadId = extractThreadIdFromPayload(params);
         if (nextThreadId) {
@@ -772,9 +891,26 @@ export function parseCodexDirectAppServerResult(stdout: string): CodexDirectResu
         continue;
       }
 
-      if (method === "item/agentMessage/delta") {
-        const itemId = typeof params.itemId === "string" ? params.itemId.trim() : "";
-        const delta = typeof params.delta === "string" ? params.delta : "";
+      if (codexEventMethod === "task_started" || codexEventMethod === "task_complete" || codexEventMethod === "turn_aborted") {
+        const nextThreadId = extractThreadIdFromPayload(params);
+        if (nextThreadId) {
+          threadId = nextThreadId;
+        }
+        const nextTurnId = extractTurnIdFromPayload(params);
+        if (nextTurnId) {
+          turnId = nextTurnId;
+        }
+        if (codexEventMethod === "task_complete") {
+          turnStatus = "completed";
+        } else if (codexEventMethod === "turn_aborted") {
+          turnStatus = "interrupted";
+        }
+        continue;
+      }
+
+      if (method === "item/agentMessage/delta" || codexEventMethod === "agent_message_delta" || codexEventMethod === "agent_message_content_delta") {
+        const itemId = extractItemId(params) || `agent-message:${turnId || threadId || "unknown"}`;
+        const delta = extractCodexEventOutputDelta(params) || "";
         if (itemId) {
           agentMessageByItem.set(itemId, `${agentMessageByItem.get(itemId) || ""}${delta}`);
           latestAgentMessageItemId = itemId;
@@ -792,12 +928,26 @@ export function parseCodexDirectAppServerResult(stdout: string): CodexDirectResu
         }
       }
 
+      if (codexEventMethod === "agent_message") {
+        const itemId = extractItemId(params) || `agent-message:${turnId || threadId || "unknown"}`;
+        const itemText = extractCodexEventSummary(params, 20_000);
+        if (itemId && itemText) {
+          agentMessageByItem.set(itemId, itemText);
+          latestAgentMessageItemId = itemId;
+          continue;
+        }
+      }
+
       if (
-        method === "error"
-        && params.error !== undefined
-        && params.error !== null
+        (
+          method === "error"
+          && params.error !== undefined
+          && params.error !== null
+        )
+        || codexEventMethod === "error"
+        || codexEventMethod === "stream_error"
       ) {
-        const errorSummary = formatCodexErrorSummary(params.error);
+        const errorSummary = extractCodexEventError(params, method) || formatCodexErrorSummary(params.error, method);
         errors.push(errorSummary);
         lastErrorSummary = errorSummary;
       }
@@ -1184,6 +1334,369 @@ class CodexDirectExecutor implements CodexDirectCommandExecutor {
           resetPostTurnSilenceTimer();
         }
 
+        const codexEventMethod = method.startsWith("codex/event/")
+          ? method.slice("codex/event/".length)
+          : "";
+        const nextThreadIdFromParams = extractThreadIdFromPayload(params);
+        const nextTurnIdFromParams = extractTurnIdFromPayload(params);
+        if (nextThreadIdFromParams) {
+          activeThreadId = nextThreadIdFromParams;
+        }
+        if (nextTurnIdFromParams) {
+          activeTurnId = nextTurnIdFromParams;
+        }
+
+        if (codexEventMethod) {
+          if (codexEventMethod === "task_started") {
+            upsertActivity({
+              at: nowIso(),
+              turn_id: nextTurnIdFromParams || activeTurnId,
+              item_id: extractCodexEventActivityItemId(params, "codex-task", activeTurnId, activeThreadId),
+              kind: "task",
+              status: "in_progress",
+              label: "Task",
+              summary: extractCodexEventSummary(params, 240) || "Working on the current task",
+            });
+            emitNativeRuntime({
+              thread_id: activeThreadId,
+              active_turn_id: activeTurnId || null,
+              last_turn_id: activeTurnId || null,
+              turn_status: "inProgress",
+              phase: "running",
+              thread_active_flags: [],
+            });
+            return;
+          }
+
+          if (codexEventMethod === "task_complete") {
+            const taskStatus = extractCodexEventActivityStatus(params, "completed");
+            const taskError = extractCodexEventError(params, method);
+            upsertActivity({
+              at: nowIso(),
+              turn_id: nextTurnIdFromParams || activeTurnId,
+              item_id: extractCodexEventActivityItemId(params, "codex-task", activeTurnId, activeThreadId),
+              kind: "task",
+              status: taskStatus,
+              label: "Task",
+              summary: taskError || extractCodexEventSummary(params, 240) || "Task completed",
+            });
+            emitNativeRuntime({
+              thread_id: activeThreadId,
+              active_turn_id: null,
+              last_turn_id: activeTurnId || null,
+              turn_status: taskStatus === "failed" ? "failed" : "completed",
+              phase: taskStatus === "failed" ? "failed" : "completed",
+              thread_active_flags: [],
+              last_error: taskError || null,
+            });
+            return;
+          }
+
+          if (codexEventMethod === "turn_aborted") {
+            upsertActivity({
+              at: nowIso(),
+              turn_id: nextTurnIdFromParams || activeTurnId,
+              item_id: extractCodexEventActivityItemId(params, "codex-task", activeTurnId, activeThreadId),
+              kind: "task",
+              status: "failed",
+              label: "Task",
+              summary: extractCodexEventError(params, method) || extractCodexEventSummary(params, 240) || "Turn aborted",
+            });
+            emitNativeRuntime({
+              thread_id: activeThreadId,
+              active_turn_id: null,
+              last_turn_id: activeTurnId || null,
+              turn_status: "interrupted",
+              phase: "interrupted",
+              thread_active_flags: [],
+              last_error: extractCodexEventError(params, method) || null,
+            });
+            return;
+          }
+
+          if (codexEventMethod === "error" || codexEventMethod === "stream_error") {
+            const errorSummary = extractCodexEventError(params, method);
+            upsertActivity({
+              at: nowIso(),
+              turn_id: nextTurnIdFromParams || activeTurnId,
+              item_id: extractCodexEventActivityItemId(params, "codex-task", activeTurnId, activeThreadId),
+              kind: "task",
+              status: "failed",
+              label: "Task",
+              summary: errorSummary || "Task failed",
+            });
+            emitNativeRuntime({
+              thread_id: activeThreadId,
+              active_turn_id: null,
+              last_turn_id: activeTurnId || null,
+              turn_status: "failed",
+              phase: "failed",
+              thread_active_flags: [],
+              last_error: errorSummary || null,
+            });
+            if (errorSummary) {
+              emitStderr(`${errorSummary}\n`);
+            }
+            return;
+          }
+
+          if (
+            codexEventMethod === "request_user_input"
+            || codexEventMethod === "exec_approval_request"
+            || codexEventMethod === "apply_patch_approval_request"
+            || codexEventMethod === "elicitation_request"
+          ) {
+            emitNativeRuntime({
+              thread_id: activeThreadId,
+              active_turn_id: activeTurnId || null,
+              last_turn_id: activeTurnId || null,
+              turn_status: "inProgress",
+              phase: "running",
+              thread_active_flags: [
+                codexEventMethod === "request_user_input" ? "waitingOnUserInput" : "waitingOnApproval",
+              ],
+            });
+            return;
+          }
+
+          if (codexEventMethod === "agent_reasoning" || codexEventMethod === "agent_reasoning_delta") {
+            const itemId = extractCodexEventActivityItemId(params, "codex-reasoning", activeTurnId, activeThreadId);
+            upsertActivity({
+              at: nowIso(),
+              turn_id: nextTurnIdFromParams || activeTurnId,
+              item_id: itemId,
+              kind: "thinking",
+              status: "in_progress",
+              label: "Thinking",
+              summary: codexEventMethod === "agent_reasoning_delta"
+                ? appendActivityDelta(activityByItemId.get(itemId)?.summary, extractCodexEventOutputDelta(params), 260)
+                : extractCodexEventSummary(params, 260) || activityByItemId.get(itemId)?.summary || "Working through the next steps",
+            });
+            emitNativeRuntime({
+              thread_id: activeThreadId,
+              active_turn_id: activeTurnId || null,
+              last_turn_id: activeTurnId || null,
+              turn_status: "inProgress",
+              phase: "running",
+              thread_active_flags: [],
+            });
+            return;
+          }
+
+          if (codexEventMethod === "plan_update" || codexEventMethod === "plan_delta") {
+            const itemId = extractCodexEventActivityItemId(params, "codex-plan", activeTurnId, activeThreadId);
+            const planSteps = extractPlanSteps(params);
+            upsertActivity({
+              at: nowIso(),
+              turn_id: nextTurnIdFromParams || activeTurnId,
+              item_id: itemId,
+              kind: "plan",
+              status: "in_progress",
+              label: "Thinking",
+              summary: codexEventMethod === "plan_delta"
+                ? appendActivityDelta(activityByItemId.get(itemId)?.summary, extractCodexEventOutputDelta(params), 220)
+                : extractCodexEventSummary(params, 220) || summarizePlanSteps(planSteps) || "Updating plan",
+              plan_steps: planSteps,
+            });
+            emitNativeRuntime({
+              thread_id: activeThreadId,
+              active_turn_id: activeTurnId || null,
+              last_turn_id: activeTurnId || null,
+              turn_status: "inProgress",
+              phase: "running",
+              thread_active_flags: [],
+            });
+            return;
+          }
+
+          if (codexEventMethod === "mcp_tool_call_begin" || codexEventMethod === "mcp_tool_call_end") {
+            upsertActivity({
+              at: nowIso(),
+              turn_id: nextTurnIdFromParams || activeTurnId,
+              item_id: extractCodexEventActivityItemId(params, "codex-tool", activeTurnId, activeThreadId),
+              kind: "mcp_tool_call",
+              status: codexEventMethod === "mcp_tool_call_end"
+                ? extractCodexEventActivityStatus(params, "completed")
+                : "in_progress",
+              label: "Using tool",
+              server: extractCodexEventToolServer(params),
+              tool: extractCodexEventToolName(params),
+              summary: extractCodexEventSummary(params, 260) || extractCodexEventError(params, method),
+            });
+            emitNativeRuntime({
+              thread_id: activeThreadId,
+              active_turn_id: activeTurnId || null,
+              last_turn_id: activeTurnId || null,
+              turn_status: "inProgress",
+              phase: "running",
+              thread_active_flags: [],
+            });
+            return;
+          }
+
+          if (codexEventMethod === "dynamic_tool_call_request") {
+            upsertActivity({
+              at: nowIso(),
+              turn_id: nextTurnIdFromParams || activeTurnId,
+              item_id: extractCodexEventActivityItemId(params, "codex-dynamic-tool", activeTurnId, activeThreadId),
+              kind: "dynamic_tool_call",
+              status: "in_progress",
+              label: "Using tool",
+              tool: extractCodexEventToolName(params),
+              summary: extractCodexEventSummary(params, 260),
+            });
+            emitNativeRuntime({
+              thread_id: activeThreadId,
+              active_turn_id: activeTurnId || null,
+              last_turn_id: activeTurnId || null,
+              turn_status: "inProgress",
+              phase: "running",
+              thread_active_flags: ["waitingOnApproval"],
+            });
+            return;
+          }
+
+          if (
+            codexEventMethod === "exec_command_begin"
+            || codexEventMethod === "exec_command_output_delta"
+            || codexEventMethod === "terminal_interaction"
+            || codexEventMethod === "exec_command_end"
+          ) {
+            const itemId = extractCodexEventActivityItemId(params, "codex-command", activeTurnId, activeThreadId);
+            const summary = codexEventMethod === "exec_command_output_delta"
+              ? appendActivityDelta(activityByItemId.get(itemId)?.summary, extractCodexEventOutputDelta(params), 260)
+              : codexEventMethod === "terminal_interaction"
+                ? clipActivityText(`Sent input: ${extractCodexEventSummary(params, 220) || "interaction"}`, 220)
+                : extractCodexEventSummary(params, 260) || extractCodexEventError(params, method);
+            upsertActivity({
+              at: nowIso(),
+              turn_id: nextTurnIdFromParams || activeTurnId,
+              item_id: itemId,
+              kind: "command_execution",
+              status: codexEventMethod === "exec_command_end"
+                ? extractCodexEventActivityStatus(params, "completed")
+                : "in_progress",
+              label: "Running command",
+              command: extractCodexEventCommand(params),
+              cwd: extractCodexEventCwd(params),
+              summary,
+            });
+            emitNativeRuntime({
+              thread_id: activeThreadId,
+              active_turn_id: activeTurnId || null,
+              last_turn_id: activeTurnId || null,
+              turn_status: "inProgress",
+              phase: "running",
+              thread_active_flags: [],
+            });
+            return;
+          }
+
+          if (codexEventMethod === "patch_apply_begin" || codexEventMethod === "patch_apply_end") {
+            const files = extractActivityFiles(params);
+            upsertActivity({
+              at: nowIso(),
+              turn_id: nextTurnIdFromParams || activeTurnId,
+              item_id: extractCodexEventActivityItemId(params, "codex-file-change", activeTurnId, activeThreadId),
+              kind: "file_change",
+              status: codexEventMethod === "patch_apply_end"
+                ? extractCodexEventActivityStatus(params, "completed")
+                : "in_progress",
+              label: "Editing files",
+              files,
+              summary: extractCodexEventSummary(params, 220)
+                || clipActivityText(files?.slice(0, 3).map((entry) => entry.path).join(", "), 220)
+                || "Updating files",
+            });
+            emitNativeRuntime({
+              thread_id: activeThreadId,
+              active_turn_id: activeTurnId || null,
+              last_turn_id: activeTurnId || null,
+              turn_status: "inProgress",
+              phase: "running",
+              thread_active_flags: [],
+            });
+            return;
+          }
+
+          if (codexEventMethod === "turn_diff") {
+            const diff = clipActivityText(
+              extractDirectString(params, ["diff", "patch", "content"]),
+              800,
+            );
+            const relatedIds = fileChangeActivityIdsByTurn.get(nextTurnIdFromParams || activeTurnId || "");
+            if (relatedIds?.size) {
+              for (const itemId of relatedIds) {
+                upsertActivity({
+                  at: nowIso(),
+                  turn_id: nextTurnIdFromParams || activeTurnId,
+                  item_id: itemId,
+                  kind: "file_change",
+                  status: "in_progress",
+                  label: "Editing files",
+                  diff,
+                });
+              }
+            } else {
+              upsertActivity({
+                at: nowIso(),
+                turn_id: nextTurnIdFromParams || activeTurnId,
+                item_id: extractCodexEventActivityItemId(params, "codex-file-change", activeTurnId, activeThreadId),
+                kind: "file_change",
+                status: "in_progress",
+                label: "Editing files",
+                summary: diff ? "Updating files" : "Editing files",
+                diff,
+              });
+            }
+            emitNativeRuntime({
+              thread_id: activeThreadId,
+              active_turn_id: activeTurnId || null,
+              last_turn_id: activeTurnId || null,
+              turn_status: "inProgress",
+              phase: "running",
+              thread_active_flags: [],
+            });
+            return;
+          }
+
+          if (codexEventMethod === "item_started" && isObjectRecord(params.item)) {
+            emitItemActivity(params.item);
+            emitNativeRuntime({
+              thread_id: activeThreadId,
+              active_turn_id: activeTurnId || null,
+              last_turn_id: activeTurnId || null,
+              turn_status: "inProgress",
+              phase: "running",
+              thread_active_flags: [],
+            });
+            return;
+          }
+
+          if (codexEventMethod === "item_completed" && isObjectRecord(params.item)) {
+            emitItemActivity(params.item, {
+              status: normalizeActivityStatus(params.item.status),
+            });
+            return;
+          }
+
+          if (codexEventMethod === "agent_message_delta" || codexEventMethod === "agent_message_content_delta") {
+            const delta = extractCodexEventOutputDelta(params);
+            if (delta) {
+              hooks.onOutput("stdout", delta);
+            }
+            return;
+          }
+
+          if (codexEventMethod === "agent_message") {
+            const messageText = extractCodexEventSummary(params, 20_000);
+            if (messageText) {
+              hooks.onOutput("stdout", messageText.endsWith("\n") ? messageText : `${messageText}\n`);
+            }
+            return;
+          }
+        }
+
         if (method === "thread/started") {
           const nextThreadId = extractThreadIdFromPayload(params);
           if (nextThreadId) {
@@ -1555,6 +2068,10 @@ class CodexDirectExecutor implements CodexDirectCommandExecutor {
         }
 
         const requestedModel = String(request.model || "").trim() || null;
+        const requestedReasoningEffort = String(request.reasoningEffort || "").trim() || null;
+        const requestConfig = requestedReasoningEffort
+          ? { model_reasoning_effort: requestedReasoningEffort }
+          : undefined;
         let threadResult: unknown;
         let resumedThread = false;
         startupLog("thread/start -> start");
@@ -1566,6 +2083,7 @@ class CodexDirectExecutor implements CodexDirectCommandExecutor {
                 threadId: activeThreadId,
                 cwd: request.workspace,
                 model: requestedModel,
+                config: requestConfig,
                 approvalPolicy: CODEX_DIRECT_APPROVAL_POLICY,
                 sandbox: "workspace-write",
                 persistExtendedHistory: true,
@@ -1592,6 +2110,7 @@ class CodexDirectExecutor implements CodexDirectCommandExecutor {
               {
                 cwd: request.workspace,
                 model: requestedModel,
+                config: requestConfig,
                 approvalPolicy: CODEX_DIRECT_APPROVAL_POLICY,
                 sandbox: "workspace-write",
                 experimentalRawEvents: false,
@@ -1627,18 +2146,18 @@ class CodexDirectExecutor implements CodexDirectCommandExecutor {
         try {
           turnResult = await sendRequest(
             "turn/start",
-            {
-              threadId: activeThreadId,
-              input: [
+              {
+                threadId: activeThreadId,
+                input: [
                 {
                   type: "text",
                   text: request.prompt,
                   text_elements: [],
                 },
-              ],
-              model: requestedModel,
-              approvalPolicy: CODEX_DIRECT_APPROVAL_POLICY,
-            },
+                ],
+                model: requestedModel,
+                approvalPolicy: CODEX_DIRECT_APPROVAL_POLICY,
+              },
             30_000,
           );
         } catch (error) {
@@ -1768,6 +2287,7 @@ export class CodexDirectAdapter implements CliSessionAdapter {
           prompt: input.prompt,
           workspace,
           model: input.model,
+          reasoningEffort: input.reasoningEffort,
           env: input.env,
         },
         hooks,

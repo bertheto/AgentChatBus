@@ -93,6 +93,26 @@ describe("parseCodexDirectAppServerResult", () => {
     });
   });
 
+  it("understands codex/event aliases for conversation lifecycle and agent message streaming", () => {
+    const result = parseCodexDirectAppServerResult([
+      "{\"method\":\"codex/event/task_started\",\"params\":{\"conversationId\":\"thread-200\",\"turnId\":\"turn-4\"}}",
+      "{\"method\":\"codex/event/agent_message_delta\",\"params\":{\"conversationId\":\"thread-200\",\"turnId\":\"turn-4\",\"delta\":\"Native\"}}",
+      "{\"method\":\"codex/event/agent_message_delta\",\"params\":{\"conversationId\":\"thread-200\",\"turnId\":\"turn-4\",\"delta\":\" card\"}}",
+      "{\"method\":\"codex/event/task_complete\",\"params\":{\"conversationId\":\"thread-200\",\"turnId\":\"turn-4\"}}",
+    ].join("\n"));
+
+    expect(result.threadId).toBe("thread-200");
+    expect(result.turnId).toBe("turn-4");
+    expect(result.resultText).toBe("Native card");
+    expect(result.rawResult).toMatchObject({
+      thread_id: "thread-200",
+      turn_id: "turn-4",
+      turn_status: "completed",
+      last_agent_message: "Native card",
+      errors: [],
+    });
+  });
+
   it("retains error notifications and ignores malformed lines", () => {
     const result = parseCodexDirectAppServerResult([
       "{\"method\":\"thread/started\",\"params\":{\"threadId\":\"thread-99\"}}",

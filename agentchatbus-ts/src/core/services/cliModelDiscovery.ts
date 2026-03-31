@@ -27,6 +27,14 @@ export type CliModelDiscoveryStatus = "ready" | "error";
 export type CliDiscoveredModel = {
   id: string;
   label: string;
+  description?: string;
+  hidden?: boolean;
+  is_default?: boolean;
+  default_reasoning_effort?: string;
+  supported_reasoning_efforts?: Array<{
+    id: string;
+    label: string;
+  }>;
 };
 
 export type CliModelDiscoveryEntry = {
@@ -56,6 +64,24 @@ type CommandResult = {
   exitCode: number | null;
   stdout: string;
   stderr: string;
+};
+
+type JsonRpcId = string | number;
+
+type JsonRpcPendingRequest = {
+  resolve: (value: unknown) => void;
+  reject: (error: Error) => void;
+  timer: NodeJS.Timeout;
+};
+
+type JsonRpcResponseEnvelope = {
+  id?: JsonRpcId;
+  result?: unknown;
+  error?: {
+    code?: number;
+    message?: string;
+    data?: unknown;
+  };
 };
 
 const STATIC_MODELS: Record<CliSessionAdapterId, CliDiscoveredModel[]> = {
@@ -103,9 +129,69 @@ function uniqueModels(models: CliDiscoveredModel[]): CliDiscoveredModel[] {
     result.push({
       id,
       label: String(model.label || id).trim() || id,
+      ...(typeof model.description === "string" && model.description.trim()
+        ? { description: model.description.trim() }
+        : {}),
+      ...(typeof model.hidden === "boolean" ? { hidden: model.hidden } : {}),
+      ...(typeof model.is_default === "boolean" ? { is_default: model.is_default } : {}),
+      ...(typeof model.default_reasoning_effort === "string" && model.default_reasoning_effort.trim()
+        ? { default_reasoning_effort: model.default_reasoning_effort.trim() }
+        : {}),
+      ...(Array.isArray(model.supported_reasoning_efforts)
+        ? {
+          supported_reasoning_efforts: model.supported_reasoning_efforts
+            .map((option) => ({
+              id: String(option?.id || "").trim(),
+              label: String(option?.label || option?.id || "").trim(),
+            }))
+            .filter((option) => option.id),
+        }
+        : {}),
     });
   }
   return result;
+}
+
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function extractJsonRpcId(value: unknown): JsonRpcId | undefined {
+  if (typeof value === "string" || typeof value === "number") {
+    return value;
+  }
+  return undefined;
+}
+
+function parseCodexModelListResult(value: unknown): CliDiscoveredModel[] {
+  if (!isObjectRecord(value) || !Array.isArray(value.data)) {
+    return [];
+  }
+  return uniqueModels(value.data.map((entry) => {
+    const record = isObjectRecord(entry) ? entry : {};
+    const supported = Array.isArray(record.supportedReasoningEfforts)
+      ? record.supportedReasoningEfforts
+      : [];
+    const modelId = String(record.model || record.id || "").trim();
+    return {
+      id: modelId,
+      label: String(record.displayName || modelId).trim() || modelId,
+      description: typeof record.description === "string" ? record.description.trim() : undefined,
+      hidden: typeof record.hidden === "boolean" ? record.hidden : undefined,
+      is_default: typeof record.isDefault === "boolean" ? record.isDefault : undefined,
+      default_reasoning_effort: typeof record.defaultReasoningEffort === "string"
+        ? record.defaultReasoningEffort.trim()
+        : undefined,
+      supported_reasoning_efforts: supported.map((option) => {
+        const optionRecord = isObjectRecord(option) ? option : {};
+        const optionId = String(optionRecord.reasoningEffort || "").trim();
+        return {
+          id: optionId,
+          label: String(optionRecord.description || optionId).trim() || optionId,
+        };
+      }).filter((option) => option.id),
+    };
+  }).filter((model) => model.id));
 }
 
 function buildStaticEntry(
@@ -211,6 +297,222 @@ async function runCommand(spec: CommandSpec): Promise<CommandResult> {
         stderr,
       });
     });
+  });
+}
+
+async function discoverCodexModelsViaAppServer(
+  workspace: string,
+): Promise<CliDiscoveredModel[]> {
+  const command = resolveCodexHeadlessCommand();
+  const child = spawn(command, ["app-server", "--listen", "stdio://"], {
+    cwd: workspace,
+    env: { ...process.env },
+    shell: false,
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+
+  return await new Promise<CliDiscoveredModel[]>((resolve, reject) => {
+    let settled = false;
+    let nextRequestId = 1;
+    let stdoutBuffer = "";
+    let stderrBuffer = "";
+    const pending = new Map<string, JsonRpcPendingRequest>();
+
+    const fail = (error: unknown): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      for (const request of pending.values()) {
+        clearTimeout(request.timer);
+      }
+      pending.clear();
+      try {
+        child.kill("SIGTERM");
+      } catch {
+        // Ignore best-effort shutdown failures.
+      }
+      reject(error instanceof Error ? error : new Error(String(error)));
+    };
+
+    const succeed = (models: CliDiscoveredModel[]): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      for (const request of pending.values()) {
+        clearTimeout(request.timer);
+      }
+      pending.clear();
+      try {
+        child.stdin.end();
+      } catch {
+        // Ignore best-effort shutdown failures.
+      }
+      setTimeout(() => {
+        try {
+          child.kill("SIGTERM");
+        } catch {
+          // Ignore best-effort shutdown failures.
+        }
+      }, 50);
+      resolve(models);
+    };
+
+    const writeMessage = (message: Record<string, unknown>): void => {
+      if (child.stdin.destroyed || child.killed) {
+        throw new Error("Codex app-server stdin is unavailable.");
+      }
+      child.stdin.write(`${JSON.stringify(message)}\n`);
+    };
+
+    const sendRequest = (method: string, params: unknown, timeoutMs = 15_000): Promise<unknown> => {
+      const requestId = String(nextRequestId++);
+      return new Promise((resolveRequest, rejectRequest) => {
+        const timer = setTimeout(() => {
+          pending.delete(requestId);
+          rejectRequest(new Error(`Timed out waiting for Codex app-server response to '${method}'.`));
+        }, timeoutMs);
+        pending.set(requestId, {
+          resolve: resolveRequest,
+          reject: rejectRequest,
+          timer,
+        });
+        try {
+          writeMessage({
+            id: requestId,
+            method,
+            params,
+          });
+        } catch (error) {
+          clearTimeout(timer);
+          pending.delete(requestId);
+          rejectRequest(error instanceof Error ? error : new Error(String(error)));
+        }
+      });
+    };
+
+    const sendNotification = (method: string, params?: unknown): void => {
+      const message: Record<string, unknown> = { method };
+      if (params !== undefined) {
+        message.params = params;
+      }
+      writeMessage(message);
+    };
+
+    const handleStdoutLine = (line: string): void => {
+      const trimmed = String(line || "").trim();
+      if (!trimmed) {
+        return;
+      }
+      let message: JsonRpcResponseEnvelope;
+      try {
+        message = JSON.parse(trimmed) as JsonRpcResponseEnvelope;
+      } catch {
+        return;
+      }
+      const id = extractJsonRpcId(message.id);
+      if (id === undefined) {
+        return;
+      }
+      const pendingRequest = pending.get(String(id));
+      if (!pendingRequest) {
+        return;
+      }
+      clearTimeout(pendingRequest.timer);
+      pending.delete(String(id));
+      if (message.error) {
+        const detail = typeof message.error.message === "string"
+          ? message.error.message
+          : `JSON-RPC error ${String(message.error.code ?? "unknown")}`;
+        pendingRequest.reject(new Error(detail));
+        return;
+      }
+      pendingRequest.resolve(message.result);
+    };
+
+    const overallTimer = setTimeout(() => {
+      const detail = stderrBuffer.trim()
+        ? `Timed out discovering Codex models. stderr: ${stderrBuffer.trim()}`
+        : "Timed out discovering Codex models.";
+      fail(new Error(detail));
+    }, 20_000);
+
+    child.stdout.on("data", (chunk) => {
+      stdoutBuffer += chunk.toString();
+      const lines = stdoutBuffer.split(/\r?\n/g);
+      stdoutBuffer = lines.pop() || "";
+      for (const line of lines) {
+        handleStdoutLine(line);
+      }
+    });
+
+    child.stderr.on("data", (chunk) => {
+      stderrBuffer += chunk.toString();
+    });
+
+    child.on("error", (error) => {
+      clearTimeout(overallTimer);
+      fail(error);
+    });
+
+    child.on("close", (code) => {
+      if (settled) {
+        return;
+      }
+      clearTimeout(overallTimer);
+      const stderrSummary = stderrBuffer.trim();
+      fail(new Error(
+        stderrSummary
+          ? `Codex app-server exited before model discovery completed (code ${String(code)}): ${stderrSummary}`
+          : `Codex app-server exited before model discovery completed (code ${String(code)}).`,
+      ));
+    });
+
+    void (async () => {
+      try {
+        await sendRequest("initialize", {
+          clientInfo: {
+            name: "agentchatbus-ts-model-discovery",
+            version: "1.0.0",
+          },
+          capabilities: {
+            experimentalApi: true,
+          },
+        });
+        sendNotification("initialized");
+
+        const allModels: CliDiscoveredModel[] = [];
+        let cursor: string | null = null;
+        do {
+          const response = await sendRequest("model/list", {
+            includeHidden: false,
+            cursor,
+            limit: 100,
+          });
+          const models = parseCodexModelListResult(response);
+          allModels.push(...models);
+          cursor = isObjectRecord(response) && typeof response.nextCursor === "string"
+            ? response.nextCursor
+            : null;
+        } while (cursor);
+
+        clearTimeout(overallTimer);
+        const normalized = uniqueModels(allModels);
+        if (!normalized.length) {
+          const stderrSummary = stderrBuffer.trim();
+          throw new Error(
+            stderrSummary
+              ? `Codex model/list returned no models. stderr: ${stderrSummary}`
+              : "Codex model/list returned no models.",
+          );
+        }
+        succeed(normalized);
+      } catch (error) {
+        clearTimeout(overallTimer);
+        fail(error);
+      }
+    })();
   });
 }
 
@@ -402,19 +704,19 @@ export class CliModelDiscoveryService {
 
   private async discoverCodex(fetchedAt: string): Promise<CliModelDiscoveryEntry> {
     try {
-      const command = resolveCodexHeadlessCommand();
-      await runCommand({
-        command,
-        args: ["--help"],
-        cwd: resolveWorkspace(),
-        timeoutMs: 12000,
-      });
+      const models = await discoverCodexModelsViaAppServer(resolveWorkspace());
       return {
-        ...buildStaticEntry("codex", fetchedAt),
+        adapter: "codex",
         status: "ready",
+        strategy: "runtime",
+        models,
+        fetched_at: fetchedAt,
+        source_label: "Codex app-server model/list",
       };
     } catch (error) {
-      return buildStaticEntry("codex", fetchedAt, error instanceof Error ? error.message : String(error));
+      const fallback = buildStaticEntry("codex", fetchedAt, error instanceof Error ? error.message : String(error));
+      fallback.source_label = "Codex app-server failed; static fallback";
+      return fallback;
     }
   }
 

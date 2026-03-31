@@ -104,6 +104,7 @@ export interface CliSessionSnapshot {
   adapter: CliSessionAdapterId;
   mode: CliSessionMode;
   model?: string;
+  reasoning_effort?: string;
   state: CliSessionState;
   prompt: string;
   prompt_history?: Array<{
@@ -194,6 +195,7 @@ export interface CreateCliSessionInput {
   adapter: CliSessionAdapterId;
   mode?: CliSessionMode;
   model?: string;
+  reasoningEffort?: string;
   prompt?: string;
   initialInstruction?: string;
   workspace?: string;
@@ -617,11 +619,95 @@ function buildSessionReentryPrompt(snapshot: CliSessionSnapshot): CliSessionSnap
   };
 }
 
-function buildNativeActivityCard(snapshot: CliSessionSnapshot): CliNativeActivityCard {
+function isNativeTaskActive(snapshot: CliSessionSnapshot): boolean {
+  const phase = String(snapshot.native_turn_runtime?.phase || "").trim();
+  return phase === "starting" || phase === "running" || phase === "interrupting";
+}
+
+function buildNativeThinkingSummary(
+  snapshot: CliSessionSnapshot,
+  events: CliAdapterActivityEvent[],
+): { summary: string; meta?: string } {
+  const runtime = snapshot.native_turn_runtime;
+  const latestActiveEvent = getLatestActivityEntry(events, (entry) => entry.status === "in_progress");
+  const planEvent = getPreferredActivityEntry(events, (entry) => entry.kind === "plan");
+  const toolEvent = getPreferredActivityEntry(
+    events,
+    (entry) => entry.kind === "mcp_tool_call" || entry.kind === "dynamic_tool_call",
+  );
+  const commandEvent = getPreferredActivityEntry(events, (entry) => entry.kind === "command_execution");
+  const fileEvent = getPreferredActivityEntry(events, (entry) => entry.kind === "file_change");
+
+  if (runtime?.thread_active_flags?.includes("waitingOnApproval")) {
+    return {
+      summary: "Waiting for approval before continuing.",
+      meta: "Approval required",
+    };
+  }
+  if (runtime?.thread_active_flags?.includes("waitingOnUserInput")) {
+    return {
+      summary: "Waiting for input to continue.",
+      meta: "User input required",
+    };
+  }
+  if (runtime?.phase === "interrupting") {
+    return {
+      summary: "Stopping the current Codex task.",
+      meta: "Interrupting",
+    };
+  }
+
+  const candidateSummary = clipNativeCardText(
+    planEvent?.summary
+      || latestActiveEvent?.summary
+      || toolEvent?.summary
+      || commandEvent?.summary
+      || fileEvent?.summary
+      || commandEvent?.command
+      || [toolEvent?.server, toolEvent?.tool].filter(Boolean).join(" / "),
+    280,
+  );
+  const candidateMeta = clipNativeCardText(
+    latestActiveEvent && latestActiveEvent.kind !== "thinking"
+      ? latestActiveEvent.label
+      : "",
+    90,
+  );
+  return {
+    summary: candidateSummary || "Working through the next steps.",
+    meta: candidateMeta || undefined,
+  };
+}
+
+function buildNativePlaceholderSummary(
+  shell: { status: CliNativeActivityCardShellStatus; text: string },
+): string {
+  switch (shell.status) {
+    case "starting":
+      return "Codex is starting.";
+    case "completed":
+      return "Last Codex task completed.";
+    case "failed":
+      return "Codex stopped after an error.";
+    case "stopped":
+      return "Codex session stopped.";
+    case "connected":
+      return "Connected and waiting for the next Codex task.";
+    default:
+      return "Connected and waiting for the next Codex task.";
+  }
+}
+
+export function buildNativeActivityCard(snapshot: CliSessionSnapshot): CliNativeActivityCard {
   const events = Array.isArray(snapshot.recent_activity_events) ? snapshot.recent_activity_events : [];
   const sections: CliNativeActivityCardSection[] = [];
   const shell = summarizeShellStatus(snapshot);
+  const runtime = snapshot.native_turn_runtime;
+  const taskActive = isNativeTaskActive(snapshot);
+  const waitingOnApproval = runtime?.thread_active_flags?.includes("waitingOnApproval");
+  const waitingOnInput = runtime?.thread_active_flags?.includes("waitingOnUserInput");
 
+  const taskEvent = getPreferredActivityEntry(events, (entry) => entry.kind === "task");
   const thinkingEvent = getPreferredActivityEntry(events, (entry) => entry.kind === "thinking");
   const toolEvent = getPreferredActivityEntry(
     events,
@@ -710,21 +796,76 @@ function buildNativeActivityCard(snapshot: CliSessionSnapshot): CliNativeActivit
     });
   }
 
+  if (taskActive && !sections.some((section) => section.kind === "thinking")) {
+    const synthesizedThinking = buildNativeThinkingSummary(snapshot, events);
+    sections.unshift({
+      kind: "thinking",
+      title: "Thinking",
+      summary: synthesizedThinking.summary,
+      status: "in_progress",
+      meta: synthesizedThinking.meta,
+    });
+  }
+
+  const hasTerminalTaskState = (
+    snapshot.state === "completed"
+    || snapshot.state === "failed"
+    || runtime?.phase === "completed"
+    || runtime?.phase === "interrupted"
+    || runtime?.phase === "failed"
+  );
+
   if (
-    (snapshot.state === "completed" || snapshot.state === "failed")
-    && (snapshot.raw_result?.turn_status || snapshot.last_result || snapshot.last_error)
+    taskEvent
+    && !hasTerminalTaskState
+    && (waitingOnApproval || waitingOnInput || (!taskActive && !sections.length))
   ) {
+    sections.push({
+      kind: "task",
+      title: "Task",
+      summary: clipNativeCardText(taskEvent.summary || taskEvent.label, 240) || "Task updated",
+      status: mapActivityStatusToCardStatus(taskEvent.status),
+      meta: clipNativeCardText(taskEvent.status, 80) || undefined,
+    });
+  }
+
+  if (
+    hasTerminalTaskState
+    && (
+      taskEvent?.summary
+      || snapshot.raw_result?.turn_status
+      || snapshot.last_result
+      || snapshot.last_error
+      || runtime?.turn_status
+      || runtime?.phase
+    )
+  ) {
+    const taskFailed = snapshot.state === "failed" || runtime?.phase === "failed";
+    const taskInterrupted = runtime?.phase === "interrupted";
+    const terminalTaskStatus: CliNativeActivityCardSection["status"] = taskFailed ? "failed" : "completed";
     sections.push({
       kind: "task",
       title: "Task",
       summary: clipNativeCardText(
         snapshot.last_error
           || snapshot.last_result
+          || taskEvent?.summary
+          || (taskInterrupted ? "Task interrupted" : undefined)
           || String(snapshot.raw_result?.turn_status || ""),
         240,
-      ) || (snapshot.state === "failed" ? "Task failed" : "Task completed"),
-      status: snapshot.state === "failed" ? "failed" : "completed",
-      meta: clipNativeCardText(String(snapshot.raw_result?.turn_status || ""), 80) || undefined,
+      ) || (taskFailed ? "Task failed" : taskInterrupted ? "Task interrupted" : "Task completed"),
+      status: taskEvent && taskEvent.status !== "in_progress"
+        ? mapActivityStatusToCardStatus(taskEvent.status)
+        : terminalTaskStatus,
+      meta: clipNativeCardText(
+        [
+          taskEvent?.status ? String(taskEvent.status) : "",
+          runtime?.turn_status ? String(runtime.turn_status) : "",
+          snapshot.raw_result?.turn_status ? String(snapshot.raw_result.turn_status) : "",
+          runtime?.phase ? String(runtime.phase) : "",
+        ].filter(Boolean).join(" · "),
+        80,
+      ) || undefined,
     });
   }
 
@@ -732,14 +873,19 @@ function buildNativeActivityCard(snapshot: CliSessionSnapshot): CliNativeActivit
     sections.push({
       kind: "placeholder",
       title: "Activity",
-      summary: "No active Codex activity to display.",
+      summary: buildNativePlaceholderSummary(shell),
       status: "placeholder",
       meta: shell.text,
     });
   }
 
-  const activeSection = sections.find((section) => section.status === "in_progress");
-  const shellStatusText = activeSection?.title ? clipNativeCardText(activeSection.title, 60) : shell.text;
+  const activeThinking = sections.find(
+    (section) => section.kind === "thinking" && section.status === "in_progress",
+  );
+  const shellStatusText = clipNativeCardText(
+    activeThinking && !waitingOnApproval && !waitingOnInput ? "Thinking" : shell.text,
+    60,
+  ) || "Connected";
 
   return {
     anchor_message_id: String(snapshot.last_posted_message_id || "").trim() || undefined,
@@ -1968,6 +2114,7 @@ export class CliSessionManager {
     const rows = adapter.supportsResize ? normalizeTerminalRows(input.rows) : undefined;
     const initialInstruction = String(input.initialInstruction || "").trim() || undefined;
     const model = String(input.model || "").trim() || undefined;
+    const reasoningEffort = String(input.reasoningEffort || "").trim() || undefined;
     const participantAgentId = String(input.participantAgentId || "").trim() || undefined;
     const participantDisplayName = String(input.participantDisplayName || "").trim() || undefined;
     const participantRole = input.participantRole;
@@ -1984,6 +2131,7 @@ export class CliSessionManager {
       adapter: adapterId,
       mode,
       model,
+      reasoning_effort: reasoningEffort,
       state: "created",
       prompt,
       prompt_history: prompt.trim()
@@ -2610,6 +2758,7 @@ export class CliSessionManager {
           cols: normalizeTerminalCols(runtime.snapshot.cols),
           rows: normalizeTerminalRows(runtime.snapshot.rows),
           model: runtime.snapshot.model,
+          reasoningEffort: runtime.snapshot.reasoning_effort,
           env: runtime.launchEnv,
         },
         {

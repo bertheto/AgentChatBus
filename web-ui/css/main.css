@@ -3015,6 +3015,14 @@ body[data-theme="light"] .msg-sys-admin-human-note-icon {
   color: var(--text-2);
 }
 
+.msg-native-card__section[data-kind="thinking"][data-status="in_progress"] .msg-native-card__section-title {
+  color: var(--accent);
+}
+
+.msg-native-card__section[data-kind="task"][data-status="failed"] .msg-native-card__section-summary {
+  color: #fca5a5;
+}
+
 body[data-theme="light"] .msg-native-card {
   border-color: rgba(148, 163, 184, .2);
   background:

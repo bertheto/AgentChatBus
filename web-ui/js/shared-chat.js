@@ -134,18 +134,50 @@
     if (card?.shell_status_text) {
       return String(card.shell_status_text).trim();
     }
+    const runtime = session?.native_turn_runtime;
+    const flags = Array.isArray(runtime?.thread_active_flags) ? runtime.thread_active_flags : [];
+    const phase = String(runtime?.phase || "").trim();
     const state = String(session?.state || "").trim().toLowerCase();
     if (state === "failed") return "Failed";
     if (state === "stopped") return "Stopped";
     if (state === "completed") return "Completed";
     if (state === "starting" || state === "created") return "Starting Codex";
+    if (flags.includes("waitingOnApproval")) return "Waiting on approval";
+    if (flags.includes("waitingOnUserInput")) return "Waiting on input";
+    if (phase === "interrupting") return "Interrupting";
+    if (phase === "running" || phase === "starting") return "Thinking";
+    if (phase === "completed") return "Completed";
+    if (phase === "interrupted") return "Interrupted";
     if (session?.connected_at) return "Connected";
     return "Running";
   }
 
   function buildFallbackNativeCard(session) {
     const shellStatusText = normalizeShellStatusText(session);
+    const runtime = session?.native_turn_runtime;
+    const flags = Array.isArray(runtime?.thread_active_flags) ? runtime.thread_active_flags : [];
+    const phase = String(runtime?.phase || "").trim();
     const shellStatus = String(session?.state || "").trim().toLowerCase();
+    const waitingOnApproval = flags.includes("waitingOnApproval");
+    const waitingOnInput = flags.includes("waitingOnUserInput");
+    const running = phase === "starting" || phase === "running" || phase === "interrupting";
+    const placeholderSummary = shellStatus === "starting" || shellStatus === "created"
+      ? "Codex is starting."
+      : shellStatus === "failed"
+        ? "Codex stopped after an error."
+        : shellStatus === "stopped"
+          ? "Codex session stopped."
+          : shellStatus === "completed"
+            ? "Last Codex task completed."
+            : waitingOnApproval
+              ? "Waiting for approval before continuing."
+              : waitingOnInput
+                ? "Waiting for input to continue."
+                : running
+                  ? "Working through the next steps."
+                  : "Connected and waiting for the next Codex task.";
+    const placeholderKind = waitingOnApproval || waitingOnInput || running ? "thinking" : "placeholder";
+    const placeholderStatus = waitingOnApproval || waitingOnInput || running ? "in_progress" : "placeholder";
     return {
       anchor_message_id: String(session?.last_posted_message_id || "").trim() || "",
       shell_status: (
@@ -169,13 +201,13 @@
         || session?.created_at
         || "",
       ),
-      placeholder_visible: true,
+      placeholder_visible: placeholderKind === "placeholder",
       content_sections: [
         {
-          kind: "placeholder",
-          title: "Activity",
-          summary: "No active Codex activity to display.",
-          status: "placeholder",
+          kind: placeholderKind,
+          title: placeholderKind === "thinking" ? "Thinking" : "Activity",
+          summary: placeholderSummary,
+          status: placeholderStatus,
           meta: shellStatusText,
         },
       ],

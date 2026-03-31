@@ -15,6 +15,7 @@ export type CliNativeTurnPhase =
   | "interrupted"
   | "failed";
 export type CliSessionActivityKind =
+  | "task"
   | "thinking"
   | "plan"
   | "mcp_tool_call"
@@ -68,6 +69,7 @@ export type CliAdapterRunInput = {
   cols: number;
   rows: number;
   model?: string;
+  reasoningEffort?: string;
   env?: Record<string, string>;
 };
 

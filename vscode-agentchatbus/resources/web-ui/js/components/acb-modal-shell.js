@@ -207,6 +207,15 @@
                       <summary id="thread-agent-prompt-summary" class="meeting-modal-preview__summary">Resolved Launch Prompt</summary>
                       <div id="thread-agent-prompt-meta" class="meeting-modal-preview__meta"></div>
                       <pre id="thread-agent-prompt-preview" class="meeting-modal-preview__body meeting-modal-preview__body--compact"></pre>
+                      <div class="settings-field thread-launch-shared-instruction" style="margin-top:12px;">
+                        <label for="thread-agent-prompt-override">Launch Prompt Override For Selected Agent</label>
+                        <textarea
+                          id="thread-agent-prompt-override"
+                          placeholder="Leave blank to use the resolved launch prompt shown above"
+                          rows="8"
+                        ></textarea>
+                        <div class="settings-field-description">Optional exact prompt override. If filled, this exact text will be sent to the selected agent instead of the auto-generated launch prompt.</div>
+                      </div>
                     </details>
                     <details id="thread-agent-reentry-side" class="meeting-modal-preview meeting-modal-preview--collapsible" open>
                       <summary class="meeting-modal-preview__summary">Resolved Re-entry Prompt</summary>
@@ -289,6 +298,15 @@
                           <option value="">Suggestions</option>
                         </select>
                       </div>
+                    </div>
+                    <div class="settings-field">
+                      <label for="agent-modal-reasoning-effort">Reasoning Level</label>
+                      <select id="agent-modal-reasoning-effort">
+                        <option value="">Use Codex default</option>
+                        <option value="low">Low</option>
+                        <option value="medium">Medium</option>
+                        <option value="high">High</option>
+                      </select>
                     </div>
                     <div class="settings-field">
                       <label for="agent-modal-mode">Mode</label>

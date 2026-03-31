@@ -947,6 +947,9 @@ export function createHttpServer() {
           ? body.mode.trim() as "headless" | "interactive" | "direct"
           : "interactive",
         model: typeof body.model === "string" ? body.model.trim() : undefined,
+        reasoningEffort: typeof body.reasoning_effort === "string"
+          ? body.reasoning_effort.trim()
+          : undefined,
         prompt: finalPrompt,
         initialInstruction: promptSeed,
         workspace: typeof body.workspace === "string" ? body.workspace : undefined,

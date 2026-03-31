@@ -16,6 +16,7 @@ type CodexCommandRequest = {
   prompt: string;
   workspace: string;
   model?: string;
+  reasoningEffort?: string;
   env?: Record<string, string>;
 };
 
@@ -263,9 +264,13 @@ class CodexHeadlessExecutor implements CodexCommandExecutor {
     return await new Promise<CodexCommandExecutionResult>((resolve, reject) => {
       const resumeThreadId = String(request.env?.[CODEX_THREAD_ID_ENV_VAR] || "").trim();
       const requestedModel = String(request.model || "").trim();
+      const requestedReasoningEffort = String(request.reasoningEffort || "").trim();
+      const reasoningArgs = requestedReasoningEffort
+        ? ["-c", `model_reasoning_effort="${requestedReasoningEffort}"`]
+        : [];
       const codexArgs = resumeThreadId
-        ? ["exec", "resume", "--json", "--skip-git-repo-check", ...(requestedModel ? ["--model", requestedModel] : []), resumeThreadId, "-"]
-        : ["exec", "--json", "--skip-git-repo-check", ...(requestedModel ? ["--model", requestedModel] : []), "-C", request.workspace, "-"];
+        ? ["exec", "resume", "--json", "--skip-git-repo-check", ...(requestedModel ? ["--model", requestedModel] : []), ...reasoningArgs, resumeThreadId, "-"]
+        : ["exec", "--json", "--skip-git-repo-check", ...(requestedModel ? ["--model", requestedModel] : []), ...reasoningArgs, "-C", request.workspace, "-"];
 
       const env = { ...process.env, ...(request.env || {}) };
       const isWindows = process.platform === "win32";
@@ -398,6 +403,7 @@ export class CodexHeadlessAdapter implements CliSessionAdapter {
           prompt: input.prompt,
           workspace,
           model: input.model,
+          reasoningEffort: input.reasoningEffort,
           env: input.env,
         },
         hooks,
