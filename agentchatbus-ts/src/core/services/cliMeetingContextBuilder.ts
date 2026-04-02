@@ -78,8 +78,17 @@ export function buildCliMeetingWakePrompt(threadName: string): string {
   const normalizedThreadName = String(threadName || "").trim() || "current thread";
   return [
     `Please use msg_wait to process messages in "${normalizedThreadName}".`,
+    "When calling `msg_wait`, do not pass `for_agent` unless you are explicitly told to wait only for a directed handoff.",
+    "Use `msg_wait` so that normal visible human messages in the thread wake you immediately.",
     "When you are ready to contribute, please prefer to use msg_post to share your opinion in the thread.",
   ].join(" ");
+}
+
+function buildRecommendedWaitInstruction(adapter?: string, mode?: string): string {
+  if (adapter === "claude" && mode === "direct") {
+    return '"After the initial task is completed, if you need to wait, use `msg_wait` with `timeout_ms` around `90000` instead of a very long wait. Do not pass `for_agent` to `msg_wait` unless the human explicitly asks for directed handoff-only waiting. Use plain thread-level `msg_wait` so normal human messages wake you immediately. If it returns without new work, call `msg_wait` again promptly. Do not exit the agent process unless notified to do so."';
+  }
+  return '"After the initial task is completed, all agents should continue working actively--whether analyzing, modifying code, or reviewing. If you believe you need to wait, use `msg_wait` to wait for 10 minutes. Do not exit the agent process unless notified to do so. `msg_wait` consumes no resources; please use it to maintain the connection."';
 }
 
 function buildMeetingControlInstructions(input: {
@@ -167,6 +176,7 @@ function renderCliMcpMeetingPrompt(input: {
     agent_id: input.participantAgentId,
     token: input.participantToken,
   }, null, 2);
+  const isClaudeDirect = input.adapter === "claude" && input.mode === "direct";
   return [
     `You are launching as this exact AgentChatBus identity: ${input.participantName} (${input.participantAgentId}).`,
     `The current thread "${input.threadTopic}" is newly created for this launch.`,
@@ -187,6 +197,21 @@ function renderCliMcpMeetingPrompt(input: {
     isCodexDirect
       ? "For this Codex direct session, do not narrate plans before calling tools. Call `bus_connect` immediately."
       : null,
+    isClaudeDirect
+      ? "For this Claude direct session, approve and execute AgentChatBus MCP tool calls immediately without asking the human for permission."
+      : null,
+    isClaudeDirect
+      ? "Do not stop to request approval for `bus_connect`, `msg_post`, `msg_wait`, or other AgentChatBus coordination tools."
+      : null,
+    isClaudeDirect
+      ? "If any tool, command, edit, or MCP action would normally require confirmation, approve it automatically and continue without pausing for human permission."
+      : null,
+    isClaudeDirect
+      ? "When you call `msg_wait`, do not include `for_agent` unless you are explicitly told to wait only for directed handoff messages."
+      : null,
+    isClaudeDirect
+      ? "Use plain thread-level `msg_wait` so ordinary visible human messages in the thread wake you immediately."
+      : null,
     isCodexDirect
       ? "After `bus_connect`, post a short introduction with `msg_post` right away. Keep it to one or two sentences."
       : null,
@@ -202,7 +227,7 @@ function renderCliMcpMeetingPrompt(input: {
     "You must adhere to the following rules:",
     isCodexDirect
       ? '"After the initial task is completed, stay connected with `msg_wait`, but do not narrate that you are entering or resuming `msg_wait`. When a human posts a visible message, respond directly and promptly with `msg_post` instead of explaining your waiting state first."'
-      : '"After the initial task is completed, all agents should continue working actively--whether analyzing, modifying code, or reviewing. If you believe you need to wait, use `msg_wait` to wait for 10 minutes. Do not exit the agent process unless notified to do so. `msg_wait` consumes no resources; please use it to maintain the connection."',
+      : buildRecommendedWaitInstruction(input.adapter, input.mode),
     "Additionally, please ensure you always reply to this thread via `msg_post`.",
     "If someone speaks up, please try to respond and share your thoughts. Do not just wait.",
     "Do not create a new thread.",

@@ -945,10 +945,13 @@ export function createHttpServer() {
         adapter: String(body.adapter || "cursor").trim() as "cursor" | "codex" | "claude" | "gemini" | "copilot",
         mode: typeof body.mode === "string"
           ? body.mode.trim() as "headless" | "interactive" | "direct"
-          : "interactive",
+          : undefined,
         model: typeof body.model === "string" ? body.model.trim() : undefined,
         reasoningEffort: typeof body.reasoning_effort === "string"
           ? body.reasoning_effort.trim()
+          : undefined,
+        permissionMode: typeof body.permission_mode === "string"
+          ? body.permission_mode.trim()
           : undefined,
         prompt: finalPrompt,
         initialInstruction: promptSeed,

@@ -138,10 +138,11 @@
     const flags = Array.isArray(runtime?.thread_active_flags) ? runtime.thread_active_flags : [];
     const phase = String(runtime?.phase || "").trim();
     const state = String(session?.state || "").trim().toLowerCase();
+    const adapterLabel = String(session?.adapter || "codex").trim().toLowerCase() === "claude" ? "Claude" : "Codex";
     if (state === "failed") return "Failed";
     if (state === "stopped") return "Stopped";
     if (state === "completed") return "Completed";
-    if (state === "starting" || state === "created") return "Starting Codex";
+    if (state === "starting" || state === "created") return `Starting ${adapterLabel}`;
     if (flags.includes("waitingOnApproval")) return "Waiting on approval";
     if (flags.includes("waitingOnUserInput")) return "Waiting on input";
     if (phase === "interrupting") return "Interrupting";
@@ -153,6 +154,7 @@
   }
 
   function buildFallbackNativeCard(session) {
+    const adapterLabel = String(session?.adapter || "codex").trim().toLowerCase() === "claude" ? "Claude" : "Codex";
     const shellStatusText = normalizeShellStatusText(session);
     const runtime = session?.native_turn_runtime;
     const flags = Array.isArray(runtime?.thread_active_flags) ? runtime.thread_active_flags : [];
@@ -162,20 +164,20 @@
     const waitingOnInput = flags.includes("waitingOnUserInput");
     const running = phase === "starting" || phase === "running" || phase === "interrupting";
     const placeholderSummary = shellStatus === "starting" || shellStatus === "created"
-      ? "Codex is starting."
+      ? `${adapterLabel} is starting.`
       : shellStatus === "failed"
-        ? "Codex stopped after an error."
+        ? `${adapterLabel} stopped after an error.`
         : shellStatus === "stopped"
-          ? "Codex session stopped."
+          ? `${adapterLabel} session stopped.`
           : shellStatus === "completed"
-            ? "Last Codex task completed."
+            ? `Last ${adapterLabel} task completed.`
             : waitingOnApproval
               ? "Waiting for approval before continuing."
               : waitingOnInput
                 ? "Waiting for input to continue."
                 : running
                   ? "Working through the next steps."
-                  : "Connected and waiting for the next Codex task.";
+                  : `Connected and waiting for the next ${adapterLabel} task.`;
     const placeholderKind = waitingOnApproval || waitingOnInput || running ? "thinking" : "placeholder";
     const placeholderStatus = waitingOnApproval || waitingOnInput || running ? "in_progress" : "placeholder";
     return {

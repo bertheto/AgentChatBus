@@ -169,6 +169,9 @@
     if (session?.adapter === "codex" && session?.mode === "direct") {
       return participantLabel ? `${participantLabel} · Codex Direct` : "Codex Direct";
     }
+    if (session?.adapter === "claude" && session?.mode === "direct") {
+      return participantLabel ? `${participantLabel} · Claude Direct` : "Claude Direct";
+    }
     if (session?.adapter === "codex" && session?.mode === "interactive") {
       return participantLabel ? `${participantLabel} · Codex PTY` : "Codex PTY";
     }
@@ -623,8 +626,7 @@
   }
 
   function isDirectSession(session) {
-    return String(session?.adapter || "").trim().toLowerCase() === "codex"
-      && String(session?.mode || "").trim().toLowerCase() === "direct";
+    return String(session?.mode || "").trim().toLowerCase() === "direct";
   }
 
   function teardownTerminalInstance(sessionId) {
@@ -1126,10 +1128,23 @@
   }
 
   function buildSessionMeta(session) {
-    return [
+    const details = [
       String(session.adapter || "CLI"),
       String(session.mode || "session"),
-    ].join(" · ");
+    ];
+    const model = String(session?.model || "").trim();
+    const reasoningEffort = String(session?.reasoning_effort || "").trim();
+    const permissionMode = String(session?.permission_mode || "").trim();
+    if (model) {
+      details.push(model);
+    }
+    if (reasoningEffort) {
+      details.push(`Reasoning ${reasoningEffort}`);
+    }
+    if (permissionMode) {
+      details.push(`Permissions ${permissionMode}`);
+    }
+    return details.join(" · ");
   }
 
   function formatToolEventTime(value) {

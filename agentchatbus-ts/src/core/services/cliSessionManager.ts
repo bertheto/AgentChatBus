@@ -6,6 +6,7 @@ import { logError, logInfo } from "../../shared/logger.js";
 import { CursorInteractiveAdapter } from "./adapters/cursorInteractiveAdapter.js";
 import { CodexInteractiveAdapter } from "./adapters/codexInteractiveAdapter.js";
 import { CodexDirectAdapter } from "./adapters/codexDirectAdapter.js";
+import { ClaudeDirectAdapter } from "./adapters/claudeDirectAdapter.js";
 import { ClaudeInteractiveAdapter } from "./adapters/claudeInteractiveAdapter.js";
 import { GeminiInteractiveAdapter } from "./adapters/geminiInteractiveAdapter.js";
 import { CopilotInteractiveAdapter } from "./adapters/copilotInteractiveAdapter.js";
@@ -72,6 +73,16 @@ export interface CliNativeActivityCard {
   content_sections: CliNativeActivityCardSection[];
 }
 
+export interface CliSessionWaitStatusSnapshot {
+  is_waiting: boolean;
+  status: "waiting" | "completed" | "canceled" | "cleared" | "idle";
+  wait_call_id?: string;
+  entered_at?: string;
+  timeout_ms?: number;
+  last_exit_reason?: string;
+  last_exited_at?: string;
+}
+
 export type CliNativeThreadStatusType = "notLoaded" | "idle" | "systemError" | "active";
 export type CliNativeThreadActiveFlag = "waitingOnApproval" | "waitingOnUserInput";
 export type CliNativeTurnStatus = "completed" | "interrupted" | "failed" | "inProgress";
@@ -105,6 +116,7 @@ export interface CliSessionSnapshot {
   mode: CliSessionMode;
   model?: string;
   reasoning_effort?: string;
+  permission_mode?: string;
   state: CliSessionState;
   prompt: string;
   prompt_history?: Array<{
@@ -178,6 +190,7 @@ export interface CliSessionSnapshot {
   };
   recent_activity_events?: CliAdapterActivityEvent[];
   native_turn_runtime?: CliNativeTurnRuntime;
+  wait_status?: CliSessionWaitStatusSnapshot;
   native_activity_card?: CliNativeActivityCard;
 }
 
@@ -196,6 +209,7 @@ export interface CreateCliSessionInput {
   mode?: CliSessionMode;
   model?: string;
   reasoningEffort?: string;
+  permissionMode?: string;
   prompt?: string;
   initialInstruction?: string;
   workspace?: string;
@@ -226,6 +240,14 @@ export interface CliSessionMeetingStatePatch {
 
 export interface CliSessionPromptPatch {
   prompt: string;
+}
+
+function getDefaultModeForAdapter(adapterId: CliSessionAdapterId): CliSessionMode {
+  return adapterId === "codex" || adapterId === "claude" ? "direct" : "interactive";
+}
+
+function getDefaultPermissionModeForAdapter(adapterId: CliSessionAdapterId): string | undefined {
+  return adapterId === "claude" ? "dontAsk" : undefined;
 }
 
 type CliSessionControls = {
@@ -560,7 +582,7 @@ function summarizeShellStatus(snapshot: CliSessionSnapshot): {
     return { status: "completed", text: "Completed" };
   }
   if (state === "starting" || state === "created") {
-    return { status: "starting", text: "Starting Codex" };
+    return { status: "starting", text: `Starting ${getCliAdapterDisplayName(snapshot.adapter)}` };
   }
   if (runtime?.thread_active_flags?.includes("waitingOnApproval")) {
     return { status: "running", text: "Waiting on approval" };
@@ -584,6 +606,23 @@ function summarizeShellStatus(snapshot: CliSessionSnapshot): {
     return { status: "connected", text: "Connected" };
   }
   return { status: "running", text: "Running" };
+}
+
+function getCliAdapterDisplayName(adapter: CliSessionAdapterId | string | undefined): string {
+  const normalized = String(adapter || "").trim().toLowerCase();
+  if (normalized === "claude") {
+    return "Claude";
+  }
+  if (normalized === "cursor") {
+    return "Cursor";
+  }
+  if (normalized === "gemini") {
+    return "Gemini";
+  }
+  if (normalized === "copilot") {
+    return "Copilot";
+  }
+  return "Codex";
 }
 
 function pickNativeCardUpdatedAt(snapshot: CliSessionSnapshot, sections: CliNativeActivityCardSection[]): string {
@@ -652,7 +691,7 @@ function buildNativeThinkingSummary(
   }
   if (runtime?.phase === "interrupting") {
     return {
-      summary: "Stopping the current Codex task.",
+      summary: `Stopping the current ${getCliAdapterDisplayName(snapshot.adapter)} task.`,
       meta: "Interrupting",
     };
   }
@@ -680,21 +719,23 @@ function buildNativeThinkingSummary(
 }
 
 function buildNativePlaceholderSummary(
+  snapshot: CliSessionSnapshot,
   shell: { status: CliNativeActivityCardShellStatus; text: string },
 ): string {
+  const adapterName = getCliAdapterDisplayName(snapshot.adapter);
   switch (shell.status) {
     case "starting":
-      return "Codex is starting.";
+      return `${adapterName} is starting.`;
     case "completed":
-      return "Last Codex task completed.";
+      return `Last ${adapterName} task completed.`;
     case "failed":
-      return "Codex stopped after an error.";
+      return `${adapterName} stopped after an error.`;
     case "stopped":
-      return "Codex session stopped.";
+      return `${adapterName} session stopped.`;
     case "connected":
-      return "Connected and waiting for the next Codex task.";
+      return `Connected and waiting for the next ${adapterName} task.`;
     default:
-      return "Connected and waiting for the next Codex task.";
+      return `Connected and waiting for the next ${adapterName} task.`;
   }
 }
 
@@ -873,7 +914,7 @@ export function buildNativeActivityCard(snapshot: CliSessionSnapshot): CliNative
     sections.push({
       kind: "placeholder",
       title: "Activity",
-      summary: buildNativePlaceholderSummary(shell),
+      summary: buildNativePlaceholderSummary(snapshot, shell),
       status: "placeholder",
       meta: shell.text,
     });
@@ -2069,6 +2110,7 @@ export class CliSessionManager {
     new CodexDirectAdapter(),
     new CopilotInteractiveAdapter(),
     new CopilotHeadlessAdapter(),
+    new ClaudeDirectAdapter(),
     new ClaudeInteractiveAdapter(),
     new ClaudeHeadlessAdapter(),
     new GeminiInteractiveAdapter(),
@@ -2095,7 +2137,8 @@ export class CliSessionManager {
   createSession(input: CreateCliSessionInput): CliSessionSnapshot {
     const prompt = String(input.prompt || "");
     const adapterId = String(input.adapter || "").trim() as CliSessionAdapterId;
-    const requestedMode = (String(input.mode || "interactive").trim() || "interactive") as CliSessionMode;
+    const defaultMode = getDefaultModeForAdapter(adapterId);
+    const requestedMode = (String(input.mode || defaultMode).trim() || defaultMode) as CliSessionMode;
     const mode = requestedMode === "headless"
       ? "headless"
       : requestedMode === "direct"
@@ -2115,6 +2158,9 @@ export class CliSessionManager {
     const initialInstruction = String(input.initialInstruction || "").trim() || undefined;
     const model = String(input.model || "").trim() || undefined;
     const reasoningEffort = String(input.reasoningEffort || "").trim() || undefined;
+    const permissionMode = String(
+      input.permissionMode || getDefaultPermissionModeForAdapter(adapterId) || "",
+    ).trim() || undefined;
     const participantAgentId = String(input.participantAgentId || "").trim() || undefined;
     const participantDisplayName = String(input.participantDisplayName || "").trim() || undefined;
     const participantRole = input.participantRole;
@@ -2132,6 +2178,7 @@ export class CliSessionManager {
       mode,
       model,
       reasoning_effort: reasoningEffort,
+      permission_mode: permissionMode,
       state: "created",
       prompt,
       prompt_history: prompt.trim()
@@ -2163,6 +2210,10 @@ export class CliSessionManager {
       native_turn_runtime: {
         updated_at: nowIso(),
         phase: "idle",
+      },
+      wait_status: {
+        is_waiting: false,
+        status: "idle",
       },
       context_delivery_mode: contextDeliveryMode,
       last_delivered_seq: lastDeliveredSeq,
@@ -2221,6 +2272,36 @@ export class CliSessionManager {
       return null;
     }
     runtime.launchEnv = { ...launchEnv };
+    runtime.snapshot.updated_at = nowIso();
+    this.emitSessionEvent("cli.session.state", runtime);
+    return this.cloneSnapshot(runtime.snapshot);
+  }
+
+  updateSessionWaitStatus(
+    sessionId: string,
+    waitStatus: CliSessionWaitStatusSnapshot,
+  ): CliSessionSnapshot | null {
+    const runtime = this.runtimes.get(sessionId);
+    if (!runtime) {
+      return null;
+    }
+    const normalized: CliSessionWaitStatusSnapshot = {
+      is_waiting: Boolean(waitStatus?.is_waiting),
+      status: (String(waitStatus?.status || "idle").trim() as CliSessionWaitStatusSnapshot["status"]) || "idle",
+      wait_call_id: String(waitStatus?.wait_call_id || "").trim() || undefined,
+      entered_at: String(waitStatus?.entered_at || "").trim() || undefined,
+      timeout_ms: Number.isFinite(Number(waitStatus?.timeout_ms))
+        ? Number(waitStatus?.timeout_ms)
+        : undefined,
+      last_exit_reason: String(waitStatus?.last_exit_reason || "").trim() || undefined,
+      last_exited_at: String(waitStatus?.last_exited_at || "").trim() || undefined,
+    };
+    const previous = JSON.stringify(runtime.snapshot.wait_status || null);
+    const next = JSON.stringify(normalized);
+    if (previous === next) {
+      return this.cloneSnapshot(runtime.snapshot);
+    }
+    runtime.snapshot.wait_status = normalized;
     runtime.snapshot.updated_at = nowIso();
     this.emitSessionEvent("cli.session.state", runtime);
     return this.cloneSnapshot(runtime.snapshot);
@@ -2759,6 +2840,7 @@ export class CliSessionManager {
           rows: normalizeTerminalRows(runtime.snapshot.rows),
           model: runtime.snapshot.model,
           reasoningEffort: runtime.snapshot.reasoning_effort,
+          permissionMode: runtime.snapshot.permission_mode,
           env: runtime.launchEnv,
         },
         {
@@ -2850,7 +2932,7 @@ export class CliSessionManager {
         };
       } else if (
         runtime.snapshot.adapter === "claude"
-        && runtime.snapshot.mode === "headless"
+        && (runtime.snapshot.mode === "headless" || runtime.snapshot.mode === "direct")
         && result.externalSessionId
       ) {
         runtime.launchEnv = {
@@ -3037,6 +3119,19 @@ export class CliSessionManager {
   private applyNativeRuntimeEvent(runtime: CliSessionRuntime, event: CliAdapterNativeRuntimeEvent): void {
     if (!event || typeof event !== "object") {
       return;
+    }
+    const normalizedThreadId = normalizeOptionalString(event.thread_id);
+    if (
+      normalizedThreadId
+      && runtime.snapshot.adapter === "claude"
+      && (runtime.snapshot.mode === "direct" || runtime.snapshot.mode === "headless")
+      && runtime.snapshot.external_session_id !== normalizedThreadId
+    ) {
+      runtime.snapshot.external_session_id = normalizedThreadId;
+      runtime.launchEnv = {
+        ...runtime.launchEnv,
+        [CLAUDE_SESSION_ID_ENV_VAR]: normalizedThreadId,
+      };
     }
     const next = mergeNativeTurnRuntime(runtime.snapshot.native_turn_runtime, event);
     const previousSerialized = JSON.stringify(runtime.snapshot.native_turn_runtime || null);
@@ -4964,6 +5059,9 @@ export class CliSessionManager {
         }))
         : snapshot.recent_activity_events,
       native_turn_runtime: cloneNativeTurnRuntime(snapshot.native_turn_runtime),
+      wait_status: snapshot.wait_status
+        ? { ...snapshot.wait_status }
+        : snapshot.wait_status,
       native_activity_card: buildNativeActivityCard(snapshot),
     };
   }

@@ -12,6 +12,7 @@ type ClaudeCommandRequest = {
   prompt: string;
   workspace: string;
   model?: string;
+  permissionMode?: string;
   env?: Record<string, string>;
 };
 
@@ -128,12 +129,19 @@ class ClaudeHeadlessExecutor implements ClaudeCommandExecutor {
     return await new Promise<ClaudeCommandExecutionResult>((resolve, reject) => {
       const resumeSessionId = String(request.env?.[CLAUDE_SESSION_ID_ENV_VAR] || "").trim();
       const requestedModel = String(request.model || "").trim();
+      const requestedPermissionMode = String(request.permissionMode || "").trim();
+      const skipPermissions =
+        requestedPermissionMode === "bypassPermissions"
+        || requestedPermissionMode === "dontAsk";
       const claudeArgs = [
         ...(resumeSessionId ? ["--resume", resumeSessionId] : []),
         ...(requestedModel ? ["--model", requestedModel] : []),
         "-p",
         "--output-format",
         "stream-json",
+        "--verbose",
+        ...(requestedPermissionMode ? ["--permission-mode", requestedPermissionMode] : []),
+        ...(skipPermissions ? ["--dangerously-skip-permissions"] : []),
         request.prompt,
       ];
 
@@ -164,6 +172,7 @@ class ClaudeHeadlessExecutor implements ClaudeCommandExecutor {
           cwd: request.workspace,
           env,
           shell: false,
+          stdio: ["ignore", "pipe", "pipe"],
         });
       } catch (error) {
         reject(error);
@@ -258,6 +267,7 @@ export class ClaudeHeadlessAdapter implements CliSessionAdapter {
           prompt: input.prompt,
           workspace,
           model: input.model,
+          permissionMode: input.permissionMode,
           env: input.env,
         },
         hooks,

@@ -592,6 +592,7 @@ export class CliMeetingOrchestrator {
     if (!session?.participant_agent_id) {
       return;
     }
+    this.syncSessionWaitState(session);
     if (!usesLegacyPtyRelay(session)) {
       await this.flushPendingDelivery(session);
       return;
@@ -642,6 +643,7 @@ export class CliMeetingOrchestrator {
       ? Number(payload?.seq)
       : this.store.getThreadCurrentSeq(threadId);
     for (const session of sessions) {
+      this.syncSessionWaitState(session);
       if (session.participant_agent_id && session.participant_agent_id === payload?.author_id) {
         const acknowledgedSeq = Math.max(0, targetSeq - 1);
         const nextDeliveredSeq = Math.max(getObservedDeliveredSeq(session), acknowledgedSeq);
@@ -710,6 +712,23 @@ export class CliMeetingOrchestrator {
     this.heartbeatTimers.set(sessionId, timer);
   }
 
+  private syncSessionWaitState(session: CliSessionSnapshot): void {
+    const participantAgentId = String(session.participant_agent_id || "").trim();
+    if (!participantAgentId || usesLegacyPtyRelay(session)) {
+      return;
+    }
+    const waitStatus = this.store.getAgentWaitStatus(session.thread_id, participantAgentId);
+    this.cliSessionManager.updateSessionWaitStatus(session.id, {
+      is_waiting: waitStatus.is_waiting,
+      status: waitStatus.status,
+      wait_call_id: waitStatus.wait_call_id,
+      entered_at: waitStatus.entered_at,
+      timeout_ms: waitStatus.timeout_ms,
+      last_exit_reason: waitStatus.last_exit_reason,
+      last_exited_at: waitStatus.last_exited_at,
+    });
+  }
+
   private clearHeartbeat(sessionId: string): void {
     const timer = this.heartbeatTimers.get(sessionId);
     if (!timer) {
@@ -753,9 +772,6 @@ export class CliMeetingOrchestrator {
   }
 
   private shouldTrustParticipantWaitState(session: CliSessionSnapshot): boolean {
-    if (session.mode === "direct") {
-      return false;
-    }
     return this.getParticipantWaitStatus(session).is_waiting;
   }
 
@@ -778,6 +794,19 @@ export class CliMeetingOrchestrator {
   private getDirectSessionWorkState(session: CliSessionSnapshot): "busy" | "idle" | "unavailable" {
     if (!ONLINE_SESSION_STATES.has(session.state)) {
       return "unavailable";
+    }
+    const waitStatus = this.getParticipantWaitStatus(session);
+    if (waitStatus.is_waiting) {
+      return "busy";
+    }
+    if (
+      waitStatus.last_exit_reason === "message"
+      && waitStatus.last_exited_at
+    ) {
+      const exitedAtMs = Date.parse(waitStatus.last_exited_at);
+      if (Number.isFinite(exitedAtMs) && Date.now() - exitedAtMs < getMessageExitBusyGraceMs(session)) {
+        return "busy";
+      }
     }
     if (this.hasActiveNativeTurn(session)) {
       return "busy";
@@ -1198,7 +1227,11 @@ export class CliMeetingOrchestrator {
       return;
     }
 
-    if (session.mode !== "interactive") {
+    const canDeliverWakePromptDirectly = isAgentMcpSession
+      && session.supports_input
+      && (session.mode === "interactive" || session.mode === "direct");
+
+    if (session.mode !== "interactive" && !canDeliverWakePromptDirectly) {
       if (isAgentMcpSession) {
         this.pendingDeliverySeqBySession.set(
           session.id,
@@ -1243,7 +1276,7 @@ export class CliMeetingOrchestrator {
       return;
     }
 
-    if (isAgentMcpSession) {
+    if (canDeliverWakePromptDirectly) {
       const latestSession = this.cliSessionManager.getSession(session.id) || session;
       if (this.shouldTrustParticipantWaitState(latestSession)) {
         this.pendingDeliverySeqBySession.set(

@@ -431,6 +431,7 @@
             adapter,
             model: normalizeThreadLaunchModelValue(adapter, model),
             reasoning_effort: normalizeThreadLaunchReasoningEffort(adapter, entry?.reasoning_effort),
+            permission_mode: normalizeThreadLaunchPermissionMode(adapter, entry?.permission_mode),
           };
         })
         .filter((entry) => Boolean(entry));
@@ -459,6 +460,7 @@
         adapter: String(agent?.adapter || "").trim().toLowerCase() || "claude",
         model: normalizeThreadLaunchModelValue(agent?.adapter, agent?.model),
         reasoning_effort: normalizeThreadLaunchReasoningEffort(agent?.adapter, agent?.reasoningEffort),
+        permission_mode: normalizeThreadLaunchPermissionMode(agent?.adapter, agent?.permissionMode),
       }));
       globalThis.localStorage?.setItem(
         THREAD_LAUNCH_SELECTIONS_STORAGE_KEY,
@@ -476,6 +478,7 @@
         adapter: String(config?.adapter || "").trim().toLowerCase() || "claude",
         model: normalizeThreadLaunchModelValue(config?.adapter, config?.model),
         reasoning_effort: normalizeThreadLaunchReasoningEffort(config?.adapter, config?.reasoningEffort),
+        permission_mode: normalizeThreadLaunchPermissionMode(config?.adapter, config?.permissionMode),
       };
       const nextSelections = [nextEntry, ...existing.slice(1)];
       globalThis.localStorage?.setItem(
@@ -508,6 +511,11 @@
   function getPreferredThreadLaunchReasoningEffort(slotIndex) {
     const preferences = readThreadLaunchSelectionPreferences();
     return String(preferences[slotIndex]?.reasoning_effort || "").trim();
+  }
+
+  function getPreferredThreadLaunchPermissionMode(slotIndex) {
+    const preferences = readThreadLaunchSelectionPreferences();
+    return String(preferences[slotIndex]?.permission_mode || "").trim();
   }
 
   function normalizeThreadLaunchModelValue(adapter, model) {
@@ -922,7 +930,7 @@
 
   function getThreadLaunchModeForAdapter(adapter) {
     const normalizedAdapter = String(adapter || "").trim().toLowerCase();
-    if (normalizedAdapter === "codex") {
+    if (normalizedAdapter === "codex" || normalizedAdapter === "claude") {
       return "direct";
     }
     return "interactive";
@@ -931,7 +939,7 @@
   function normalizeThreadLaunchMode(adapter, currentMode) {
     const normalizedAdapter = String(adapter || "").trim().toLowerCase();
     const requested = String(currentMode || "").trim().toLowerCase();
-    if (normalizedAdapter === "codex") {
+    if (normalizedAdapter === "codex" || normalizedAdapter === "claude") {
       if (requested === "headless" || requested === "interactive" || requested === "direct") {
         return requested;
       }
@@ -942,7 +950,7 @@
 
   function getThreadLaunchModeLabel(mode) {
     if (mode === "direct") {
-      return "Codex Direct (App Server)";
+      return "Direct structured CLI";
     }
     return mode === "headless" ? "Headless JSON Resume" : "Interactive PTY";
   }
@@ -955,12 +963,59 @@
       options.push(
         `<option value="direct" ${normalized === "direct" ? "selected" : ""}>Codex Direct (App Server)</option>`,
       );
+    } else if (normalizedAdapter === "claude") {
+      options.push(
+        `<option value="direct" ${normalized === "direct" ? "selected" : ""}>Claude Direct (stream-json)</option>`,
+      );
     }
     options.push(
       `<option value="interactive" ${normalized === "interactive" ? "selected" : ""}>Interactive PTY</option>`,
       `<option value="headless" ${normalized === "headless" ? "selected" : ""}>Headless JSON Resume</option>`,
     );
     return options.join("");
+  }
+
+  function normalizeThreadLaunchPermissionMode(adapter, permissionMode) {
+    if (String(adapter || "").trim().toLowerCase() !== "claude") {
+      return "";
+    }
+    const normalized = String(permissionMode || "").trim();
+    return normalized === "acceptEdits"
+      || normalized === "bypassPermissions"
+      || normalized === "dontAsk"
+      || normalized === "default"
+      ? normalized
+      : "dontAsk";
+  }
+
+  function buildThreadLaunchPermissionModeOptionsHtml(agent) {
+    if (String(agent?.adapter || "").trim().toLowerCase() !== "claude") {
+      return '<option value="">Not supported for this adapter</option>';
+    }
+    const normalized = normalizeThreadLaunchPermissionMode(agent.adapter, agent.permissionMode);
+    return [
+      `<option value="default" ${normalized === "default" ? "selected" : ""}>Default</option>`,
+      `<option value="acceptEdits" ${normalized === "acceptEdits" ? "selected" : ""}>Accept Edits</option>`,
+      `<option value="bypassPermissions" ${normalized === "bypassPermissions" ? "selected" : ""}>Bypass Permissions</option>`,
+      `<option value="dontAsk" ${normalized === "dontAsk" ? "selected" : ""}>Don't Ask</option>`,
+    ].join("");
+  }
+
+  function getThreadLaunchPermissionModeMeta(agent) {
+    if (String(agent?.adapter || "").trim().toLowerCase() !== "claude") {
+      return "Permission mode is currently only wired for Claude.";
+    }
+    const normalized = normalizeThreadLaunchPermissionMode(agent.adapter, agent.permissionMode);
+    if (normalized === "acceptEdits") {
+      return "Claude will prefer auto-accepting edit permissions when the CLI supports it.";
+    }
+    if (normalized === "bypassPermissions") {
+      return "Claude will request bypass-permissions mode.";
+    }
+    if (normalized === "dontAsk") {
+      return "Claude will auto-approve all permission requests without asking.";
+    }
+    return "Claude will use the CLI default permission behavior.";
   }
 
   function getThreadLaunchUsedEmojis(excludeAgentId = "") {
@@ -1025,6 +1080,10 @@
       adapter,
       model: preferredModel,
       reasoningEffort: preferredReasoningEffort,
+      permissionMode: normalizeThreadLaunchPermissionMode(
+        adapter,
+        String(overrides.permissionMode || "").trim() || getPreferredThreadLaunchPermissionMode(slotIndex) || "dontAsk",
+      ),
       emoji,
       mode: getThreadLaunchModeForAdapter(adapter),
       meetingTransport: "agent_mcp",
@@ -1045,6 +1104,7 @@
       adapter: agent.adapter || "claude",
       model: String(agent.model || "").trim(),
       reasoningEffort: normalizeThreadLaunchReasoningEffort(agent.adapter, agent.reasoningEffort),
+      permissionMode: normalizeThreadLaunchPermissionMode(agent.adapter, agent.permissionMode),
       emoji: String(agent.emoji || "").trim() || pickRandomThreadLaunchEmoji(agent.id),
       mode: normalizeThreadLaunchMode(
         agent.adapter || "claude",
@@ -1212,7 +1272,9 @@
       "Administrators are responsible for coordinating the work.",
       "After entering the thread, please introduce yourself.",
       "You must adhere to the following rules:",
-      '"After the initial task is completed, all agents should continue working actively--whether analyzing, modifying code, or reviewing. If you believe you need to wait, use `msg_wait` to wait for 10 minutes. Do not exit the agent process unless notified to do so. `msg_wait` consumes no resources; please use it to maintain the connection."',
+      adapter === "claude" && mode === "direct"
+        ? '"After the initial task is completed, if you need to wait, use `msg_wait` with `timeout_ms` around `90000` instead of a very long wait. If it returns without new work, call `msg_wait` again promptly. Do not exit the agent process unless notified to do so."'
+        : '"After the initial task is completed, all agents should continue working actively--whether analyzing, modifying code, or reviewing. If you believe you need to wait, use `msg_wait` to wait for 10 minutes. Do not exit the agent process unless notified to do so. `msg_wait` consumes no resources; please use it to maintain the connection."',
       "Ensure you always reply to this thread via `msg_post`.",
       "If someone speaks up, please try to respond and share your thoughts. Do not just wait.",
       "Do not create a new thread.",
@@ -1587,6 +1649,20 @@
               <div class="thread-launch-model-meta">${_escapeHtml(getThreadLaunchReasoningMeta(agent))}</div>
             </div>
             <div class="settings-field thread-launch-agent-field">
+              <label>Permission Mode</label>
+              <select
+                data-agent-id="${_escapeHtml(agent.id)}"
+                data-field="permissionMode"
+                ${agent.adapter === "claude" ? "" : "disabled"}
+                onclick="event.stopPropagation(); window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')"
+                onpointerdown="event.stopPropagation(); window.AcbModals && window.AcbModals.selectThreadLaunchAgent('${_escapeHtml(agent.id)}')"
+                onchange="window.AcbModals && window.AcbModals.updateThreadLaunchAgentField(this)"
+              >
+                ${buildThreadLaunchPermissionModeOptionsHtml(agent)}
+              </select>
+              <div class="thread-launch-model-meta">${_escapeHtml(getThreadLaunchPermissionModeMeta(agent))}</div>
+            </div>
+            <div class="settings-field thread-launch-agent-field">
               <label>Mode</label>
               <select
                 data-agent-id="${_escapeHtml(agent.id)}"
@@ -1693,6 +1769,7 @@
       agent.adapter = String(element.value || "claude").trim() || "claude";
       agent.mode = getThreadLaunchModeForAdapter(agent.adapter);
       agent.meetingTransport = "agent_mcp";
+      agent.permissionMode = normalizeThreadLaunchPermissionMode(agent.adapter, agent.permissionMode);
       if (agent.adapter === "cursor" || agent.adapter === "gemini") {
         agent.model = getRequiredThreadLaunchModel(agent.adapter, agent.model);
       } else if (previousAdapter === "cursor" && String(agent.model || "").trim() === "auto") {
@@ -1744,6 +1821,11 @@
     if (field === "reasoningEffort") {
       agent.reasoningEffort = normalizeThreadLaunchReasoningEffort(agent.adapter, element.value);
       syncThreadLaunchPromptPreview();
+      renderThreadLaunchAgents();
+      return;
+    }
+    if (field === "permissionMode") {
+      agent.permissionMode = normalizeThreadLaunchPermissionMode(agent.adapter, element.value);
       renderThreadLaunchAgents();
       return;
     }
@@ -1925,6 +2007,7 @@
         adapter: config.adapter,
         model: String(config.model || "").trim() || undefined,
         reasoning_effort: normalizeThreadLaunchReasoningEffort(config.adapter, config.reasoningEffort) || undefined,
+        permission_mode: normalizeThreadLaunchPermissionMode(config.adapter, config.permissionMode) || undefined,
         mode: config.mode,
         meeting_transport: config.meetingTransport,
         prompt: String(config.promptOverride || "").trim() || undefined,

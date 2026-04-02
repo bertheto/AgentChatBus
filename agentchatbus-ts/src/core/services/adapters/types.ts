@@ -70,6 +70,7 @@ export type CliAdapterRunInput = {
   rows: number;
   model?: string;
   reasoningEffort?: string;
+  permissionMode?: string;
   env?: Record<string, string>;
 };
 

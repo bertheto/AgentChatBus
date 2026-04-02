@@ -135,26 +135,28 @@
       return String(card.shell_status_text).trim();
     }
     const state = String(session?.state || "").trim().toLowerCase();
+    const adapterLabel = String(session?.adapter || "codex").trim().toLowerCase() === "claude" ? "Claude" : "Codex";
     if (state === "failed") return "Failed";
     if (state === "stopped") return "Stopped";
     if (state === "completed") return "Completed";
-    if (state === "starting" || state === "created") return "Starting Codex";
+    if (state === "starting" || state === "created") return `Starting ${adapterLabel}`;
     if (session?.connected_at) return "Connected";
     return "Running";
   }
 
   function buildFallbackNativeCard(session) {
+    const adapterLabel = String(session?.adapter || "codex").trim().toLowerCase() === "claude" ? "Claude" : "Codex";
     const shellStatusText = normalizeShellStatusText(session);
     const shellStatus = String(session?.state || "").trim().toLowerCase();
     const placeholderSummary = shellStatus === "starting" || shellStatus === "created"
-      ? "Codex is starting."
+      ? `${adapterLabel} is starting.`
       : shellStatus === "failed"
-        ? "Codex stopped after an error."
+        ? `${adapterLabel} stopped after an error.`
         : shellStatus === "stopped"
-          ? "Codex session stopped."
+          ? `${adapterLabel} session stopped.`
           : shellStatus === "completed"
-            ? "Last Codex task completed."
-            : "Connected and waiting for the next Codex task.";
+            ? `Last ${adapterLabel} task completed.`
+            : `Connected and waiting for the next ${adapterLabel} task.`;
     return {
       anchor_message_id: String(session?.last_posted_message_id || "").trim() || "",
       shell_status: (
