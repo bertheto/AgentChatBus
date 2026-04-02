@@ -567,6 +567,160 @@ function mapActivityStatusToCardStatus(
   }
 }
 
+function collapseActivityEntries(
+  entries: CliAdapterActivityEvent[] | undefined,
+): CliAdapterActivityEvent[] {
+  if (!Array.isArray(entries) || !entries.length) {
+    return [];
+  }
+  const deduped: CliAdapterActivityEvent[] = [];
+  const seen = new Set<string>();
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index];
+    const itemId = String(entry?.item_id || "").trim();
+    if (!itemId || seen.has(itemId)) {
+      continue;
+    }
+    seen.add(itemId);
+    deduped.unshift(entry);
+  }
+  return deduped;
+}
+
+function isTerminalNativeTaskState(snapshot: CliSessionSnapshot): boolean {
+  const runtime = snapshot.native_turn_runtime;
+  return (
+    snapshot.state === "completed"
+    || snapshot.state === "failed"
+    || runtime?.phase === "completed"
+    || runtime?.phase === "interrupted"
+    || runtime?.phase === "failed"
+  );
+}
+
+function getPrimaryActiveActivityEntry(
+  entries: CliAdapterActivityEvent[] | undefined,
+): CliAdapterActivityEvent | undefined {
+  if (!Array.isArray(entries) || !entries.length) {
+    return undefined;
+  }
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index];
+    if (!entry || entry.kind === "task" || entry.status !== "in_progress") {
+      continue;
+    }
+    return entry;
+  }
+  return undefined;
+}
+
+function getEffectiveCardActivityEntries(
+  snapshot: CliSessionSnapshot,
+  entries: CliAdapterActivityEvent[] | undefined,
+): CliAdapterActivityEvent[] {
+  const collapsed = collapseActivityEntries(entries);
+  if (!collapsed.length) {
+    return collapsed;
+  }
+  const primaryActive = getPrimaryActiveActivityEntry(collapsed);
+  const terminalStatus: CliAdapterActivityEvent["status"] | undefined = isTerminalNativeTaskState(snapshot)
+    ? snapshot.state === "failed" || snapshot.native_turn_runtime?.phase === "failed"
+      ? "failed"
+      : "completed"
+    : undefined;
+  return collapsed.map((entry) => {
+    if (!entry || entry.kind === "task" || entry.status !== "in_progress") {
+      return entry;
+    }
+    if (terminalStatus) {
+      return {
+        ...entry,
+        status: terminalStatus,
+      };
+    }
+    if (!primaryActive || entry.item_id === primaryActive.item_id) {
+      return entry;
+    }
+    const sameTurn = primaryActive.turn_id && entry.turn_id
+      ? primaryActive.turn_id === entry.turn_id
+      : true;
+    if (!sameTurn) {
+      return entry;
+    }
+    return {
+      ...entry,
+      status: "completed",
+    };
+  });
+}
+
+function mapActivityKindToSectionKind(
+  kind: CliAdapterActivityEvent["kind"] | undefined,
+): CliNativeActivityCardSectionKind | undefined {
+  switch (kind) {
+    case "thinking":
+      return "thinking";
+    case "plan":
+      return "plan";
+    case "mcp_tool_call":
+    case "dynamic_tool_call":
+      return "tool";
+    case "command_execution":
+      return "command";
+    case "file_change":
+      return "files";
+    case "task":
+      return "task";
+    default:
+      return undefined;
+  }
+}
+
+function getPrimaryActiveSectionKind(
+  entries: CliAdapterActivityEvent[] | undefined,
+): CliNativeActivityCardSectionKind | undefined {
+  return mapActivityKindToSectionKind(getPrimaryActiveActivityEntry(entries)?.kind);
+}
+
+function getNativeSectionSortWeight(
+  section: CliNativeActivityCardSection,
+  activeKind: CliNativeActivityCardSectionKind | undefined,
+): number {
+  if (activeKind && section.kind === activeKind) {
+    return 0;
+  }
+  if (activeKind === "files" && section.kind === "diff") {
+    return 1;
+  }
+  switch (section.kind) {
+    case "thinking":
+      return 10;
+    case "tool":
+      return 20;
+    case "command":
+      return 30;
+    case "files":
+      return 40;
+    case "diff":
+      return 41;
+    case "plan":
+      return 50;
+    case "task":
+      return 60;
+    case "placeholder":
+    default:
+      return 99;
+  }
+}
+
+function sortNativeCardSections(
+  sections: CliNativeActivityCardSection[],
+  activeKind: CliNativeActivityCardSectionKind | undefined,
+): CliNativeActivityCardSection[] {
+  return [...sections].sort((left, right) =>
+    getNativeSectionSortWeight(left, activeKind) - getNativeSectionSortWeight(right, activeKind));
+}
+
 function summarizeShellStatus(snapshot: CliSessionSnapshot): {
   status: CliNativeActivityCardShellStatus;
   text: string;
@@ -741,13 +895,14 @@ function buildNativePlaceholderSummary(
 }
 
 export function buildNativeActivityCard(snapshot: CliSessionSnapshot): CliNativeActivityCard {
-  const events = Array.isArray(snapshot.recent_activity_events) ? snapshot.recent_activity_events : [];
+  const events = getEffectiveCardActivityEntries(snapshot, snapshot.recent_activity_events);
   const sections: CliNativeActivityCardSection[] = [];
   const shell = summarizeShellStatus(snapshot);
   const runtime = snapshot.native_turn_runtime;
   const taskActive = isNativeTaskActive(snapshot);
   const waitingOnApproval = runtime?.thread_active_flags?.includes("waitingOnApproval");
   const waitingOnInput = runtime?.thread_active_flags?.includes("waitingOnUserInput");
+  const primaryActiveKind = getPrimaryActiveSectionKind(events);
 
   const taskEvent = getPreferredActivityEntry(events, (entry) => entry.kind === "task");
   const thinkingEvent = getPreferredActivityEntry(events, (entry) => entry.kind === "thinking");
@@ -840,7 +995,7 @@ export function buildNativeActivityCard(snapshot: CliSessionSnapshot): CliNative
 
   if (taskActive && !sections.some((section) => section.kind === "thinking")) {
     const synthesizedThinking = buildNativeThinkingSummary(snapshot, events);
-    sections.unshift({
+    sections.push({
       kind: "thinking",
       title: "Thinking",
       summary: synthesizedThinking.summary,
@@ -849,13 +1004,7 @@ export function buildNativeActivityCard(snapshot: CliSessionSnapshot): CliNative
     });
   }
 
-  const hasTerminalTaskState = (
-    snapshot.state === "completed"
-    || snapshot.state === "failed"
-    || runtime?.phase === "completed"
-    || runtime?.phase === "interrupted"
-    || runtime?.phase === "failed"
-  );
+  const hasTerminalTaskState = isTerminalNativeTaskState(snapshot);
 
   if (
     taskEvent
@@ -921,11 +1070,30 @@ export function buildNativeActivityCard(snapshot: CliSessionSnapshot): CliNative
     });
   }
 
-  const activeThinking = sections.find(
-    (section) => section.kind === "thinking" && section.status === "in_progress",
+  const sortedSections = sortNativeCardSections(sections, primaryActiveKind);
+  const activeSection = sortedSections.find(
+    (section) => section.kind !== "task" && section.kind !== "placeholder" && section.status === "in_progress",
   );
+  const activeThinking = activeSection?.kind === "thinking";
+  const shellActivityText = activeSection
+    ? (
+      activeSection.kind === "tool"
+        ? "Using tool"
+        : activeSection.kind === "command"
+          ? "Running command"
+          : activeSection.kind === "files" || activeSection.kind === "diff"
+            ? "Editing files"
+            : activeSection.kind === "plan"
+              ? "Updating plan"
+              : "Thinking"
+    )
+    : shell.text;
   const shellStatusText = clipNativeCardText(
-    activeThinking && !waitingOnApproval && !waitingOnInput ? "Thinking" : shell.text,
+    !waitingOnApproval && !waitingOnInput && activeThinking
+      ? "Thinking"
+      : !waitingOnApproval && !waitingOnInput && activeSection
+        ? shellActivityText
+        : shell.text,
     60,
   ) || "Connected";
 
@@ -933,9 +1101,9 @@ export function buildNativeActivityCard(snapshot: CliSessionSnapshot): CliNative
     anchor_message_id: String(snapshot.last_posted_message_id || "").trim() || undefined,
     shell_status: shell.status,
     shell_status_text: shellStatusText,
-    updated_at: pickNativeCardUpdatedAt(snapshot, sections),
-    placeholder_visible: sections.length === 1 && sections[0].kind === "placeholder",
-    content_sections: sections,
+    updated_at: pickNativeCardUpdatedAt(snapshot, sortedSections),
+    placeholder_visible: sortedSections.length === 1 && sortedSections[0].kind === "placeholder",
+    content_sections: sortedSections,
   };
 }
 
@@ -3131,17 +3299,27 @@ export class CliSessionManager {
       return;
     }
     const normalizedThreadId = normalizeOptionalString(event.thread_id);
+    const shouldPersistExternalSessionId =
+      runtime.snapshot.adapter === "claude"
+      || runtime.snapshot.adapter === "cursor";
     if (
       normalizedThreadId
-      && runtime.snapshot.adapter === "claude"
+      && shouldPersistExternalSessionId
       && (runtime.snapshot.mode === "direct" || runtime.snapshot.mode === "headless")
       && runtime.snapshot.external_session_id !== normalizedThreadId
     ) {
       runtime.snapshot.external_session_id = normalizedThreadId;
-      runtime.launchEnv = {
-        ...runtime.launchEnv,
-        [CLAUDE_SESSION_ID_ENV_VAR]: normalizedThreadId,
-      };
+      if (runtime.snapshot.adapter === "claude") {
+        runtime.launchEnv = {
+          ...runtime.launchEnv,
+          [CLAUDE_SESSION_ID_ENV_VAR]: normalizedThreadId,
+        };
+      } else if (runtime.snapshot.adapter === "cursor") {
+        runtime.launchEnv = {
+          ...runtime.launchEnv,
+          [CURSOR_SESSION_ID_ENV_VAR]: normalizedThreadId,
+        };
+      }
     }
     const next = mergeNativeTurnRuntime(runtime.snapshot.native_turn_runtime, event);
     const previousSerialized = JSON.stringify(runtime.snapshot.native_turn_runtime || null);

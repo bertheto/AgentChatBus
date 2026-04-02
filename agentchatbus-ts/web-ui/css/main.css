@@ -2838,12 +2838,53 @@ body[data-theme="light"] .msg-sys-admin-human-note-icon {
   padding-top: 0;
 }
 
+.msg-native-card__section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
 .msg-native-card__section-title {
   font-size: 11px;
   font-weight: 700;
   letter-spacing: .06em;
   text-transform: uppercase;
   color: var(--text-3);
+}
+
+.msg-native-card__section-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 52px;
+  padding: 3px 7px;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, .18);
+  background: rgba(148, 163, 184, .08);
+  color: var(--text-3);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.msg-native-card__section-badge[data-status="in_progress"] {
+  border-color: rgba(59, 130, 246, .24);
+  background: rgba(59, 130, 246, .12);
+  color: #93c5fd;
+}
+
+.msg-native-card__section-badge[data-status="completed"] {
+  border-color: rgba(34, 197, 94, .24);
+  background: rgba(34, 197, 94, .12);
+  color: #86efac;
+}
+
+.msg-native-card__section-badge[data-status="failed"] {
+  border-color: rgba(248, 113, 113, .24);
+  background: rgba(248, 113, 113, .12);
+  color: #fca5a5;
 }
 
 .msg-native-card__section-summary {

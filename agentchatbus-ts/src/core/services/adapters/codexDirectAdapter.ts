@@ -438,6 +438,73 @@ function extractReasoningSummary(value: unknown): string | undefined {
   return undefined;
 }
 
+function summarizeMcpToolCallItem(item: Record<string, unknown>): string | undefined {
+  const directError = isObjectRecord(item.error) ? item.error.message : undefined;
+  const errorSummary = clipActivityText(directError, 260);
+  if (errorSummary) {
+    return errorSummary;
+  }
+  const status = normalizeActivityStatus(item.status);
+  if (status === "failed") {
+    return "Tool call failed";
+  }
+  if (status === "completed") {
+    return "Tool call completed";
+  }
+  return undefined;
+}
+
+function summarizeCommandExecutionItem(item: Record<string, unknown>): string | undefined {
+  const aggregatedOutput = clipActivityText(item.aggregatedOutput, 260);
+  if (aggregatedOutput) {
+    return aggregatedOutput;
+  }
+  const status = normalizeActivityStatus(item.status);
+  const exitCode = typeof item.exitCode === "number" ? item.exitCode : undefined;
+  if (status === "failed") {
+    return typeof exitCode === "number"
+      ? `Command failed with exit code ${exitCode}`
+      : "Command failed";
+  }
+  if (status === "completed") {
+    return typeof exitCode === "number"
+      ? `Command completed with exit code ${exitCode}`
+      : "Command completed";
+  }
+  if (status === "declined") {
+    return "Command declined";
+  }
+  return undefined;
+}
+
+function summarizeFileChangeItem(
+  item: Record<string, unknown>,
+  files: CliSessionActivityFile[] | undefined,
+): string | undefined {
+  const status = normalizeActivityStatus(item.status);
+  if (status === "failed") {
+    return "File changes failed";
+  }
+  if (status === "declined") {
+    return "File changes declined";
+  }
+  const summary = clipActivityText(
+    files?.length
+      ? files.slice(0, 3).map((entry) => entry.path).join(", ")
+      : undefined,
+    220,
+  );
+  if (summary) {
+    return summary;
+  }
+  if (status === "completed") {
+    return files?.length
+      ? `Updated ${files.length} file${files.length === 1 ? "" : "s"}`
+      : "File changes completed";
+  }
+  return "Updating files";
+}
+
 export function buildCodexDirectActivityFromItem(
   item: unknown,
   fallbackTurnId?: string,
@@ -484,10 +551,7 @@ export function buildCodexDirectActivityFromItem(
       label: "Using tool",
       server: typeof item.server === "string" ? item.server.trim() || undefined : undefined,
       tool: typeof item.tool === "string" ? item.tool.trim() || undefined : undefined,
-      summary: clipActivityText(
-        isObjectRecord(item.error) ? item.error.message : undefined,
-        260,
-      ),
+      summary: summarizeMcpToolCallItem(item),
     };
   }
   if (type === "dynamicToolCall") {
@@ -512,7 +576,7 @@ export function buildCodexDirectActivityFromItem(
       label: "Running command",
       command: typeof item.command === "string" ? item.command.trim() || undefined : undefined,
       cwd: typeof item.cwd === "string" ? item.cwd.trim() || undefined : undefined,
-      summary: clipActivityText(item.aggregatedOutput, 260),
+      summary: summarizeCommandExecutionItem(item),
     };
   }
   if (type === "fileChange") {
@@ -529,12 +593,7 @@ export function buildCodexDirectActivityFromItem(
       label: "Editing files",
       files,
       diff: files?.[0]?.path ? clipActivityText(firstChange?.diff, 600) : undefined,
-      summary: clipActivityText(
-        files?.length
-          ? files.slice(0, 3).map((entry) => entry.path).join(", ")
-          : "Updating files",
-        220,
-      ),
+      summary: summarizeFileChangeItem(item, files),
     };
   }
   return null;
@@ -752,6 +811,32 @@ function buildDefaultElicitationValue(schema: unknown): unknown {
     return Array.from({ length: minItems }, () => itemValue);
   }
   return buildDefaultElicitationString(schema);
+}
+
+function buildCodexDirectToolUserInputResponse(
+  params: unknown,
+): { answers: Record<string, { answers: string[] }> } {
+  const answers: Record<string, { answers: string[] }> = {};
+  if (!isObjectRecord(params) || !Array.isArray(params.questions)) {
+    return { answers };
+  }
+  for (const question of params.questions) {
+    if (!isObjectRecord(question) || typeof question.id !== "string" || !question.id.trim()) {
+      continue;
+    }
+    let nextAnswer = "yes";
+    if (Array.isArray(question.options)) {
+      const firstOption = question.options.find((entry) =>
+        isObjectRecord(entry) && typeof entry.label === "string" && entry.label.trim());
+      if (firstOption && typeof firstOption.label === "string" && firstOption.label.trim()) {
+        nextAnswer = firstOption.label.trim();
+      }
+    }
+    answers[question.id.trim()] = {
+      answers: [nextAnswer],
+    };
+  }
+  return { answers };
 }
 
 export function buildCodexDirectElicitationResponse(
@@ -1058,6 +1143,7 @@ class CodexDirectExecutor implements CodexDirectCommandExecutor {
       const streamedAgentMessageItemIds = new Set<string>();
       const activityByItemId = new Map<string, CliAdapterActivityEvent>();
       const fileChangeActivityIdsByTurn = new Map<string, Set<string>>();
+      const pendingServerRequestFlags = new Map<string, "waitingOnApproval" | "waitingOnUserInput">();
       const pendingRequests = new Map<
         string,
         {
@@ -1088,6 +1174,40 @@ class CodexDirectExecutor implements CodexDirectCommandExecutor {
           ...event,
           at: event.at || nowIso(),
         });
+      };
+
+      const emitPendingServerRequestRuntime = (): void => {
+        emitNativeRuntime({
+          thread_id: activeThreadId || null,
+          active_turn_id: activeTurnId || null,
+          last_turn_id: activeTurnId || null,
+          turn_status: activeTurnId ? "inProgress" : undefined,
+          phase: activeTurnId ? "running" : undefined,
+          thread_active_flags: Array.from(new Set(pendingServerRequestFlags.values())),
+        });
+      };
+
+      const rememberPendingServerRequest = (
+        requestId: JsonRpcId,
+        flag: "waitingOnApproval" | "waitingOnUserInput",
+      ): void => {
+        pendingServerRequestFlags.set(String(requestId), flag);
+        emitPendingServerRequestRuntime();
+      };
+
+      const clearPendingServerRequest = (requestId?: JsonRpcId): void => {
+        if (requestId === undefined) {
+          if (!pendingServerRequestFlags.size) {
+            return;
+          }
+          pendingServerRequestFlags.clear();
+          emitPendingServerRequestRuntime();
+          return;
+        }
+        if (!pendingServerRequestFlags.delete(String(requestId))) {
+          return;
+        }
+        emitPendingServerRequestRuntime();
       };
 
       const upsertActivity = (next: Partial<CliAdapterActivityEvent> & { item_id: string }): void => {
@@ -1127,6 +1247,7 @@ class CodexDirectExecutor implements CodexDirectCommandExecutor {
         const pendingError = error ?? new Error(
           "Codex app-server closed before pending requests could complete.",
         );
+        pendingServerRequestFlags.clear();
         for (const [requestId, pending] of pendingRequests.entries()) {
           clearTimeout(pending.timer);
           pending.reject(pendingError);
@@ -1284,18 +1405,33 @@ class CodexDirectExecutor implements CodexDirectCommandExecutor {
           return;
         }
         if (method === "item/commandExecution/requestApproval") {
+          rememberPendingServerRequest(requestId, "waitingOnApproval");
           sendResponse(requestId, {
             decision: "acceptForSession",
           });
           return;
         }
         if (method === "item/fileChange/requestApproval") {
+          rememberPendingServerRequest(requestId, "waitingOnApproval");
           sendResponse(requestId, {
             decision: "acceptForSession",
           });
           return;
         }
+        if (method === "item/permissions/requestApproval") {
+          rememberPendingServerRequest(requestId, "waitingOnApproval");
+          sendResponse(requestId, {
+            decision: "acceptForSession",
+          });
+          return;
+        }
+        if (method === "item/tool/requestUserInput") {
+          rememberPendingServerRequest(requestId, "waitingOnUserInput");
+          sendResponse(requestId, buildCodexDirectToolUserInputResponse(message.params));
+          return;
+        }
         if (method === "mcpServer/elicitation/request") {
+          rememberPendingServerRequest(requestId, "waitingOnApproval");
           const elicitation = buildCodexDirectElicitationResponse(message.params);
           emitStderr(`${elicitation.summary}\n`);
           const elicitationDetail = tryStringifyCompact({
@@ -1721,6 +1857,11 @@ class CodexDirectExecutor implements CodexDirectCommandExecutor {
           return;
         }
 
+        if (method === "serverRequest/resolved") {
+          clearPendingServerRequest(extractJsonRpcId(params.requestId));
+          return;
+        }
+
         if (method === "turn/started") {
           const nextThreadId = extractThreadIdFromPayload(params);
           if (nextThreadId) {
@@ -1761,6 +1902,7 @@ class CodexDirectExecutor implements CodexDirectCommandExecutor {
           turnCompleted = true;
           completedTurnStatus = turnStatus || undefined;
           successfulTurn = turnStatus === "completed";
+          clearPendingServerRequest();
           emitNativeRuntime({
             thread_id: activeThreadId,
             active_turn_id: null,

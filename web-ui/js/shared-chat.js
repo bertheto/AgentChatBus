@@ -313,15 +313,36 @@
     `;
   }
 
+  function getSectionStatusLabel(section) {
+    const status = String(section?.status || "").trim();
+    if (status === "in_progress") {
+      return "Running";
+    }
+    if (status === "completed") {
+      return "Done";
+    }
+    if (status === "failed") {
+      return "Failed";
+    }
+    if (status === "placeholder") {
+      return "Idle";
+    }
+    return "";
+  }
+
   function buildSectionHtml(section) {
     if (!section || typeof section !== "object") {
       return "";
     }
     const summary = String(section.summary || "").trim();
     const meta = String(section.meta || "").trim();
+    const statusLabel = getSectionStatusLabel(section);
     return `
       <section class="msg-native-card__section" data-kind="${escapeHtml(section.kind || "placeholder")}" data-status="${escapeHtml(section.status || "placeholder")}">
-        <div class="msg-native-card__section-title">${escapeHtml(section.title || "Activity")}</div>
+        <div class="msg-native-card__section-head">
+          <div class="msg-native-card__section-title">${escapeHtml(section.title || "Activity")}</div>
+          ${statusLabel ? `<span class="msg-native-card__section-badge" data-status="${escapeHtml(section.status || "placeholder")}">${escapeHtml(statusLabel)}</span>` : ""}
+        </div>
         <div class="msg-native-card__section-summary">${escapeHtml(summary || "No active Codex activity to display.")}</div>
         ${meta ? `<div class="msg-native-card__section-meta">${escapeHtml(meta)}</div>` : ""}
         ${section.kind === "diff" ? `<pre class="msg-native-card__diff">${escapeHtml(summary || "")}</pre>` : ""}

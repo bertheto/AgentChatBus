@@ -144,6 +144,98 @@ describe("buildNativeActivityCard", () => {
     expect(card.content_sections[0]?.summary).toContain("Waiting for approval");
   });
 
+  it("promotes the latest tool activity over stale thinking activity", () => {
+    const card = buildNativeActivityCard(makeDirectSession({
+      native_turn_runtime: {
+        updated_at: "2026-03-30T12:00:05.000Z",
+        thread_id: "thread-1",
+        active_turn_id: "turn-1",
+        last_turn_id: "turn-1",
+        turn_status: "inProgress",
+        phase: "running",
+        thread_active_flags: [],
+      },
+      recent_activity_events: [
+        makeActivity({
+          at: "2026-03-30T12:00:02.000Z",
+          item_id: "reason-1",
+          kind: "thinking",
+          status: "in_progress",
+          label: "Thinking",
+          summary: "Inspecting the thread state.",
+        }),
+        makeActivity({
+          at: "2026-03-30T12:00:04.000Z",
+          item_id: "tool-1",
+          kind: "mcp_tool_call",
+          status: "in_progress",
+          label: "Using tool",
+          server: "agentchatbus",
+          tool: "bus_connect",
+          summary: "Joining the thread.",
+        }),
+      ],
+    }));
+
+    expect(card.shell_status_text).toBe("Using tool");
+    expect(card.content_sections[0]).toMatchObject({
+      kind: "tool",
+      status: "in_progress",
+    });
+    const thinkingSection = card.content_sections.find((section) => section.kind === "thinking");
+    expect(thinkingSection).toMatchObject({
+      kind: "thinking",
+      status: "completed",
+    });
+  });
+
+  it("marks stale tool activity completed when command execution becomes primary", () => {
+    const card = buildNativeActivityCard(makeDirectSession({
+      native_turn_runtime: {
+        updated_at: "2026-03-30T12:00:05.000Z",
+        thread_id: "thread-1",
+        active_turn_id: "turn-1",
+        last_turn_id: "turn-1",
+        turn_status: "inProgress",
+        phase: "running",
+        thread_active_flags: [],
+      },
+      recent_activity_events: [
+        makeActivity({
+          at: "2026-03-30T12:00:02.000Z",
+          item_id: "tool-1",
+          kind: "mcp_tool_call",
+          status: "in_progress",
+          label: "Using tool",
+          server: "agentchatbus",
+          tool: "msg_post",
+          summary: "Posting the reply.",
+        }),
+        makeActivity({
+          at: "2026-03-30T12:00:04.000Z",
+          item_id: "cmd-1",
+          kind: "command_execution",
+          status: "in_progress",
+          label: "Running command",
+          command: "git status",
+          cwd: "C:\\workspace",
+          summary: "On branch main",
+        }),
+      ],
+    }));
+
+    expect(card.shell_status_text).toBe("Running command");
+    expect(card.content_sections[0]).toMatchObject({
+      kind: "command",
+      status: "in_progress",
+    });
+    const toolSection = card.content_sections.find((section) => section.kind === "tool");
+    expect(toolSection).toMatchObject({
+      kind: "tool",
+      status: "completed",
+    });
+  });
+
   it("keeps the latest task summary after completion", () => {
     const card = buildNativeActivityCard(makeDirectSession({
       state: "completed",
