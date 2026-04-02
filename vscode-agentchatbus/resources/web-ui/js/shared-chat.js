@@ -328,31 +328,7 @@
   }
 
   function buildNativePromptPanelsHtml(session) {
-    const reentry = getReentryPromptState(session);
-    if (!reentry) {
-      return "";
-    }
-    const resolvedPrompt = String(reentry.resolved_prompt || "").trim();
-    const lastSentPrompt = String(reentry.last_sent_prompt || "").trim();
-    const resolvedMeta = reentry.resolved_at
-      ? `Resolved ${formatActivityTime(reentry.resolved_at)}`
-      : "Resolved";
-    const lastSentMeta = reentry.last_sent_at
-      ? `Sent ${formatActivityTime(reentry.last_sent_at)}`
-      : "Last sent";
-    const blocks = [
-      buildNativePromptBlockHtml("Resolved Re-entry Prompt", resolvedPrompt, resolvedMeta),
-    ];
-    if (lastSentPrompt && lastSentPrompt !== resolvedPrompt) {
-      blocks.push(buildNativePromptBlockHtml("Last Sent Re-entry Prompt", lastSentPrompt, lastSentMeta));
-    } else if (lastSentPrompt) {
-      blocks.push(buildNativePromptBlockHtml("Last Sent Re-entry Prompt", lastSentPrompt, `${lastSentMeta} · matches resolved`));
-    }
-    const html = blocks.filter(Boolean).join("");
-    if (!html) {
-      return "";
-    }
-    return `<div class="msg-native-card__prompts">${html}</div>`;
+    return "";
   }
 
   function buildNativeCardHtml(model, actionState) {
