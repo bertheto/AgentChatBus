@@ -115,6 +115,10 @@ function looksLikeCodexIdleScreen(screenExcerpt: string | undefined): boolean {
   return hasCodexPromptInScreen(screenExcerpt);
 }
 
+function supportsWakePromptDelivery(session: CliSessionSnapshot): boolean {
+  return session.supports_input && (session.mode === "interactive" || session.mode === "direct");
+}
+
 function usesClaudeFamilyInteractiveAdapter(session: CliSessionSnapshot): boolean {
   return session.adapter === "claude" || session.adapter === "cursor" || session.adapter === "gemini";
 }
@@ -718,7 +722,24 @@ export class CliMeetingOrchestrator {
       return;
     }
     const waitStatus = this.store.getAgentWaitStatus(session.thread_id, participantAgentId);
-    this.cliSessionManager.updateSessionWaitStatus(session.id, {
+    const updateSessionWaitStatus = (this.cliSessionManager as {
+      updateSessionWaitStatus?: (
+        sessionId: string,
+        waitStatus: {
+          is_waiting: boolean;
+          status: string;
+          wait_call_id?: string;
+          entered_at?: string;
+          timeout_ms?: number;
+          last_exit_reason?: string;
+          last_exited_at?: string;
+        },
+      ) => CliSessionSnapshot | null;
+    }).updateSessionWaitStatus;
+    if (typeof updateSessionWaitStatus !== "function") {
+      return;
+    }
+    updateSessionWaitStatus.call(this.cliSessionManager, session.id, {
       is_waiting: waitStatus.is_waiting,
       status: waitStatus.status,
       wait_call_id: waitStatus.wait_call_id,
@@ -751,7 +772,7 @@ export class CliMeetingOrchestrator {
     if (session.mode !== "interactive") {
       return false;
     }
-    if (usesClaudeFamilyInteractiveAdapter(session)) {
+    if (session.adapter === "claude" || session.adapter === "cursor" || session.adapter === "gemini") {
       return looksLikeClaudeIdleScreen(session.screen_excerpt);
     }
     if (session.adapter === "copilot") {
@@ -1228,8 +1249,7 @@ export class CliMeetingOrchestrator {
     }
 
     const canDeliverWakePromptDirectly = isAgentMcpSession
-      && session.supports_input
-      && (session.mode === "interactive" || session.mode === "direct");
+      && supportsWakePromptDelivery(session);
 
     if (session.mode !== "interactive" && !canDeliverWakePromptDirectly) {
       if (isAgentMcpSession) {
@@ -1237,7 +1257,7 @@ export class CliMeetingOrchestrator {
           session.id,
           targetSeq,
         );
-        if (this.shouldRecoverDirectSession(session, targetSeq, effectiveAcknowledgedSeq)) {
+        if (session.mode === "direct" && this.shouldRecoverDirectSession(session, targetSeq, effectiveAcknowledgedSeq)) {
           try {
             const recovered = await this.recoverDirectSession(session);
             if (recovered) {
@@ -1250,7 +1270,7 @@ export class CliMeetingOrchestrator {
             );
           }
         }
-        if (session.mode === "direct" || workState === "busy") {
+        if (canDeliverWakePromptDirectly) {
           this.scheduleWakeRetry(
             session.id,
             targetSeq,

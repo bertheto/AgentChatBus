@@ -660,6 +660,8 @@ describe("CliMeetingOrchestrator agent_mcp wake handling", () => {
       makeDirectSession({
         id: "session-a",
         thread_id: thread.id,
+        thread_display_name: thread.topic,
+        reentry_prompt_override: "Resume this existing meeting directly. Do not bus_connect again.",
         participant_agent_id: agentA.id,
         participant_display_name: agentA.display_name,
         participant_role: "administrator",
