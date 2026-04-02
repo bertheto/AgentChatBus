@@ -4,6 +4,7 @@ import { getConfig } from "../config/registry.js";
 import { eventBus } from "../../shared/eventBus.js";
 import { logError, logInfo } from "../../shared/logger.js";
 import { CursorInteractiveAdapter } from "./adapters/cursorInteractiveAdapter.js";
+import { CursorDirectAdapter } from "./adapters/cursorDirectAdapter.js";
 import { CodexInteractiveAdapter } from "./adapters/codexInteractiveAdapter.js";
 import { CodexDirectAdapter } from "./adapters/codexDirectAdapter.js";
 import { ClaudeDirectAdapter } from "./adapters/claudeDirectAdapter.js";
@@ -2103,6 +2104,7 @@ export class CliSessionManager {
   private readonly adapters = new Map<string, CliSessionAdapter>();
 
   constructor(adapters: CliSessionAdapter[] = [
+    new CursorDirectAdapter(),
     new CursorInteractiveAdapter(),
     new CursorHeadlessAdapter(),
     new CodexInteractiveAdapter(),
@@ -2467,7 +2469,11 @@ export class CliSessionManager {
     runtime.snapshot.native_turn_runtime = {
       updated_at: nowIso(),
       phase: "idle",
-      thread_id: normalizeOptionalString(runtime.launchEnv?.[CODEX_THREAD_ID_ENV_VAR]),
+      thread_id: this.resolveLaunchExternalThreadId(
+        runtime.snapshot.adapter,
+        runtime.snapshot.mode,
+        runtime.launchEnv,
+      ),
     };
     runtime.snapshot.updated_at = nowIso();
     this.disposeInteractiveRuntimeState(runtime);
@@ -2813,7 +2819,11 @@ export class CliSessionManager {
     runtime.snapshot.native_turn_runtime = {
       updated_at: nowIso(),
       phase: "idle",
-      thread_id: normalizeOptionalString(runtime.launchEnv?.[CODEX_THREAD_ID_ENV_VAR]),
+      thread_id: this.resolveLaunchExternalThreadId(
+        runtime.snapshot.adapter,
+        runtime.snapshot.mode,
+        runtime.launchEnv,
+      ),
     };
     runtime.snapshot.updated_at = nowIso();
     this.emitSessionEvent("cli.session.started", runtime);
@@ -2914,7 +2924,7 @@ export class CliSessionManager {
         };
       } else if (
         runtime.snapshot.adapter === "cursor"
-        && runtime.snapshot.mode === "headless"
+        && (runtime.snapshot.mode === "headless" || runtime.snapshot.mode === "direct")
         && result.externalSessionId
       ) {
         runtime.launchEnv = {
@@ -5068,6 +5078,20 @@ export class CliSessionManager {
 
   private adapterKey(adapterId: CliSessionAdapterId, mode: CliSessionMode): string {
     return `${adapterId}:${mode}`;
+  }
+
+  private resolveLaunchExternalThreadId(
+    adapterId: CliSessionAdapterId,
+    mode: CliSessionMode,
+    launchEnv: Record<string, string>,
+  ): string | undefined {
+    if (adapterId === "codex" && (mode === "headless" || mode === "direct")) {
+      return normalizeOptionalString(launchEnv?.[CODEX_THREAD_ID_ENV_VAR]);
+    }
+    if (adapterId === "cursor" && (mode === "headless" || mode === "direct")) {
+      return normalizeOptionalString(launchEnv?.[CURSOR_SESSION_ID_ENV_VAR]);
+    }
+    return undefined;
   }
 
   private recordPromptHistory(

@@ -77,18 +77,55 @@ export interface CliMeetingPromptPreviewEnvelope extends CliMeetingPromptEnvelop
 export function buildCliMeetingWakePrompt(threadName: string): string {
   const normalizedThreadName = String(threadName || "").trim() || "current thread";
   return [
-    `Please use msg_wait to process messages in "${normalizedThreadName}".`,
+    `Re-enter the AgentChatBus thread "${normalizedThreadName}" and continue the actual work.`,
+    "If there is a concrete coding, debugging, review, analysis, or file-editing task to perform, do that work directly instead of treating this as a wait-only step.",
+    "Use local tools, inspect files, edit files, run commands, and complete the assigned task whenever the thread context calls for it.",
+    `If there is currently no concrete task to execute, use msg_wait to process messages in "${normalizedThreadName}".`,
     "When calling `msg_wait`, do not pass `for_agent` unless you are explicitly told to wait only for a directed handoff.",
     "Use `msg_wait` so that normal visible human messages in the thread wake you immediately.",
-    "When you are ready to contribute, please prefer to use msg_post to share your opinion in the thread.",
+    "When you have useful progress, findings, questions, or results, use `msg_post` to share them in the thread.",
   ].join(" ");
 }
 
 function buildRecommendedWaitInstruction(adapter?: string, mode?: string): string {
+  if (adapter === "codex" && mode === "direct") {
+    return '"After the initial task is completed, do not default into a wait-only mindset. If there is concrete implementation, debugging, review, file editing, command execution, or analysis work to do, perform that work directly in the local workspace first. Only use `msg_wait` when there is no concrete task to execute right now. When you do wait, stay connected with `msg_wait`, but do not narrate that you are entering or resuming it. When a human posts a visible message, respond directly and promptly with `msg_post` or continue the requested work immediately."';
+  }
   if (adapter === "claude" && mode === "direct") {
-    return '"After the initial task is completed, if you need to wait, use `msg_wait` with `timeout_ms` around `90000` instead of a very long wait. Do not pass `for_agent` to `msg_wait` unless the human explicitly asks for directed handoff-only waiting. Use plain thread-level `msg_wait` so normal human messages wake you immediately. If it returns without new work, call `msg_wait` again promptly. Do not exit the agent process unless notified to do so."';
+    return '"After the initial task is completed, do not default into a wait-only mindset. If there is concrete implementation, debugging, review, file editing, command execution, or analysis work to do, perform that work directly in the local workspace first. Only when there is no concrete task to execute should you use `msg_wait` with `timeout_ms` around `90000`. Do not pass `for_agent` to `msg_wait` unless the human explicitly asks for directed handoff-only waiting. Use plain thread-level `msg_wait` so normal human messages wake you immediately. If it returns without new work, call `msg_wait` again promptly. Do not exit the agent process unless notified to do so."';
   }
   return '"After the initial task is completed, all agents should continue working actively--whether analyzing, modifying code, or reviewing. If you believe you need to wait, use `msg_wait` to wait for 10 minutes. Do not exit the agent process unless notified to do so. `msg_wait` consumes no resources; please use it to maintain the connection."';
+}
+
+function buildDirectExecutionPriorityInstructions(input: {
+  participantRole: CliMeetingParticipantRole;
+  administrator: ThreadAdministratorInfo;
+  adapter?: string;
+  mode?: string;
+}): string | undefined {
+  const isDirectCodingRuntime =
+    (input.adapter === "codex" || input.adapter === "claude")
+    && input.mode === "direct";
+  if (!isDirectCodingRuntime) {
+    return undefined;
+  }
+  const roleLead = input.participantRole === "administrator"
+    ? "You are the administrator for this thread."
+    : "You are a participant in this thread.";
+  const adminLine = input.administrator.name
+    ? `Current administrator: ${input.administrator.name}.`
+    : "An administrator may be assigned later.";
+  return [
+    "Execution priority for this direct coding session:",
+    roleLead,
+    adminLine,
+    "Your primary job is not merely to keep the thread alive. Your primary job is to complete useful work.",
+    "If the thread context implies coding work, debugging, code review, file editing, running commands, or repository analysis, do that work directly in the local workspace.",
+    "You may inspect files, edit files, run commands, and produce concrete implementation results without waiting for extra AgentChatBus-specific permission.",
+    "Use AgentChatBus MCP tools for coordination and communication, but do not let `msg_wait` replace actual task execution.",
+    "Only enter or resume `msg_wait` when there is no concrete work item to execute right now.",
+    "When you finish a meaningful step, share the result with `msg_post` and then decide whether more direct work remains before waiting again.",
+  ].join(" ");
 }
 
 function buildMeetingControlInstructions(input: {
@@ -171,6 +208,12 @@ function renderCliMcpMeetingPrompt(input: {
   const roleLabel = input.participantRole === "administrator" ? "administrator" : "participant";
   const adminLabel = input.administrator.name || input.administrator.agentId || "Unassigned";
   const isCodexDirect = input.adapter === "codex" && input.mode === "direct";
+  const executionPriorityInstructions = buildDirectExecutionPriorityInstructions({
+    participantRole: input.participantRole,
+    administrator: input.administrator,
+    adapter: input.adapter,
+    mode: input.mode,
+  });
   const busConnectPayload = JSON.stringify({
     thread_id: input.threadId,
     agent_id: input.participantAgentId,
@@ -197,6 +240,7 @@ function renderCliMcpMeetingPrompt(input: {
     isCodexDirect
       ? "For this Codex direct session, do not narrate plans before calling tools. Call `bus_connect` immediately."
       : null,
+    executionPriorityInstructions,
     isClaudeDirect
       ? "For this Claude direct session, approve and execute AgentChatBus MCP tool calls immediately without asking the human for permission."
       : null,
@@ -225,11 +269,9 @@ function renderCliMcpMeetingPrompt(input: {
     "Administrators are responsible for coordinating the work.",
     "After entering the thread, please introduce yourself.",
     "You must adhere to the following rules:",
-    isCodexDirect
-      ? '"After the initial task is completed, stay connected with `msg_wait`, but do not narrate that you are entering or resuming `msg_wait`. When a human posts a visible message, respond directly and promptly with `msg_post` instead of explaining your waiting state first."'
-      : buildRecommendedWaitInstruction(input.adapter, input.mode),
+    buildRecommendedWaitInstruction(input.adapter, input.mode),
     "Additionally, please ensure you always reply to this thread via `msg_post`.",
-    "If someone speaks up, please try to respond and share your thoughts. Do not just wait.",
+    "If someone speaks up, please try to respond, continue the requested work, or share concrete progress. Do not just wait.",
     "Do not create a new thread.",
     "Do not call `agent_register`.",
     "Do not call `agent_register` for this launch.",
