@@ -98,6 +98,10 @@ function looksLikeBenignCopilotPromptCancellation(detail: string, stdout: string
     && normalizedStdout.includes("operation cancelled by user");
 }
 
+function isCopilotStdinUnavailableError(error: unknown): boolean {
+  return /stdin is unavailable/i.test(error instanceof Error ? error.message : String(error));
+}
+
 async function waitForCopilotPromptCancellationMarker(
   options: {
     detail: string;
@@ -549,6 +553,25 @@ class DefaultCopilotDirectExecutor implements CopilotDirectExecutor {
       const sendResponse = (id: JsonRpcId, result?: unknown, error?: { code: number; message: string }) => {
         sendMessage(error ? { id, error } : { id, result: result ?? {} });
       };
+      const sendResponseSafe = (
+        id: JsonRpcId,
+        result?: unknown,
+        error?: { code: number; message: string },
+      ): boolean => {
+        try {
+          sendResponse(id, result, error);
+          return true;
+        } catch (sendError) {
+          if (isCopilotStdinUnavailableError(sendError)) {
+            hooks.onOutput(
+              "stderr",
+              `[copilot-direct] Dropped late ACP response for request ${String(id)} because stdin is unavailable.\n`,
+            );
+            return false;
+          }
+          throw sendError;
+        }
+      };
 
       const handleSessionUpdate = (params: Record<string, unknown>) => {
         const update = getSessionUpdatePayload(params);
@@ -616,19 +639,19 @@ class DefaultCopilotDirectExecutor implements CopilotDirectExecutor {
             const optionId = selectCopilotPermissionOptionId(options);
             if (optionId) {
               hooks.onOutput("stderr", "[copilot-direct] Auto-approved ACP permission request.\n");
-              sendResponse(id, { outcome: { outcome: "selected", optionId } });
+              sendResponseSafe(id, { outcome: { outcome: "selected", optionId } });
             } else {
               hooks.onOutput("stderr", "[copilot-direct] No allow option found for ACP permission request; cancelling.\n");
-              sendResponse(id, { outcome: { outcome: "cancelled" } });
+              sendResponseSafe(id, { outcome: { outcome: "cancelled" } });
             }
             return;
           }
-          sendResponse(id, undefined, {
+          sendResponseSafe(id, undefined, {
             code: -32601,
             message: `Unsupported Copilot ACP client method '${method}'.`,
           });
         } catch (error) {
-          sendResponse(id, undefined, {
+          sendResponseSafe(id, undefined, {
             code: -32000,
             message: error instanceof Error ? error.message : String(error),
           });
@@ -703,7 +726,12 @@ class DefaultCopilotDirectExecutor implements CopilotDirectExecutor {
           return;
         }
         if (requestId !== undefined && method) {
-          void handleInboundRequest(requestId, method, isRecord(message.params) ? message.params : {});
+          void handleInboundRequest(requestId, method, isRecord(message.params) ? message.params : {}).catch((error) => {
+            hooks.onOutput(
+              "stderr",
+              `[copilot-direct] Failed handling ACP client method '${method}': ${error instanceof Error ? error.message : String(error)}\n`,
+            );
+          });
           return;
         }
         if (method) {

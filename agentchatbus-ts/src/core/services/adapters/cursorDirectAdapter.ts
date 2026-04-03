@@ -555,6 +555,14 @@ function normalizeJsonRpcLine(line: string): JsonRpcEnvelope | null {
   }
 }
 
+function looksLikeCursorPromptInternalError(detail: string): boolean {
+  return /internal error/i.test(String(detail || "").trim());
+}
+
+function isCursorStdinUnavailableError(error: unknown): boolean {
+  return /stdin is unavailable/i.test(error instanceof Error ? error.message : String(error));
+}
+
 function parseCursorDirectJsonRpcLine(
   line: string,
   state: {
@@ -822,6 +830,26 @@ class CursorDirectExecutor implements CursorDirectCommandExecutor {
         sendMessage(payload);
       };
 
+      const sendResponseSafe = (
+        id: JsonRpcId,
+        result?: unknown,
+        error?: { code: number; message: string },
+      ): boolean => {
+        try {
+          sendResponse(id, result, error);
+          return true;
+        } catch (sendError) {
+          if (isCursorStdinUnavailableError(sendError)) {
+            hooks.onOutput(
+              "stderr",
+              `[cursor-direct] Dropped late ACP response for request ${String(id)} because stdin is unavailable.\n`,
+            );
+            return false;
+          }
+          throw sendError;
+        }
+      };
+
       const emitActivity = (
         status: "in_progress" | "completed" | "failed",
         summary?: string,
@@ -951,7 +979,7 @@ class CursorDirectExecutor implements CursorDirectCommandExecutor {
             if (!optionId) {
               throw new Error("session/request_permission did not include a selectable option id.");
             }
-            sendResponse(id, {
+            sendResponseSafe(id, {
               outcome: {
                 outcome: "selected",
                 optionId,
@@ -960,19 +988,19 @@ class CursorDirectExecutor implements CursorDirectCommandExecutor {
             return;
           }
           if (normalizedMethod === "fs/read_text_file") {
-            sendResponse(id, await handleReadTextFileRequest(params, request.workspace));
+            sendResponseSafe(id, await handleReadTextFileRequest(params, request.workspace));
             return;
           }
           if (normalizedMethod === "fs/write_text_file") {
-            sendResponse(id, await handleWriteTextFileRequest(params, request.workspace));
+            sendResponseSafe(id, await handleWriteTextFileRequest(params, request.workspace));
             return;
           }
-          sendResponse(id, undefined, {
+          sendResponseSafe(id, undefined, {
             code: -32601,
             message: `Unsupported Cursor ACP client method '${method}'.`,
           });
         } catch (error) {
-          sendResponse(id, undefined, {
+          sendResponseSafe(id, undefined, {
             code: -32000,
             message: error instanceof Error ? error.message : String(error),
           });
@@ -1078,7 +1106,12 @@ class CursorDirectExecutor implements CursorDirectCommandExecutor {
         }
 
         if (requestId !== undefined && method) {
-          void handleInboundRequest(requestId, method, isRecord(message.params) ? message.params : {});
+          void handleInboundRequest(requestId, method, isRecord(message.params) ? message.params : {}).catch((error) => {
+            hooks.onOutput(
+              "stderr",
+              `[cursor-direct] Failed handling ACP client method '${method}': ${error instanceof Error ? error.message : String(error)}\n`,
+            );
+          });
           return;
         }
 
@@ -1106,6 +1139,32 @@ class CursorDirectExecutor implements CursorDirectCommandExecutor {
       };
 
       const bootstrap = async () => {
+        let resumedExistingSession = false;
+        const sendPromptRequest = async (sessionId: string): Promise<unknown> => {
+          return await sendRequest(
+            "session/prompt",
+            {
+              sessionId,
+              prompt: [
+                {
+                  type: "text",
+                  text: request.prompt,
+                },
+              ],
+              ...(requestedModel ? { model: requestedModel } : {}),
+            },
+            CURSOR_DIRECT_PROMPT_TIMEOUT_MS,
+          ).catch(async () => await sendRequest(
+            "session/prompt",
+            {
+              sessionId,
+              prompt: request.prompt,
+              ...(requestedModel ? { model: requestedModel } : {}),
+            },
+            CURSOR_DIRECT_PROMPT_TIMEOUT_MS,
+          ));
+        };
+
         hooks.onNativeRuntime?.({
           at: nowIso(),
           thread_id: activeSessionId,
@@ -1185,6 +1244,7 @@ class CursorDirectExecutor implements CursorDirectCommandExecutor {
                   },
                   CURSOR_DIRECT_SESSION_RESUME_TIMEOUT_MS,
                 );
+                resumedExistingSession = true;
               } catch {
                 await sendRequest(
                   "session/resume",
@@ -1195,6 +1255,7 @@ class CursorDirectExecutor implements CursorDirectCommandExecutor {
                   },
                   CURSOR_DIRECT_SESSION_RESUME_TIMEOUT_MS,
                 );
+                resumedExistingSession = true;
               }
             } else {
               await sendRequest(
@@ -1206,6 +1267,7 @@ class CursorDirectExecutor implements CursorDirectCommandExecutor {
                 },
                 CURSOR_DIRECT_SESSION_RESUME_TIMEOUT_MS,
               );
+              resumedExistingSession = true;
             }
           } catch {
             activeSessionId = undefined;
@@ -1229,28 +1291,33 @@ class CursorDirectExecutor implements CursorDirectCommandExecutor {
           throw new Error("Cursor ACP did not return a session id from initialize/session methods.");
         }
 
-        const promptResult = await sendRequest(
-          "session/prompt",
-          {
-            sessionId: activeSessionId,
-            prompt: [
-              {
-                type: "text",
-                text: request.prompt,
-              },
-            ],
-            ...(requestedModel ? { model: requestedModel } : {}),
-          },
-          CURSOR_DIRECT_PROMPT_TIMEOUT_MS,
-        ).catch(async () => await sendRequest(
-          "session/prompt",
-          {
-            sessionId: activeSessionId,
-            prompt: request.prompt,
-            ...(requestedModel ? { model: requestedModel } : {}),
-          },
-          CURSOR_DIRECT_PROMPT_TIMEOUT_MS,
-        ));
+        let promptResult: unknown;
+        try {
+          promptResult = await sendPromptRequest(activeSessionId);
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error);
+          if (!resumedExistingSession || !looksLikeCursorPromptInternalError(detail)) {
+            throw error;
+          }
+          hooks.onOutput(
+            "stderr",
+            "[cursor-direct] session/prompt failed after resume; falling back to session/new for this wake run.\n",
+          );
+          const freshSessionResult = await sendRequest(
+            "session/new",
+            {
+              cwd: request.workspace,
+              mcpServers: [],
+              ...(requestedModel ? { model: requestedModel } : {}),
+            },
+            CURSOR_DIRECT_SESSION_NEW_TIMEOUT_MS,
+          );
+          activeSessionId = extractSessionId(freshSessionResult) || activeSessionId;
+          if (!activeSessionId) {
+            throw error;
+          }
+          promptResult = await sendPromptRequest(activeSessionId);
+        }
         activeRequestId = extractRequestId(promptResult) || activeRequestId;
         const stopReason = extractStopReason(promptResult);
         const resultText = extractAssistantText(promptResult);

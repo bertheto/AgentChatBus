@@ -676,6 +676,10 @@ function tryStringifyCompact(value: unknown): string | undefined {
   return undefined;
 }
 
+function isCodexStdinUnavailableError(error: unknown): boolean {
+  return /stdin is unavailable/i.test(error instanceof Error ? error.message : String(error));
+}
+
 function formatCodexErrorSummary(error: unknown, fallbackMethod?: string): string {
   const lines: string[] = [];
 
@@ -1364,6 +1368,32 @@ class CodexDirectExecutor implements CodexDirectCommandExecutor {
         });
       };
 
+      const sendResponseSafe = (id: JsonRpcId, result: unknown): boolean => {
+        try {
+          sendResponse(id, result);
+          return true;
+        } catch (error) {
+          if (isCodexStdinUnavailableError(error)) {
+            emitStderr(`[codex-direct] Dropped late app-server response for request ${String(id)} because stdin is unavailable.\n`);
+            return false;
+          }
+          throw error;
+        }
+      };
+
+      const sendErrorResponseSafe = (id: JsonRpcId, message: string, code = -32601): boolean => {
+        try {
+          sendErrorResponse(id, message, code);
+          return true;
+        } catch (error) {
+          if (isCodexStdinUnavailableError(error)) {
+            emitStderr(`[codex-direct] Dropped late app-server error response for request ${String(id)} because stdin is unavailable.\n`);
+            return false;
+          }
+          throw error;
+        }
+      };
+
       const requestGracefulShutdown = () => {
         if (shutdownRequested) {
           return;
@@ -1412,59 +1442,65 @@ class CodexDirectExecutor implements CodexDirectCommandExecutor {
         if (requestId === undefined || !method) {
           return;
         }
-        if (method === "item/commandExecution/requestApproval") {
-          rememberPendingServerRequest(requestId, "waitingOnApproval");
-          sendResponse(requestId, {
-            decision: "acceptForSession",
-          });
-          return;
-        }
-        if (method === "item/fileChange/requestApproval") {
-          rememberPendingServerRequest(requestId, "waitingOnApproval");
-          sendResponse(requestId, {
-            decision: "acceptForSession",
-          });
-          return;
-        }
-        if (method === "item/permissions/requestApproval") {
-          rememberPendingServerRequest(requestId, "waitingOnApproval");
-          sendResponse(requestId, {
-            decision: "acceptForSession",
-          });
-          return;
-        }
-        if (method === "item/tool/requestUserInput") {
-          rememberPendingServerRequest(requestId, "waitingOnUserInput");
-          sendResponse(requestId, buildCodexDirectToolUserInputResponse(message.params));
-          return;
-        }
-        if (method === "mcpServer/elicitation/request") {
-          rememberPendingServerRequest(requestId, "waitingOnApproval");
-          const elicitation = buildCodexDirectElicitationResponse(message.params);
-          emitStderr(`${elicitation.summary}\n`);
-          const elicitationDetail = tryStringifyCompact({
-            request: message.params,
-            auto_response: {
+        try {
+          if (method === "item/commandExecution/requestApproval") {
+            rememberPendingServerRequest(requestId, "waitingOnApproval");
+            sendResponseSafe(requestId, {
+              decision: "acceptForSession",
+            });
+            return;
+          }
+          if (method === "item/fileChange/requestApproval") {
+            rememberPendingServerRequest(requestId, "waitingOnApproval");
+            sendResponseSafe(requestId, {
+              decision: "acceptForSession",
+            });
+            return;
+          }
+          if (method === "item/permissions/requestApproval") {
+            rememberPendingServerRequest(requestId, "waitingOnApproval");
+            sendResponseSafe(requestId, {
+              decision: "acceptForSession",
+            });
+            return;
+          }
+          if (method === "item/tool/requestUserInput") {
+            rememberPendingServerRequest(requestId, "waitingOnUserInput");
+            sendResponseSafe(requestId, buildCodexDirectToolUserInputResponse(message.params));
+            return;
+          }
+          if (method === "mcpServer/elicitation/request") {
+            rememberPendingServerRequest(requestId, "waitingOnApproval");
+            const elicitation = buildCodexDirectElicitationResponse(message.params);
+            emitStderr(`${elicitation.summary}\n`);
+            const elicitationDetail = tryStringifyCompact({
+              request: message.params,
+              auto_response: {
+                action: elicitation.action,
+                content: elicitation.content,
+              },
+            });
+            if (elicitationDetail) {
+              emitStderr(`[codex-direct] MCP elicitation detail: ${elicitationDetail}\n`);
+            }
+            sendResponseSafe(requestId, {
               action: elicitation.action,
               content: elicitation.content,
-            },
-          });
-          if (elicitationDetail) {
-            emitStderr(`[codex-direct] MCP elicitation detail: ${elicitationDetail}\n`);
+              _meta: elicitation._meta,
+            });
+            return;
           }
-          sendResponse(requestId, {
-            action: elicitation.action,
-            content: elicitation.content,
-            _meta: elicitation._meta,
-          });
-          return;
+          const label = normalizeServerRequestLabel(method);
+          emitStderr(`[codex-direct] Unsupported app-server callback: ${label}. Continuing without handling it.\n`);
+          sendErrorResponseSafe(
+            requestId,
+            `AgentChatBus direct adapter does not handle '${method}' yet.`,
+          );
+        } catch (error) {
+          emitStderr(
+            `[codex-direct] Failed handling app-server callback '${method}': ${error instanceof Error ? error.message : String(error)}\n`,
+          );
         }
-        const label = normalizeServerRequestLabel(method);
-        emitStderr(`[codex-direct] Unsupported app-server callback: ${label}. Continuing without handling it.\n`);
-        sendErrorResponse(
-          requestId,
-          `AgentChatBus direct adapter does not handle '${method}' yet.`,
-        );
       };
 
       const handleNotification = (message: Record<string, unknown>) => {
