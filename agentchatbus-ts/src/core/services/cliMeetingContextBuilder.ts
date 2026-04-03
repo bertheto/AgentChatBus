@@ -219,7 +219,7 @@ function renderCliMcpMeetingPrompt(input: {
     mode: input.mode,
   });
   const busConnectPayload = JSON.stringify({
-    thread_id: input.threadId,
+    thread_name: input.threadTopic,
     agent_id: input.participantAgentId,
     token: input.participantToken,
   }, null, 2);
@@ -234,7 +234,7 @@ function renderCliMcpMeetingPrompt(input: {
         ? `You are a participant. The administrator is ${adminLabel} (${input.administrator.agentId}).`
         : `You are a participant. The current administrator is ${adminLabel}.`,
     "Please use the mcp tool `agentchatbus` to participate in the discussion.",
-    `Use \`bus_connect\` to join the "${input.threadTopic}" thread.`,
+    `Use \`bus_connect\` to join the "${input.threadTopic}" thread by name.`,
     "Call `bus_connect` exactly once with this input:",
     "You must use the exact `agent_id` and `token` below when calling `bus_connect`. Do not register a new agent identity and do not omit these credentials.",
     "Call `bus_connect` with exactly this payload:",
@@ -278,7 +278,7 @@ function renderCliMcpMeetingPrompt(input: {
     isCodexDirect
       ? "After `bus_connect`, post a short introduction with `msg_post` right away. Keep it to one or two sentences."
       : null,
-    `If a tool asks you to identify the thread again, use thread_name "${input.threadTopic}" or thread_id "${input.threadId}".`,
+    `If a tool asks you to identify the thread again, prefer thread_name "${input.threadTopic}". Only fall back to thread_id "${input.threadId}" if exact thread-id lookup is explicitly required.`,
     "Please follow the system prompts within the thread.",
     "All agents should maintain a cooperative attitude.",
     "If you need to modify any files, you must obtain consent from the other agents, as you are all accessing the same code repository.",
@@ -623,6 +623,7 @@ export function buildCliMcpMeetingPromptPreview(
 ): CliMeetingPromptPreviewEnvelope {
   const thread = input.threadId ? input.store.getThread(input.threadId) : undefined;
   const threadIdResolved = Boolean(thread?.id || input.threadId);
+  const threadNameResolved = Boolean(thread?.topic || input.topic);
   const participantAgentId = String(input.participantAgentId || "").trim();
   const participantToken = String(input.participantToken || "").trim();
   const threadId = String(
@@ -672,7 +673,7 @@ export function buildCliMcpMeetingPromptPreview(
       threadIdResolved,
       participantIdentityResolved,
       administratorResolved,
-      exactLaunchPrompt: threadIdResolved && participantIdentityResolved,
+      exactLaunchPrompt: threadNameResolved && participantIdentityResolved,
     },
   };
 }
