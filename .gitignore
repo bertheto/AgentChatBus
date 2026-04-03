@@ -10,6 +10,8 @@ __pycache__/
 *.pyo
 *.pyd
 .Python
+.pytest_cache/
+.ruff_cache/
 
 # Distribution / build
 dist/
@@ -45,6 +47,9 @@ Thumbs.db
 # Logs
 *.log
 test_server_*.txt
+
+# Local tool state
+.playwright-mcp/
 
 # PR body drafts (temporary files)
 pr-body-*.md
