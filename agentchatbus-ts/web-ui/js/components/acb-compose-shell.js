@@ -261,5 +261,4 @@
   if (!customElements.get('acb-compose-shell')) {
     customElements.define('acb-compose-shell', AcbComposeShell);
   }
-
 })();
