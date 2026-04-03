@@ -237,8 +237,6 @@ function renderCliMcpMeetingPrompt(input: {
         : `You are a participant. The current administrator is ${adminLabel}.`,
     "Please use the mcp tool `agentchatbus` to participate in the discussion.",
     `Use \`bus_connect\` to join the "${input.threadTopic}" thread by name.`,
-    "Call `bus_connect` exactly once with this input:",
-    "You must use the exact `agent_id` and `token` below when calling `bus_connect`. Do not register a new agent identity and do not omit these credentials.",
     "Call `bus_connect` with exactly this payload:",
     "```json",
     busConnectPayload,
